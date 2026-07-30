@@ -355,10 +355,20 @@ function App(): React.JSX.Element {
             ))}
           </nav>
           <h2>Сессии</h2>
-          {["chatgpt", "gemini"].map((provider) => (
-            <button key={provider} onClick={() => void login(provider)}>
-              Войти · {provider}
-            </button>
+          {(["chatgpt", "gemini"] as const).map((provider) => (
+            <div className="session-row" key={provider}>
+              <button onClick={() => void login(provider)}>
+                Войти · {provider}
+              </button>
+              <button
+                className="logout"
+                aria-label={`Выйти из ${provider}`}
+                title={`Удалить локальную сессию ${provider}`}
+                onClick={() => void resetSession(provider)}
+              >
+                Выйти
+              </button>
+            </div>
           ))}
         </aside>
         <section className="workspace">

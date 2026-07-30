@@ -22,6 +22,8 @@ try {
   await page.getByPlaceholder("Название проекта").fill(projectName);
   await page.getByRole("button", { name: "Создать" }).click();
   await page.getByRole("heading", { name: projectName }).waitFor();
+  await page.getByRole("button", { name: "Выйти из chatgpt" }).waitFor();
+  await page.getByRole("button", { name: "Выйти из gemini" }).waitFor();
 
   await page.getByText("Требования", { exact: true }).click();
   await page.getByRole("button", { name: "+ Добавить", exact: true }).first().click();
@@ -78,6 +80,7 @@ try {
     ok: true,
     executablePath,
     projectCreated: projectName,
+    providerLogoutAvailable: true,
     visualProjectStatePersisted: true,
     settingsPersistedInUi: true,
     trustedOrigin: urlAfter,

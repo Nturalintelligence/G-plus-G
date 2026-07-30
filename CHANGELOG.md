@@ -2,6 +2,26 @@
 
 All notable project checkpoints are recorded here.
 
+## [0.1.0-pre.6] - 2026-07-31
+
+### Fixed
+
+- Development Electron and CLI runs now resolve the project-local Playwright
+  Chromium instead of incorrectly requiring `%LOCALAPPDATA%\ms-playwright`.
+- Browser discovery chooses the newest available Chromium revision and still
+  supports packaged Electron resources.
+
+### Added
+
+- Explicit per-provider «Выйти» controls in the desktop sidebar.
+- Confirmed logout removes only the selected local browser session and preserves projects.
+- Regression tests for local browser discovery and packaged logout controls.
+
+### Verification
+
+- 51 automated tests.
+- Development preflight resolves the exact project-local Chromium executable.
+
 ## [0.1.0-pre.5] - 2026-07-31
 
 ### Added

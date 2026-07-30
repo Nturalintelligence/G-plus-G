@@ -21,6 +21,9 @@ nav { display: grid; gap: 7px; margin: 14px 0 26px; }
 nav button { display: flex; min-width: 0; width: 100%; justify-content: space-between; gap: 8px; }
 nav button strong { min-width: 0; overflow-wrap: anywhere; }
 nav small, .timeline small { color: #708090; display: block; }
+.session-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; margin-bottom: 7px; }
+.session-row button { min-width: 0; }
+.session-row .logout { color: #ff9a92; padding-inline: 9px; }
 .selected { border-color: #66d9b7; background: #14251f; }
 .workspace { padding: 18px; overflow: hidden; display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 14px; }
 .panel { border: 1px solid #202832; background: #0f151c; border-radius: 12px; padding: 16px; }

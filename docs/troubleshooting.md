@@ -5,6 +5,13 @@
 Run `npm start -- login --provider chatgpt` or `--provider gemini`. Complete login
 inside the Playwright window, not your normal browser.
 
+## Playwright says that Chromium does not exist
+
+Run `npm run browser:install-local` once and restart the desktop command. Development
+mode resolves Chromium from the project-local Playwright browser directory; packaged
+builds resolve the copy under Electron `resources`. The application does not require
+the global `%LOCALAPPDATA%\ms-playwright` directory.
+
 ## Profile is already in use
 
 Close other G plus G/Playwright processes. A live PID lock is never removed
@@ -34,6 +41,8 @@ npm start -- session:reset --provider gemini
 ```
 
 This deletes only the selected provider profile. Project data remains in SQLite.
+The same operation is available as **Выйти** beside each provider in the desktop
+sidebar and requires explicit confirmation.
 
 ## Backup and restore
 

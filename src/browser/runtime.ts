@@ -1,10 +1,22 @@
 import { existsSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 export function bundledChromiumExecutable(): string | undefined {
   const resourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
-  if (!resourcesPath) return undefined;
-  const browsersRoot = join(resourcesPath, "playwright-browsers");
+  const roots = [
+    ...(resourcesPath ? [join(resourcesPath, "playwright-browsers")] : []),
+    join(resolve(process.cwd()), "node_modules", "playwright-core", ".local-browsers"),
+    ...(process.env.INIT_CWD
+      ? [join(resolve(process.env.INIT_CWD), "node_modules", "playwright-core", ".local-browsers")]
+      : []),
+  ];
+  return [...new Set(roots)].map((root) => findChromiumExecutable(root)).find(Boolean);
+}
+
+export function findChromiumExecutable(
+  browsersRoot: string,
+  platform: NodeJS.Platform = process.platform,
+): string | undefined {
   if (!existsSync(browsersRoot)) return undefined;
   const chromiumDirectory = readdirSync(browsersRoot, { withFileTypes: true })
     .filter((entry) => entry.isDirectory() && /^chromium-\d+/.test(entry.name))
@@ -13,12 +25,12 @@ export function bundledChromiumExecutable(): string | undefined {
     .at(-1);
   if (!chromiumDirectory) return undefined;
   const candidates =
-    process.platform === "win32"
+    platform === "win32"
       ? [
           join(browsersRoot, chromiumDirectory, "chrome-win64", "chrome.exe"),
           join(browsersRoot, chromiumDirectory, "chrome-win", "chrome.exe"),
         ]
-      : process.platform === "darwin"
+      : platform === "darwin"
         ? [
             join(
               browsersRoot,
