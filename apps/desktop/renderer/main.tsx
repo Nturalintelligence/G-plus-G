@@ -32,6 +32,14 @@ function App(): React.JSX.Element {
   useEffect(() => {
     outputRef.current?.scrollTo({ top: outputRef.current.scrollHeight, behavior: "smooth" });
   }, [current?.transcript.length]);
+  useEffect(() => {
+    if (!running || !current) return;
+    const projectId = current.project.id;
+    const timer = window.setInterval(() => {
+      void window.orchestrator.projects.open(projectId).then(setCurrent).catch(() => undefined);
+    }, 1_000);
+    return () => window.clearInterval(timer);
+  }, [running, current?.project.id]);
 
   async function openProject(id: string): Promise<void> {
     const details = await window.orchestrator.projects.open(id);

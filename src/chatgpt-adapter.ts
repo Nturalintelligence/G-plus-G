@@ -363,7 +363,6 @@ export class ChatGptAdapter implements ModelAdapter {
   private async submitComposer(composer: Locator, message: string): Promise<void> {
     await composer.press("Enter");
     if (await this.composerWasCleared(composer)) {
-      await this.waitUntilSubmitted(message);
       return;
     }
 
@@ -374,7 +373,9 @@ export class ChatGptAdapter implements ModelAdapter {
       );
     }
     await buttons[0]!.click();
-    await this.waitUntilSubmitted(message);
+    if (!(await this.composerWasCleared(composer))) {
+      throw new TurnTimeoutError("ChatGPT composer did not clear after submission");
+    }
   }
 
   private async composerWasCleared(composer: Locator): Promise<boolean> {

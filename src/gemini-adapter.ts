@@ -310,7 +310,6 @@ export class GeminiAdapter implements ModelAdapter {
   private async submitComposer(composer: Locator, message: string): Promise<void> {
     await composer.press("Enter");
     if (await this.composerWasCleared(composer)) {
-      await this.waitUntilUserMessage(message);
       return;
     }
 
@@ -321,7 +320,9 @@ export class GeminiAdapter implements ModelAdapter {
       );
     }
     await buttons[0]!.click();
-    await this.waitUntilUserMessage(message);
+    if (!(await this.composerWasCleared(composer))) {
+      throw new TurnTimeoutError("Gemini composer did not clear after submission");
+    }
   }
 
   private async composerWasCleared(composer: Locator): Promise<boolean> {
