@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 
 export default defineConfig({
   root: resolve("apps/desktop"),
+  base: "./",
   plugins: [react()],
   build: {
     outDir: resolve("dist/desktop"),

@@ -1,5 +1,6 @@
-import { join } from "node:path";
-import { app, BrowserWindow, ipcMain } from "electron";
+import { join, resolve, sep } from "node:path";
+import { pathToFileURL } from "node:url";
+import { app, BrowserWindow, ipcMain, net, protocol } from "electron";
 import { createAdapter, parseProvider } from "../../src/adapters/adapter-registry.js";
 import { SpecExporter } from "../../src/artifacts/spec-exporter.js";
 import { Orchestrator, type RunMode } from "../../src/orchestrator/orchestrator.js";
@@ -10,6 +11,18 @@ import { ProjectRepository } from "../../src/storage/repository.js";
 let mainWindow: BrowserWindow | null = null;
 let database: AppDatabase | null = null;
 let activeOrchestrator: Orchestrator | null = null;
+
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: "app",
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      corsEnabled: true,
+    },
+  },
+]);
 
 function db(): AppDatabase {
   if (!database) throw new Error("Database is not initialized");
@@ -24,13 +37,28 @@ function createWindow(): void {
     minHeight: 700,
     backgroundColor: "#0d1117",
     webPreferences: {
-      preload: join(import.meta.dirname, "preload.js"),
+      preload: join(app.getAppPath(), "apps/desktop/preload.cjs"),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
     },
   });
-  void mainWindow.loadFile(join(app.getAppPath(), "dist/desktop/index.html"));
+  void mainWindow
+    .loadURL("app://bundle/index.html")
+    .catch((error) => console.error("Failed to load desktop renderer", error));
+}
+
+function registerRendererProtocol(): void {
+  const rendererRoot = resolve(app.getAppPath(), "dist/desktop");
+  protocol.handle("app", (request) => {
+    const url = new URL(request.url);
+    const relativePath = decodeURIComponent(url.pathname).replace(/^[/\\]+/, "");
+    const filePath = resolve(rendererRoot, relativePath || "index.html");
+    if (filePath !== rendererRoot && !filePath.startsWith(`${rendererRoot}${sep}`)) {
+      return new Response("Forbidden", { status: 403 });
+    }
+    return net.fetch(pathToFileURL(filePath).toString());
+  });
 }
 
 function registerIpc(): void {
@@ -123,6 +151,7 @@ function registerIpc(): void {
 }
 
 app.whenReady().then(() => {
+  registerRendererProtocol();
   database = new AppDatabase(join(app.getPath("userData"), "orchestrator.sqlite"));
   database.migrate();
   registerIpc();
