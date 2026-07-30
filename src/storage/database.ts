@@ -2,12 +2,13 @@ import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { migrations } from "./migrations.js";
+import { dataPath } from "../paths.js";
 
 export class AppDatabase {
   readonly raw: DatabaseSync;
   readonly path: string;
 
-  constructor(path = "user-data/database/orchestrator.sqlite") {
+  constructor(path = dataPath("orchestrator.sqlite")) {
     this.path = path === ":memory:" ? path : resolve(path);
     if (this.path !== ":memory:") mkdirSync(dirname(this.path), { recursive: true });
     this.raw = new DatabaseSync(this.path);

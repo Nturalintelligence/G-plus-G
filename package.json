@@ -1,6 +1,6 @@
 {
   "name": "multi-llm-orchestrator-feasibility",
-  "version": "0.0.6",
+  "version": "0.1.0-pre.1",
   "private": true,
   "description": "Local desktop orchestrator for ChatGPT and Gemini web sessions",
   "type": "module",

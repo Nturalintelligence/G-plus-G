@@ -1,6 +1,4 @@
 #!/usr/bin/env node
-import { mkdir, writeFile } from "node:fs/promises";
-import { resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { ChallengeRequiredError } from "./errors.js";
 import { runProjectCommand } from "./project-cli.js";
@@ -10,6 +8,7 @@ import {
   resetProviderSession,
   restoreDatabase,
 } from "./maintenance.js";
+import { writeDiagnostic } from "./observability/logger.js";
 
 const { positionals, values } = parseArgs({
   allowPositionals: true,
@@ -31,15 +30,11 @@ const provider = parseProvider(values.provider);
 const adapter = createAdapter(provider, timeoutMs);
 
 async function persistDiagnostic(reason: unknown): Promise<string> {
-  const directory = resolve("user-data/logs");
-  await mkdir(directory, { recursive: true });
-  const path = resolve(directory, `diagnostic-${Date.now()}.json`);
-  const report = {
-    error: reason instanceof Error ? { name: reason.name, message: reason.message } : reason,
-    ...(await adapter.collectDiagnostics().catch(() => ({}))),
-  };
-  await writeFile(path, `${JSON.stringify(report, null, 2)}\n`, "utf8");
-  return path;
+  return writeDiagnostic(reason, {
+    operation: command,
+    provider,
+    providerDiagnostics: await adapter.collectDiagnostics().catch(() => ({})),
+  });
 }
 
 async function run(): Promise<void> {

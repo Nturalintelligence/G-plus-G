@@ -50,6 +50,55 @@ describe("Project State and export", () => {
     expect(readFileSync(join(exported.directory, "verification.json"), "utf8")).toContain(
       '"status": "PENDING"',
     );
+    expect(readFileSync(join(exported.directory, "project-state.json"), "utf8")).toContain(
+      '"version": 1',
+    );
+    expect(readFileSync(join(exported.directory, "OPEN_QUESTIONS.md"), "utf8")).toContain(
+      "Which OS first?",
+    );
+    expect(readFileSync(join(exported.directory, "DECISIONS.md"), "utf8")).toContain(
+      "# Decisions",
+    );
+  });
+
+  it("exports the persistent orchestration transcript", async () => {
+    const root = mkdtempSync(join(tmpdir(), "state-transcript-"));
+    const database = new AppDatabase(join(root, "db.sqlite"));
+    open.push(database);
+    database.migrate();
+    const repository = new ProjectRepository(database);
+    const project = repository.createProject("Transcript");
+    repository.appendConversationEntry({
+      projectId: project.id,
+      role: "USER",
+      content: "saved user message",
+    });
+    repository.appendConversationEntry({
+      projectId: project.id,
+      role: "ASSISTANT",
+      providerId: "chatgpt",
+      round: 1,
+      content: "saved model answer",
+    });
+    const state = emptyProjectState();
+    state.acceptanceCriteria.push({
+      id: "a1",
+      text: "Transcript is exported",
+      sourceTurnIds: [],
+    });
+    const version = new ProjectStateService(database).createVersion(project.id, state);
+    const exported = await new SpecExporter(database).export(
+      project.id,
+      version,
+      join(root, "exports"),
+    );
+    const conversation = readFileSync(
+      join(exported.directory, "conversation.md"),
+      "utf8",
+    );
+    expect(conversation).toContain("saved user message");
+    expect(conversation).toContain("saved model answer");
+    expect(conversation).not.toContain("No recorded messages");
   });
 
   it("requires acceptance criteria", () => {

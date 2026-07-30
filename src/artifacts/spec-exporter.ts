@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import { newId } from "../ids.js";
 import type { ProjectStateVersion, TracedItem, DecisionItem } from "../project-state.js";
 import type { AppDatabase } from "../storage/database.js";
+import { dataPath } from "../paths.js";
 
 export class SpecExporter {
   constructor(private readonly database: AppDatabase) {}
@@ -11,7 +12,7 @@ export class SpecExporter {
   async export(
     projectId: string,
     stateVersion: ProjectStateVersion,
-    root = "user-data/exports",
+    root = dataPath("exports"),
     verification: {
       providerId: string;
       status: "PASSED" | "DISCREPANCIES" | "PENDING";
@@ -31,15 +32,28 @@ export class SpecExporter {
       null,
       2,
     );
+    const projectState = `${JSON.stringify(stateVersion, null, 2)}\n`;
+    const decisionsMarkdown = renderDecisionDocument(stateVersion);
+    const openQuestionsMarkdown = renderOpenQuestions(stateVersion);
     const conversation = this.renderConversation(projectId);
     const verificationJson = `${JSON.stringify(verification, null, 2)}\n`;
     await writeFile(resolve(directory, "TASK_SPEC.md"), spec, "utf8");
     await writeFile(resolve(directory, "decisions.json"), `${decisions}\n`, "utf8");
+    await writeFile(resolve(directory, "DECISIONS.md"), decisionsMarkdown, "utf8");
+    await writeFile(
+      resolve(directory, "OPEN_QUESTIONS.md"),
+      openQuestionsMarkdown,
+      "utf8",
+    );
+    await writeFile(resolve(directory, "project-state.json"), projectState, "utf8");
     await writeFile(resolve(directory, "conversation.md"), conversation, "utf8");
     await writeFile(resolve(directory, "verification.json"), verificationJson, "utf8");
     const files = {
       "TASK_SPEC.md": sha256(spec),
       "decisions.json": sha256(`${decisions}\n`),
+      "DECISIONS.md": sha256(decisionsMarkdown),
+      "OPEN_QUESTIONS.md": sha256(openQuestionsMarkdown),
+      "project-state.json": sha256(projectState),
       "conversation.md": sha256(conversation),
       "verification.json": sha256(verificationJson),
     };
@@ -77,22 +91,44 @@ export class SpecExporter {
   private renderConversation(projectId: string): string {
     const rows = this.database.raw
       .prepare(
-        `SELECT m.role, m.content, m.content_hash, m.created_at, t.id AS turn_id
-         FROM messages m
-         JOIN turns t ON t.id = m.turn_id
-         JOIN conversations c ON c.id = t.conversation_id
-         WHERE c.project_id = ?
-         ORDER BY m.created_at, m.id`,
+        `SELECT id, role, provider_id, round, content, created_at
+         FROM conversation_entries
+         WHERE project_id = ?
+         ORDER BY created_at, rowid`,
       )
       .all(projectId);
     if (rows.length === 0) return "# Conversation\n\nNo recorded messages.\n";
     return `# Conversation\n\n${rows
       .map(
         (row) =>
-          `## ${String(row.role)} · ${String(row.created_at)}\n\n${String(row.content)}\n\n_Turn: ${String(row.turn_id)} · SHA-256: ${String(row.content_hash)}_`,
+          `## ${String(row.role)}${row.provider_id ? ` · ${String(row.provider_id)}` : ""}${row.round ? ` · round ${String(row.round)}` : ""} · ${String(row.created_at)}\n\n${String(row.content)}\n\n_Entry: ${String(row.id)} · SHA-256: ${sha256(String(row.content))}_`,
       )
       .join("\n\n")}\n`;
   }
+}
+
+function renderDecisionDocument(version: ProjectStateVersion): string {
+  return `# Decisions
+
+Status: **${version.status}**
+Version: **${version.version}**
+
+## Accepted decisions
+${renderDecisions(version.state.decisions)}
+
+## Rejected options
+${renderDecisions(version.state.rejectedOptions)}
+`;
+}
+
+function renderOpenQuestions(version: ProjectStateVersion): string {
+  return `# Open questions
+
+Status: **${version.status}**
+Version: **${version.version}**
+
+${renderItems(version.state.openQuestions)}
+`;
 }
 
 function renderSpec(version: ProjectStateVersion): string {

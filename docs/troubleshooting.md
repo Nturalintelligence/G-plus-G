@@ -46,4 +46,14 @@ npm start -- database:restore --file "D:\Backups\g-plus-g.sqlite"
 
 ## Diagnostics
 
-Safe reports are written to `user-data/logs`. They omit cookies and profile data.
+Safe reports are written to:
+
+```text
+%APPDATA%\multi-llm-orchestrator-feasibility\logs
+```
+
+`application.jsonl` contains structured lifecycle events. Failures create a
+`diagnostic-<timestamp>.json` file and the UI displays its full path. Reports omit
+cookies, authorization data, token-like values, passwords, and browser-profile data.
+
+Provider login and direct-send failures are logged as well as orchestration failures.

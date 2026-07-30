@@ -12,3 +12,11 @@
 
 No configuration file or API key is required. Browser sessions and the project
 database remain local to the current OS account.
+
+On Windows all runtime data is stored under:
+
+```text
+%APPDATA%\multi-llm-orchestrator-feasibility
+```
+
+The desktop app and CLI share this database, provider profiles, logs, and exports.

@@ -12,6 +12,7 @@ import type {
 import { TurnChannel } from "./adapters/turn-channel.js";
 import { ProfileLock } from "./browser/profile-lock.js";
 import { bundledChromiumExecutable } from "./browser/runtime.js";
+import { dataPath } from "./paths.js";
 import { newId } from "./ids.js";
 import {
   AmbiguousElementError,
@@ -81,7 +82,7 @@ export class ChatGptAdapter implements ModelAdapter {
   private readonly settleMs: number;
 
   constructor(options: AdapterOptions = {}) {
-    this.profileDir = resolve(options.profileDir ?? "user-data/profiles/chatgpt");
+    this.profileDir = resolve(options.profileDir ?? dataPath("profiles", "chatgpt"));
     this.profileLock = new ProfileLock(this.profileDir);
     this.timeoutMs = options.timeoutMs ?? 180_000;
     this.settleMs = options.settleMs ?? 2_500;
@@ -175,7 +176,11 @@ export class ChatGptAdapter implements ModelAdapter {
   }
 
   async getFinalResponse(turn: TurnRef): Promise<TurnResult> {
-    return this.requireTurn(turn).result;
+    try {
+      return await this.requireTurn(turn).result;
+    } finally {
+      this.turns.delete(turn.id);
+    }
   }
 
   async cancel(turn: TurnRef): Promise<void> {
@@ -219,6 +224,9 @@ export class ChatGptAdapter implements ModelAdapter {
     if (await this.hasChallenge()) return "CHALLENGE_REQUIRED";
     const body = await page.locator("body").innerText().catch(() => "");
     if (/log in|sign up|войти|регистрац/i.test(body)) return "LOGIN_REQUIRED";
+    if (/too many requests|rate limit|слишком много запросов/i.test(body)) {
+      return "RATE_LIMITED";
+    }
     if ((await this.findVisibleComposers()).length === 1) return "AUTHENTICATED";
     return "UNKNOWN";
   }
@@ -268,6 +276,7 @@ export class ChatGptAdapter implements ModelAdapter {
 
     await composer.fill(message);
     await this.submitComposer(composer, message);
+    await this.waitUntilSubmitted(message);
     channel?.publish({ type: "MESSAGE_SUBMITTED", at: new Date().toISOString() });
 
     const response = await this.waitForBoundResponse(before, channel);

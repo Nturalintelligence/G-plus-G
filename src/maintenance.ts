@@ -1,12 +1,13 @@
 import { copyFile, mkdir, rm, stat } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import type { ProviderId } from "./adapters/adapter-registry.js";
+import { dataPath } from "./paths.js";
 
-const DATABASE = resolve("user-data/database/orchestrator.sqlite");
+const DATABASE = dataPath("orchestrator.sqlite");
 
 export async function resetProviderSession(
   provider: ProviderId,
-  profilesRoot = resolve("user-data/profiles"),
+  profilesRoot = dataPath("profiles"),
 ): Promise<string> {
   const profile = resolve(profilesRoot, provider);
   const allowedRoot = resolve(profilesRoot);

@@ -163,6 +163,18 @@ export class ProjectRepository {
     return conversation;
   }
 
+  getOrCreateConversation(projectId: string, providerId: string): Conversation {
+    const row = this.database.raw
+      .prepare(
+        `SELECT id, project_id, provider_id, external_ref, status, created_at, updated_at
+         FROM conversations
+         WHERE project_id = ? AND provider_id = ? AND status = 'ACTIVE'
+         ORDER BY created_at DESC LIMIT 1`,
+      )
+      .get(projectId, providerId);
+    return row ? mapConversation(row) : this.createConversation(projectId, providerId);
+  }
+
   beginTurn(conversationId: string): { turn: Turn; attempt: Attempt } {
     return this.database.transaction(() => {
       const ordinalRow = this.database.raw
@@ -206,6 +218,54 @@ export class ProjectRepository {
         ordinal: 1,
       });
       return { turn, attempt };
+    });
+  }
+
+  beginAttempt(turnId: string): Attempt {
+    return this.database.transaction(() => {
+      const ordinalRow = this.database.raw
+        .prepare(
+          "SELECT COALESCE(MAX(ordinal), 0) + 1 AS ordinal FROM attempts WHERE turn_id = ?",
+        )
+        .get(turnId);
+      const attempt: Attempt = {
+        id: newId("att"),
+        turnId,
+        ordinal: Number(ordinalRow?.ordinal ?? 1),
+        status: "STARTED",
+        startedAt: new Date().toISOString(),
+        finishedAt: null,
+      };
+      this.database.raw
+        .prepare(
+          `INSERT INTO attempts(id, turn_id, ordinal, status, started_at, finished_at)
+           VALUES (?, ?, ?, 'STARTED', ?, NULL)`,
+        )
+        .run(attempt.id, attempt.turnId, attempt.ordinal, attempt.startedAt);
+      this.appendEventInternal("Attempt", attempt.id, "ATTEMPT_STARTED", {
+        turnId,
+        ordinal: attempt.ordinal,
+      });
+      return attempt;
+    });
+  }
+
+  finishAttempt(
+    attemptId: string,
+    status: "COMPLETED" | "FAILED" | "INTERRUPTED",
+    detail?: string,
+  ): void {
+    this.database.transaction(() => {
+      const result = this.database.raw
+        .prepare(
+          `UPDATE attempts SET status = ?, finished_at = ?
+           WHERE id = ? AND status = 'STARTED'`,
+        )
+        .run(status, new Date().toISOString(), attemptId);
+      if (result.changes !== 1) throw new Error(`Active attempt not found: ${attemptId}`);
+      this.appendEventInternal("Attempt", attemptId, `ATTEMPT_${status}`, {
+        ...(detail ? { detail } : {}),
+      });
     });
   }
 
@@ -342,6 +402,18 @@ function mapProject(row: Record<string, unknown>): Project {
     id: String(row.id),
     name: String(row.name),
     status: String(row.status) as Project["status"],
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  };
+}
+
+function mapConversation(row: Record<string, unknown>): Conversation {
+  return {
+    id: String(row.id),
+    projectId: String(row.project_id),
+    providerId: String(row.provider_id),
+    externalRef: row.external_ref === null ? null : String(row.external_ref),
+    status: String(row.status) as Conversation["status"],
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   };

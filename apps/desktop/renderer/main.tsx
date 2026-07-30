@@ -82,6 +82,28 @@ function App(): React.JSX.Element {
     }
   }
 
+  async function saveState(): Promise<void> {
+    if (!current) return;
+    try {
+      const parsed = JSON.parse(stateText);
+      await window.orchestrator.state.save(current.project.id, parsed);
+      await openProject(current.project.id);
+      setStatus("Черновик Project State сохранён");
+    } catch (error) {
+      setStatus(
+        `Project State не сохранён: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  function relay(entry: ConversationEntryView): void {
+    setTask(
+      `Проверь и развей следующий ответ другой модели.\n\n<UNTRUSTED_PEER_RESPONSE>\n${entry.content}\n</UNTRUSTED_PEER_RESPONSE>`,
+    );
+    setMode("MANUAL");
+    setStatus("Ответ помещён в редактор. Выберите модель, отредактируйте текст и отправьте.");
+  }
+
   return (
     <main>
       <header>
@@ -186,6 +208,11 @@ function App(): React.JSX.Element {
                     {entry.round ? <small>ход {entry.round}</small> : null}
                   </header>
                   <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml>{entry.content}</ReactMarkdown>
+                  {entry.role === "ASSISTANT" ? (
+                    <button className="relay" onClick={() => relay(entry)}>
+                      Передать дальше
+                    </button>
+                  ) : null}
                 </section>
               ))
             ) : (
@@ -199,12 +226,7 @@ function App(): React.JSX.Element {
           <div className="controls">
             <button
               disabled={!current}
-              onClick={() =>
-                current &&
-                void window.orchestrator.state
-                  .save(current.project.id, JSON.parse(stateText))
-                  .then(() => openProject(current.project.id))
-              }
+              onClick={() => void saveState()}
             >Сохранить черновик</button>
             <button
               disabled={!current?.state || current.state.status === "APPROVED"}

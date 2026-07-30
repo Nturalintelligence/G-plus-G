@@ -1,7 +1,6 @@
 import { join, resolve, sep } from "node:path";
-import { mkdirSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
-import { app, BrowserWindow, ipcMain, net, protocol } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, net, protocol } from "electron";
 import { createAdapter, parseProvider } from "../../src/adapters/adapter-registry.js";
 import { SpecExporter } from "../../src/artifacts/spec-exporter.js";
 import { Orchestrator, type RunMode } from "../../src/orchestrator/orchestrator.js";
@@ -9,6 +8,11 @@ import { ProjectStateService, type ProjectState } from "../../src/project-state.
 import { AppDatabase } from "../../src/storage/database.js";
 import { ProjectRepository } from "../../src/storage/repository.js";
 import type { ModelAdapter } from "../../src/adapters/adapter-contract.js";
+import { configureDataRoot, dataPath } from "../../src/paths.js";
+import {
+  logEvent,
+  writeDiagnostic,
+} from "../../src/observability/logger.js";
 
 let mainWindow: BrowserWindow | null = null;
 let database: AppDatabase | null = null;
@@ -31,21 +35,6 @@ protocol.registerSchemesAsPrivileged([
 function db(): AppDatabase {
   if (!database) throw new Error("Database is not initialized");
   return database;
-}
-
-function writeDiagnostic(error: unknown, context: Record<string, unknown>): string {
-  const directory = join(app.getPath("userData"), "logs");
-  mkdirSync(directory, { recursive: true });
-  const path = join(directory, `diagnostic-${Date.now()}.json`);
-  const value = error instanceof Error
-    ? { name: error.name, message: error.message, stack: error.stack }
-    : { message: String(error) };
-  writeFileSync(
-    path,
-    JSON.stringify({ occurredAt: new Date().toISOString(), error: value, context }, null, 2),
-    "utf8",
-  );
-  return path;
 }
 
 async function closeActiveAdapters(): Promise<void> {
@@ -98,18 +87,30 @@ function registerIpc(): void {
     if (!project) throw new Error(`Project not found: ${id}`);
     return {
       project,
-      recoveredTurns: repository.recoverUnfinishedTurns(id),
+      recoveredTurns: activeOrchestrator ? 0 : repository.recoverUnfinishedTurns(id),
       events: repository.events(),
       transcript: repository.conversationEntries(id),
       state: new ProjectStateService(db()).latest(id),
     };
   });
   ipcMain.handle("provider:login", async (_event, providerValue: string) => {
-    const adapter = createAdapter(parseProvider(providerValue));
-    await adapter.launch();
+    const provider = parseProvider(providerValue);
+    const adapter = createAdapter(provider);
+    logEvent("INFO", "provider.login.started", { provider });
     try {
+      await adapter.launch();
       await adapter.openLoginMode();
-      return adapter.checkSession();
+      const session = await adapter.checkSession();
+      logEvent("INFO", "provider.login.completed", { provider, session });
+      return session;
+    } catch (error) {
+      const diagnosticPath = writeDiagnostic(error, {
+        operation: "provider:login",
+        provider,
+      });
+      throw new Error(
+        `${error instanceof Error ? error.message : String(error)} Диагностика: ${diagnosticPath}`,
+      );
     } finally {
       await adapter.close();
     }
@@ -117,11 +118,31 @@ function registerIpc(): void {
   ipcMain.handle(
     "provider:send",
     async (_event, providerValue: string, message: string) => {
-      const adapter = createAdapter(parseProvider(providerValue));
-      await adapter.launch();
+      const provider = parseProvider(providerValue);
+      const adapter = createAdapter(provider);
+      logEvent("INFO", "provider.send.started", {
+        provider,
+        messageLength: message.length,
+      });
       try {
+        await adapter.launch();
         const turn = await adapter.sendMessage({ content: message });
-        return adapter.getFinalResponse(turn);
+        const result = await adapter.getFinalResponse(turn);
+        logEvent("INFO", "provider.send.completed", {
+          provider,
+          responseFingerprint: result.responseFingerprint,
+          elapsedMs: result.elapsedMs,
+        });
+        return result;
+      } catch (error) {
+        const diagnosticPath = writeDiagnostic(error, {
+          operation: "provider:send",
+          provider,
+          messageLength: message.length,
+        });
+        throw new Error(
+          `${error instanceof Error ? error.message : String(error)} Диагностика: ${diagnosticPath}`,
+        );
       } finally {
         await adapter.close();
       }
@@ -170,6 +191,21 @@ function registerIpc(): void {
           input.mode,
           input.task,
           input.providers,
+          undefined,
+          {
+            confirm: async (summary) => {
+              const result = await dialog.showMessageBox(mainWindow!, {
+                type: "question",
+                buttons: ["Продолжить", "Остановить"],
+                defaultId: 0,
+                cancelId: 1,
+                title: "Подтверждение продолжения",
+                message: summary,
+                detail: "Модели достигли контрольной точки ограниченной дискуссии.",
+              });
+              return result.response === 0;
+            },
+          },
         );
       } catch (error) {
         const diagnosticPath = writeDiagnostic(error, {
@@ -211,9 +247,14 @@ function registerIpc(): void {
 }
 
 app.whenReady().then(() => {
+  configureDataRoot(app.getPath("userData"));
   registerRendererProtocol();
-  database = new AppDatabase(join(app.getPath("userData"), "orchestrator.sqlite"));
+  database = new AppDatabase(dataPath("orchestrator.sqlite"));
   database.migrate();
+  logEvent("INFO", "application.ready", {
+    version: app.getVersion(),
+    dataRoot: dataPath(),
+  });
   registerIpc();
   createWindow();
 });

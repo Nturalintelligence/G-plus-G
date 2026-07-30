@@ -54,14 +54,15 @@ export class Orchestrator {
 
   resume(): void {
     this.paused = false;
-    if (this.activeRunId) this.setStatus(this.activeRunId, "RUNNING");
+    if (this.activeRunId && !this.stopped) this.setStatus(this.activeRunId, "RUNNING");
     this.resumeWaiters.splice(0).forEach((resolve) => resolve());
   }
 
   async stop(): Promise<void> {
     this.stopped = true;
     if (this.activeRunId) this.setStatus(this.activeRunId, "STOPPED");
-    this.resume();
+    this.paused = false;
+    this.resumeWaiters.splice(0).forEach((resolve) => resolve());
     await this.cancelActiveTurns();
   }
 
@@ -102,7 +103,7 @@ export class Orchestrator {
           const independent = await Promise.all(
             providerIds.map(async (providerId) => ({
               providerId,
-              text: await this.ask(providerId, initialMessage, limits, hooks),
+              text: await this.ask(projectId, repository, providerId, initialMessage, limits, hooks),
               round: 1,
             })),
           );
@@ -124,7 +125,7 @@ export class Orchestrator {
       } else if (effectiveMode === "MANUAL") {
         const response = {
           providerId: providerIds[0]!,
-          text: await this.ask(providerIds[0]!, initialMessage, limits, hooks),
+          text: await this.ask(projectId, repository, providerIds[0]!, initialMessage, limits, hooks),
           round: 1,
         };
         responses.push(response);
@@ -144,7 +145,7 @@ export class Orchestrator {
           this.assertWithinLimits(startedAt, limits);
           if (this.stopped) break;
           const providerId = providerIds[turn % providerIds.length]!;
-          const text = await this.ask(providerId, message, limits, hooks);
+          const text = await this.ask(projectId, repository, providerId, message, limits, hooks);
           responses.push({ providerId, text, round: turn + 1 });
           repository.appendConversationEntry({
             projectId,
@@ -180,6 +181,8 @@ export class Orchestrator {
   }
 
   private async ask(
+    projectId: string,
+    repository: ProjectRepository,
     providerId: string,
     message: string,
     limits: OrchestrationLimits,
@@ -190,15 +193,30 @@ export class Orchestrator {
     const edited = hooks.editBeforeSend
       ? await hooks.editBeforeSend(providerId, message)
       : message;
+    const conversation = repository.getOrCreateConversation(projectId, providerId);
+    const started = repository.beginTurn(conversation.id);
+    let attempt = started.attempt;
+    repository.addMessage(started.turn.id, attempt.id, "USER", edited);
     let lastError: unknown;
-    for (let attempt = 0; attempt <= limits.maxRetries; attempt += 1) {
+    for (let attemptIndex = 0; attemptIndex <= limits.maxRetries; attemptIndex += 1) {
       let turn: TurnRef;
       try {
+        repository.updateTurnStatus(started.turn.id, "SUBMITTING");
         turn = await adapter.sendMessage({ content: edited });
+        repository.updateTurnStatus(started.turn.id, "WAITING_RESPONSE");
       } catch (error) {
         lastError = error;
-        if (attempt === limits.maxRetries || isNonRetryableTurnError(error)) break;
+        repository.finishAttempt(
+          attempt.id,
+          "FAILED",
+          error instanceof Error ? error.message : String(error),
+        );
+        if (attemptIndex === limits.maxRetries || isNonRetryableTurnError(error)) {
+          repository.updateTurnStatus(started.turn.id, "FAILED");
+          break;
+        }
         await adapter.recover();
+        attempt = repository.beginAttempt(started.turn.id);
         continue;
       }
 
@@ -211,11 +229,21 @@ export class Orchestrator {
         );
       });
       try {
-        return (await Promise.race([adapter.getFinalResponse(turn), timeout])).response;
+        const result = await Promise.race([adapter.getFinalResponse(turn), timeout]);
+        repository.addMessage(started.turn.id, attempt.id, "ASSISTANT", result.response);
+        repository.finishAttempt(attempt.id, "COMPLETED");
+        repository.updateTurnStatus(started.turn.id, "COMPLETED");
+        return result.response;
       } catch (error) {
         // A turn reference means submission may already have reached the provider.
         // Retrying here can duplicate the user message, so fail safely.
         await adapter.cancel(turn).catch(() => undefined);
+        repository.finishAttempt(
+          attempt.id,
+          "FAILED",
+          error instanceof Error ? error.message : String(error),
+        );
+        repository.updateTurnStatus(started.turn.id, "FAILED");
         throw error;
       } finally {
         this.activeTurns.delete(providerId);

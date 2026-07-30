@@ -144,4 +144,27 @@ describe("Orchestrator", () => {
     expect(received).toHaveLength(1);
     expect(result.responses).toHaveLength(1);
   });
+
+  it("persists provider turns, attempts, and bound messages", async () => {
+    const { database, projectId } = setup();
+    const received: string[] = [];
+    const orchestrator = new Orchestrator(
+      database,
+      new Map([["chatgpt", fakeAdapter("chatgpt", received)]]),
+    );
+    await orchestrator.run(projectId, "MANUAL", "persist me", ["chatgpt"], limits);
+
+    expect(database.raw.prepare("SELECT status FROM turns").get()?.status).toBe(
+      "COMPLETED",
+    );
+    expect(database.raw.prepare("SELECT status FROM attempts").get()?.status).toBe(
+      "COMPLETED",
+    );
+    expect(
+      database.raw
+        .prepare("SELECT role FROM messages ORDER BY created_at, rowid")
+        .all()
+        .map((row) => row.role),
+    ).toEqual(["USER", "ASSISTANT"]);
+  });
 });

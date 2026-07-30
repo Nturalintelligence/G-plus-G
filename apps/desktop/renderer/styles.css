@@ -34,6 +34,7 @@ nav small, .timeline small { color: #708090; display: block; }
 .message > header strong { color: #66d9b7; text-transform: capitalize; }
 .message > header small, .empty { color: #708090; }
 .message > :last-child { margin-bottom: 0; }
+.relay { margin-top: 8px; color: #9de7d1; }
 .inspector > textarea { width: 100%; min-height: 330px; background: #0f151c; color: #c8d2dc; border: 1px solid #202832; border-radius: 8px; padding: 10px; font: 12px/1.45 Consolas, monospace; }
 .timeline { padding-left: 20px; }
 .timeline li { padding: 5px 0; }

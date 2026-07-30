@@ -21,6 +21,7 @@ import {
 } from "./errors.js";
 import { fingerprint, normalizeText, selectNewResponse } from "./fingerprint.js";
 import { newId } from "./ids.js";
+import { dataPath } from "./paths.js";
 import type {
   DiagnosticReport,
   ResponseSnapshot,
@@ -77,7 +78,7 @@ export class GeminiAdapter implements ModelAdapter {
   private readonly timeoutMs: number;
 
   constructor(options: { profileDir?: string; timeoutMs?: number } = {}) {
-    this.profileDir = resolve(options.profileDir ?? "user-data/profiles/gemini");
+    this.profileDir = resolve(options.profileDir ?? dataPath("profiles", "gemini"));
     this.lock = new ProfileLock(this.profileDir);
     this.timeoutMs = options.timeoutMs ?? 180_000;
   }
@@ -172,7 +173,11 @@ export class GeminiAdapter implements ModelAdapter {
   }
 
   async getFinalResponse(turn: TurnRef): Promise<TurnResult> {
-    return this.requireTurn(turn).result;
+    try {
+      return await this.requireTurn(turn).result;
+    } finally {
+      this.turns.delete(turn.id);
+    }
   }
 
   async cancel(turn: TurnRef): Promise<void> {
@@ -228,6 +233,7 @@ export class GeminiAdapter implements ModelAdapter {
     }
     await candidates[0]!.fill(message);
     await this.submitComposer(candidates[0]!, message);
+    await this.waitUntilUserMessage(message);
     channel?.publish({ type: "MESSAGE_SUBMITTED", at: new Date().toISOString() });
 
     const response = await this.waitForResponse(before, channel);
