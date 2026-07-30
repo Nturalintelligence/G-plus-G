@@ -57,6 +57,17 @@ export interface Message {
   createdAt: string;
 }
 
+export interface ConversationEntry {
+  id: string;
+  projectId: string;
+  runId: string | null;
+  role: MessageRole;
+  providerId: string | null;
+  round: number | null;
+  content: string;
+  createdAt: string;
+}
+
 export interface DomainEvent {
   sequence: number;
   id: string;

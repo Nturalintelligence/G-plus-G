@@ -2,7 +2,12 @@ import { fingerprint } from "../fingerprint.js";
 import { newId } from "../ids.js";
 import type { ModelAdapter, TurnRef } from "../adapters/adapter-contract.js";
 import type { AppDatabase } from "../storage/database.js";
-import { buildDebatePrompt, buildPeerReviewPrompt } from "./prompt-builder.js";
+import { ProjectRepository } from "../storage/repository.js";
+import {
+  buildContinuationPrompt,
+  buildDebatePrompt,
+  buildPeerReviewPrompt,
+} from "./prompt-builder.js";
 import {
   defaultLimits,
   validateLimits,
@@ -74,6 +79,15 @@ export class Orchestrator {
     const runId = newId("run");
     this.activeRunId = runId;
     this.createRun(runId, projectId, mode, limits);
+    const repository = new ProjectRepository(this.database);
+    const history = repository.conversationEntries(projectId);
+    const initialMessage = buildContinuationPrompt(history, task);
+    repository.appendConversationEntry({
+      projectId,
+      runId,
+      role: "USER",
+      content: task,
+    });
     const responses: RunOutput["responses"] = [];
     const startedAt = Date.now();
 
@@ -84,23 +98,42 @@ export class Orchestrator {
           const independent = await Promise.all(
             providerIds.map(async (providerId) => ({
               providerId,
-              text: await this.ask(providerId, task, limits, hooks),
+              text: await this.ask(providerId, initialMessage, limits, hooks),
               round: 1,
             })),
           );
           responses.push(...independent);
+          for (const response of independent) {
+            repository.appendConversationEntry({
+              projectId,
+              runId,
+              role: "ASSISTANT",
+              providerId: response.providerId,
+              round: response.round,
+              content: response.text,
+            });
+          }
         } catch (error) {
           await this.cancelActiveTurns();
           throw error;
         }
       } else if (mode === "MANUAL") {
-        responses.push({
+        const response = {
           providerId: providerIds[0]!,
-          text: await this.ask(providerIds[0]!, task, limits, hooks),
+          text: await this.ask(providerIds[0]!, initialMessage, limits, hooks),
           round: 1,
+        };
+        responses.push(response);
+        repository.appendConversationEntry({
+          projectId,
+          runId,
+          role: "ASSISTANT",
+          providerId: response.providerId,
+          round: response.round,
+          content: response.text,
         });
       } else {
-        let message = task;
+        let message = initialMessage;
         const seen = new Set<string>();
         for (let turn = 0; turn < limits.maxTurns; turn += 1) {
           await this.waitIfPaused();
@@ -109,6 +142,14 @@ export class Orchestrator {
           const providerId = providerIds[turn % providerIds.length]!;
           const text = await this.ask(providerId, message, limits, hooks);
           responses.push({ providerId, text, round: turn + 1 });
+          repository.appendConversationEntry({
+            projectId,
+            runId,
+            role: "ASSISTANT",
+            providerId,
+            round: turn + 1,
+            content: text,
+          });
           const hash = fingerprint(text);
           if (seen.has(hash)) break;
           seen.add(hash);
@@ -119,8 +160,8 @@ export class Orchestrator {
           }
           message =
             mode === "DEBATE"
-              ? buildDebatePrompt(task, text, turn + 2)
-              : buildPeerReviewPrompt(task, text);
+              ? buildDebatePrompt(initialMessage, responses, turn + 2)
+              : buildPeerReviewPrompt(initialMessage, text);
         }
       }
       const status: RunStatus = this.stopped ? "STOPPED" : "COMPLETED";

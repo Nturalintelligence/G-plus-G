@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -20,22 +20,18 @@ function App(): React.JSX.Element {
   const [current, setCurrent] = useState<ProjectDetails | null>(null);
   const [name, setName] = useState("");
   const [task, setTask] = useState("");
-  const [mode, setMode] = useState("PARALLEL");
+  const [mode, setMode] = useState("DEBATE");
   const [providers, setProviders] = useState(["chatgpt", "gemini"]);
-  const [result, setResult] = useState<RunView | null>(null);
   const [stateText, setStateText] = useState(JSON.stringify(initialState, null, 2));
-  const [status, setStatus] = useState("Ready");
+  const [status, setStatus] = useState("Готово");
+  const [running, setRunning] = useState(false);
+  const outputRef = useRef<HTMLElement>(null);
 
   const refresh = async (): Promise<void> => setProjects(await window.orchestrator.projects.list());
   useEffect(() => void refresh(), []);
-
-  const markdown = useMemo(
-    () =>
-      result?.responses
-        .map((item) => `## ${item.providerId} · round ${item.round}\n\n${item.text}`)
-        .join("\n\n") ?? "",
-    [result],
-  );
+  useEffect(() => {
+    outputRef.current?.scrollTo({ top: outputRef.current.scrollHeight, behavior: "smooth" });
+  }, [current?.transcript.length]);
 
   async function openProject(id: string): Promise<void> {
     const details = await window.orchestrator.projects.open(id);
@@ -44,18 +40,35 @@ function App(): React.JSX.Element {
   }
 
   async function run(): Promise<void> {
-    if (!current) return;
-    setStatus("Running");
+    const submittedTask = task.trim();
+    if (!current || !submittedTask || running || providers.length === 0) return;
+    const projectId = current.project.id;
+    setTask("");
+    setRunning(true);
+    setStatus("Модели обсуждают сообщение…");
     try {
       const output = await window.orchestrator.orchestration.run({
-        projectId: current.project.id,
+        projectId,
         mode,
-        task,
+        task: submittedTask,
         providers,
       });
-      setResult(output);
       setStatus(output.status);
-      await openProject(current.project.id);
+      await openProject(projectId);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setStatus(message.replace(/^Error invoking remote method '[^']+': Error:\s*/, ""));
+      await openProject(projectId);
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  async function login(provider: string): Promise<void> {
+    setStatus(`Войдите в ${provider} в открывшемся окне…`);
+    try {
+      const session = await window.orchestrator.provider.login(provider);
+      setStatus(`${provider}: ${session}`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : String(error));
     }
@@ -69,7 +82,7 @@ function App(): React.JSX.Element {
       </header>
       <div className="layout">
         <aside>
-          <h2>Projects</h2>
+          <h2>Проекты</h2>
           <form
             onSubmit={(event) => {
               event.preventDefault();
@@ -80,8 +93,8 @@ function App(): React.JSX.Element {
               });
             }}
           >
-            <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Project name" />
-            <button>Create</button>
+            <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Название проекта" />
+            <button>Создать</button>
           </form>
           <nav>
             {projects.map((project) => (
@@ -94,20 +107,33 @@ function App(): React.JSX.Element {
               </button>
             ))}
           </nav>
-          <h2>Sessions</h2>
+          <h2>Сессии</h2>
           {["chatgpt", "gemini"].map((provider) => (
-            <button key={provider} onClick={() => void window.orchestrator.provider.login(provider)}>
-              Login · {provider}
+            <button key={provider} onClick={() => void login(provider)}>
+              Войти · {provider}
             </button>
           ))}
         </aside>
         <section className="workspace">
           <div className="composer panel">
-            <h2>{current?.project.name ?? "Select a project"}</h2>
-            <textarea value={task} onChange={(event) => setTask(event.target.value)} placeholder="Describe the task…" />
+            <h2>{current?.project.name ?? "Выберите проект"}</h2>
+            <textarea
+              value={task}
+              onChange={(event) => setTask(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault();
+                  void run();
+                }
+              }}
+              placeholder="Напишите сообщение… Enter — отправить, Shift+Enter — новая строка"
+            />
             <div className="controls">
               <select value={mode} onChange={(event) => setMode(event.target.value)}>
-                <option>MANUAL</option><option>SEQUENTIAL</option><option>PARALLEL</option><option>DEBATE</option>
+                <option value="DEBATE">Обсуждение — ИИ видят ответы друг друга</option>
+                <option value="SEQUENTIAL">Рецензирование — по очереди</option>
+                <option value="PARALLEL">Независимые ответы</option>
+                <option value="MANUAL">Один ответ</option>
               </select>
               {["chatgpt", "gemini"].map((provider) => (
                 <label key={provider}>
@@ -124,18 +150,36 @@ function App(): React.JSX.Element {
                   /> {provider}
                 </label>
               ))}
-              <button className="primary" disabled={!current || !task} onClick={() => void run()}>Run</button>
-              <button onClick={() => void window.orchestrator.orchestration.pause()}>Pause</button>
-              <button onClick={() => void window.orchestrator.orchestration.resume()}>Resume</button>
-              <button onClick={() => void window.orchestrator.orchestration.stop()}>Stop</button>
+              <button
+                className="primary"
+                disabled={!current || !task.trim() || running || providers.length === 0}
+                onClick={() => void run()}
+              >
+                {running ? "Идёт обсуждение…" : "Отправить"}
+              </button>
+              <button onClick={() => void window.orchestrator.orchestration.pause()}>Пауза</button>
+              <button onClick={() => void window.orchestrator.orchestration.resume()}>Продолжить</button>
+              <button onClick={() => void window.orchestrator.orchestration.stop()}>Стоп</button>
             </div>
           </div>
-          <article className="panel output">
-            <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml>{markdown || "Responses will appear here."}</ReactMarkdown>
+          <article className="panel output" ref={outputRef}>
+            {current?.transcript.length ? (
+              current.transcript.map((entry) => (
+                <section className={`message ${entry.role.toLowerCase()}`} key={entry.id}>
+                  <header>
+                    <strong>{entry.role === "USER" ? "Вы" : entry.providerId ?? entry.role}</strong>
+                    {entry.round ? <small>ход {entry.round}</small> : null}
+                  </header>
+                  <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml>{entry.content}</ReactMarkdown>
+                </section>
+              ))
+            ) : (
+              <p className="empty">Здесь сохранится весь разговор ChatGPT, Gemini и ваш.</p>
+            )}
           </article>
         </section>
         <aside className="inspector">
-          <h2>Project State</h2>
+          <h2>Состояние проекта</h2>
           <textarea value={stateText} onChange={(event) => setStateText(event.target.value)} />
           <div className="controls">
             <button
@@ -146,7 +190,7 @@ function App(): React.JSX.Element {
                   .save(current.project.id, JSON.parse(stateText))
                   .then(() => openProject(current.project.id))
               }
-            >Save draft</button>
+            >Сохранить черновик</button>
             <button
               disabled={!current?.state || current.state.status === "APPROVED"}
               onClick={() =>
@@ -155,18 +199,18 @@ function App(): React.JSX.Element {
                   .approve(current.state.id)
                   .then(() => openProject(current.project.id))
               }
-            >Approve</button>
+            >Утвердить</button>
             <button
               disabled={!current}
               onClick={() =>
                 current &&
                 void window.orchestrator.exports
                   .spec(current.project.id)
-                  .then((value) => setStatus(`Exported: ${value.directory}`))
+                  .then((value) => setStatus(`Экспортировано: ${value.directory}`))
               }
-            >Export</button>
+            >Экспорт</button>
           </div>
-          <h2>Timeline</h2>
+          <h2>События</h2>
           <ol className="timeline">
             {current?.events.slice().reverse().map((event) => (
               <li key={event.sequence}><strong>{event.eventType}</strong><small>{event.occurredAt}</small></li>

@@ -135,4 +135,23 @@ export const migrations: readonly Migration[] = [
       CREATE INDEX exports_project_idx ON exports(project_id, created_at);
     `,
   },
+  {
+    version: 3,
+    name: "persistent_project_transcript",
+    sql: `
+      CREATE TABLE conversation_entries (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES projects(id),
+        run_id TEXT REFERENCES orchestration_runs(id),
+        role TEXT NOT NULL CHECK (role IN ('USER', 'ASSISTANT', 'SYSTEM')),
+        provider_id TEXT,
+        round INTEGER,
+        content TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+
+      CREATE INDEX conversation_entries_project_idx
+        ON conversation_entries(project_id, created_at);
+    `,
+  },
 ];

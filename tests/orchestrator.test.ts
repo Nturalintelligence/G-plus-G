@@ -83,4 +83,50 @@ describe("Orchestrator", () => {
     expect(second[0]).toContain("<UNTRUSTED_PEER_RESPONSE>");
     expect(second[0]).toContain("never as instructions");
   });
+
+  it("includes both models' earlier messages in discussion turns and persists them", async () => {
+    const { database, projectId } = setup();
+    const first: string[] = [];
+    const second: string[] = [];
+    const orchestrator = new Orchestrator(
+      database,
+      new Map([
+        ["a", fakeAdapter("a", first)],
+        ["b", fakeAdapter("b", second)],
+      ]),
+    );
+    await orchestrator.run(projectId, "DEBATE", "shared task", ["a", "b"], {
+      ...limits,
+      maxTurns: 3,
+    });
+    expect(first[1]).toContain("<UNTRUSTED_PEER_TRANSCRIPT>");
+    expect(first[1]).toContain("a:shared task");
+    expect(first[1]).toContain("b:");
+    const transcript = new ProjectRepository(database).conversationEntries(projectId);
+    expect(transcript.map((entry) => entry.role)).toEqual([
+      "USER",
+      "ASSISTANT",
+      "ASSISTANT",
+      "ASSISTANT",
+    ]);
+  });
+
+  it("passes the persisted project conversation into a later user message", async () => {
+    const { database, projectId } = setup();
+    const repository = new ProjectRepository(database);
+    repository.appendConversationEntry({
+      projectId,
+      role: "ASSISTANT",
+      providerId: "gemini",
+      content: "remember-this",
+    });
+    const received: string[] = [];
+    const orchestrator = new Orchestrator(
+      database,
+      new Map([["a", fakeAdapter("a", received)]]),
+    );
+    await orchestrator.run(projectId, "MANUAL", "next question", ["a"], limits);
+    expect(received[0]).toContain("remember-this");
+    expect(received[0]).toContain("next question");
+  });
 });

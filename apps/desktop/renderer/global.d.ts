@@ -42,7 +42,17 @@ interface ProjectDetails {
     eventType: string;
     occurredAt: string;
   }>;
+  transcript: ConversationEntryView[];
   state: StateVersion | null;
+}
+
+interface ConversationEntryView {
+  id: string;
+  role: "USER" | "ASSISTANT" | "SYSTEM";
+  providerId: string | null;
+  round: number | null;
+  content: string;
+  createdAt: string;
 }
 
 interface StateVersion {

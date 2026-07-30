@@ -1,4 +1,5 @@
 import { join, resolve, sep } from "node:path";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { app, BrowserWindow, ipcMain, net, protocol } from "electron";
 import { createAdapter, parseProvider } from "../../src/adapters/adapter-registry.js";
@@ -7,10 +8,12 @@ import { Orchestrator, type RunMode } from "../../src/orchestrator/orchestrator.
 import { ProjectStateService, type ProjectState } from "../../src/project-state.js";
 import { AppDatabase } from "../../src/storage/database.js";
 import { ProjectRepository } from "../../src/storage/repository.js";
+import type { ModelAdapter } from "../../src/adapters/adapter-contract.js";
 
 let mainWindow: BrowserWindow | null = null;
 let database: AppDatabase | null = null;
 let activeOrchestrator: Orchestrator | null = null;
+let activeAdapters: Map<string, ModelAdapter> | null = null;
 let quitAfterCleanup = false;
 
 protocol.registerSchemesAsPrivileged([
@@ -28,6 +31,28 @@ protocol.registerSchemesAsPrivileged([
 function db(): AppDatabase {
   if (!database) throw new Error("Database is not initialized");
   return database;
+}
+
+function writeDiagnostic(error: unknown, context: Record<string, unknown>): string {
+  const directory = join(app.getPath("userData"), "logs");
+  mkdirSync(directory, { recursive: true });
+  const path = join(directory, `diagnostic-${Date.now()}.json`);
+  const value = error instanceof Error
+    ? { name: error.name, message: error.message, stack: error.stack }
+    : { message: String(error) };
+  writeFileSync(
+    path,
+    JSON.stringify({ occurredAt: new Date().toISOString(), error: value, context }, null, 2),
+    "utf8",
+  );
+  return path;
+}
+
+async function closeActiveAdapters(): Promise<void> {
+  const adapters = activeAdapters;
+  activeAdapters = null;
+  if (!adapters) return;
+  await Promise.allSettled([...adapters.values()].map((adapter) => adapter.close()));
 }
 
 function createWindow(): void {
@@ -75,6 +100,7 @@ function registerIpc(): void {
       project,
       recoveredTurns: repository.recoverUnfinishedTurns(id),
       events: repository.events(),
+      transcript: repository.conversationEntries(id),
       state: new ProjectStateService(db()).latest(id),
     };
   });
@@ -115,17 +141,36 @@ function registerIpc(): void {
       const adapters = new Map(
         input.providers.map((provider) => [provider, createAdapter(provider)]),
       );
-      await Promise.all([...adapters.values()].map((adapter) => adapter.launch()));
-      activeOrchestrator = new Orchestrator(db(), adapters);
+      activeAdapters = adapters;
       try {
+        const launches = await Promise.allSettled(
+          [...adapters.values()].map((adapter) => adapter.launch()),
+        );
+        const launchFailure = launches.find(
+          (result): result is PromiseRejectedResult => result.status === "rejected",
+        );
+        if (launchFailure) throw launchFailure.reason;
+        activeOrchestrator = new Orchestrator(db(), adapters);
         return await activeOrchestrator.run(
           input.projectId,
           input.mode,
           input.task,
           input.providers,
         );
+      } catch (error) {
+        const diagnosticPath = writeDiagnostic(error, {
+          operation: "orchestration:run",
+          projectId: input.projectId,
+          mode: input.mode,
+          providers: input.providers,
+        });
+        const rawMessage = error instanceof Error ? error.message : String(error);
+        const message = /LOGIN_REQUIRED/.test(rawMessage)
+          ? "Нужен вход в ChatGPT. Нажмите «Войти · chatgpt», завершите вход и повторите отправку."
+          : rawMessage;
+        throw new Error(`${message} Диагностика: ${diagnosticPath}`);
       } finally {
-        await Promise.all([...adapters.values()].map((adapter) => adapter.close()));
+        await closeActiveAdapters();
         activeOrchestrator = null;
       }
     },
@@ -168,12 +213,14 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", (event) => {
-  if (!activeOrchestrator || quitAfterCleanup) return;
+  if ((!activeOrchestrator && !activeAdapters) || quitAfterCleanup) return;
   event.preventDefault();
-  void activeOrchestrator.stop().finally(() => {
+  void (async () => {
+    await activeOrchestrator?.stop();
+    await closeActiveAdapters();
     quitAfterCleanup = true;
     app.quit();
-  });
+  })();
 });
 
 app.on("will-quit", () => {

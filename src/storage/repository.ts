@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type {
   Attempt,
   Conversation,
+  ConversationEntry,
   DomainEvent,
   Message,
   MessageRole,
@@ -58,6 +59,73 @@ export class ProjectRepository {
       )
       .get(id);
     return row ? mapProject(row) : null;
+  }
+
+  appendConversationEntry(input: {
+    projectId: string;
+    runId?: string | null;
+    role: MessageRole;
+    providerId?: string | null;
+    round?: number | null;
+    content: string;
+  }): ConversationEntry {
+    const entry: ConversationEntry = {
+      id: newId("entry"),
+      projectId: input.projectId,
+      runId: input.runId ?? null,
+      role: input.role,
+      providerId: input.providerId ?? null,
+      round: input.round ?? null,
+      content: input.content,
+      createdAt: new Date().toISOString(),
+    };
+    this.database.transaction(() => {
+      this.database.raw
+        .prepare(
+          `INSERT INTO conversation_entries
+           (id, project_id, run_id, role, provider_id, round, content, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          entry.id,
+          entry.projectId,
+          entry.runId,
+          entry.role,
+          entry.providerId,
+          entry.round,
+          entry.content,
+          entry.createdAt,
+        );
+      this.appendEventInternal("Project", entry.projectId, "TRANSCRIPT_ENTRY_RECORDED", {
+        entryId: entry.id,
+        runId: entry.runId,
+        role: entry.role,
+        providerId: entry.providerId,
+        round: entry.round,
+      });
+    });
+    return entry;
+  }
+
+  conversationEntries(projectId: string): ConversationEntry[] {
+    return this.database.raw
+      .prepare(
+        `SELECT id, project_id, run_id, role, provider_id, round, content, created_at
+         FROM conversation_entries
+         WHERE project_id = ?
+         ORDER BY created_at, rowid`,
+      )
+      .all(projectId)
+      .map((row) => ({
+        id: String(row.id),
+        projectId: String(row.project_id),
+        runId: row.run_id === null ? null : String(row.run_id),
+        role: String(row.role) as MessageRole,
+        providerId: row.provider_id === null ? null : String(row.provider_id),
+        round: row.round === null ? null : Number(row.round),
+        content: String(row.content),
+        createdAt: String(row.created_at),
+      }));
   }
 
   createConversation(projectId: string, providerId: string): Conversation {
