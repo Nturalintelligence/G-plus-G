@@ -374,6 +374,89 @@ export class ProjectRepository {
     }));
   }
 
+  recoverUnfinishedRuns(projectId?: string): number {
+    return this.database.transaction(() => {
+      const params: SqlValue[] = [];
+      const projectFilter = projectId ? "AND project_id = ?" : "";
+      if (projectId) params.push(projectId);
+      const rows = this.database.raw
+        .prepare(
+          `SELECT id FROM orchestration_runs
+           WHERE status IN ('CREATED', 'RUNNING', 'PAUSED', 'AWAITING_CONFIRMATION')
+           ${projectFilter}`,
+        )
+        .all(...params);
+      const timestamp = new Date().toISOString();
+      for (const row of rows) {
+        const runId = String(row.id);
+        this.database.raw
+          .prepare(
+            `UPDATE orchestration_runs
+             SET status = 'FAILED', finished_at = ?, updated_at = ?
+             WHERE id = ?`,
+          )
+          .run(timestamp, timestamp, runId);
+        this.appendEventInternal(
+          "OrchestrationRun",
+          runId,
+          "RUN_RECOVERED_AS_FAILED",
+          { recoveredAt: timestamp, reason: "previous process ended unexpectedly" },
+        );
+      }
+      return rows.length;
+    });
+  }
+
+  projectEvents(projectId: string, limit = 500): DomainEvent[] {
+    const safeLimit = Math.max(1, Math.min(2_000, Math.trunc(limit)));
+    const rows = this.database.raw
+      .prepare(
+        `SELECT e.*
+         FROM events e
+         WHERE
+           (e.aggregate_type = 'Project' AND e.aggregate_id = ?)
+           OR e.aggregate_id IN (
+             SELECT id FROM conversations WHERE project_id = ?
+           )
+           OR e.aggregate_id IN (
+             SELECT t.id FROM turns t
+             JOIN conversations c ON c.id = t.conversation_id
+             WHERE c.project_id = ?
+           )
+           OR e.aggregate_id IN (
+             SELECT a.id FROM attempts a
+             JOIN turns t ON t.id = a.turn_id
+             JOIN conversations c ON c.id = t.conversation_id
+             WHERE c.project_id = ?
+           )
+           OR e.aggregate_id IN (
+             SELECT m.id FROM messages m
+             JOIN turns t ON t.id = m.turn_id
+             JOIN conversations c ON c.id = t.conversation_id
+             WHERE c.project_id = ?
+           )
+           OR e.aggregate_id IN (
+             SELECT id FROM orchestration_runs WHERE project_id = ?
+           )
+           OR e.aggregate_id IN (
+             SELECT id FROM project_state_versions WHERE project_id = ?
+           )
+         ORDER BY e.sequence DESC
+         LIMIT ?`,
+      )
+      .all(
+        projectId,
+        projectId,
+        projectId,
+        projectId,
+        projectId,
+        projectId,
+        projectId,
+        safeLimit,
+      );
+    return rows.reverse().map(mapEvent);
+  }
+
   private appendEventInternal(
     aggregateType: string,
     aggregateId: string,
@@ -416,5 +499,17 @@ function mapConversation(row: Record<string, unknown>): Conversation {
     status: String(row.status) as Conversation["status"],
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
+  };
+}
+
+function mapEvent(row: Record<string, unknown>): DomainEvent {
+  return {
+    sequence: Number(row.sequence),
+    id: String(row.id),
+    aggregateType: String(row.aggregate_type),
+    aggregateId: String(row.aggregate_id),
+    eventType: String(row.event_type),
+    payload: JSON.parse(String(row.payload_json)),
+    occurredAt: String(row.occurred_at),
   };
 }

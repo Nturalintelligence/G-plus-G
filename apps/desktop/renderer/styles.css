@@ -5,6 +5,7 @@ button, input, textarea, select { font: inherit; }
 button, select, input { border: 1px solid #303a46; border-radius: 8px; background: #151b23; color: inherit; padding: 9px 12px; }
 button { cursor: pointer; text-align: left; }
 button:hover { border-color: #66d9b7; }
+button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible, a:focus-visible { outline: 3px solid #66d9b7; outline-offset: 2px; }
 button:disabled { opacity: .45; cursor: default; }
 header { height: 68px; display: flex; align-items: center; justify-content: space-between; padding: 0 22px; border-bottom: 1px solid #202832; }
 header div { display: flex; align-items: center; gap: 14px; }
@@ -38,3 +39,31 @@ nav small, .timeline small { color: #708090; display: block; }
 .inspector > textarea { width: 100%; min-height: 330px; background: #0f151c; color: #c8d2dc; border: 1px solid #202832; border-radius: 8px; padding: 10px; font: 12px/1.45 Consolas, monospace; }
 .timeline { padding-left: 20px; }
 .timeline li { padding: 5px 0; }
+.header-actions { min-width: 0; justify-content: flex-end; }
+.modal-backdrop { position: fixed; inset: 0; z-index: 10; background: rgb(0 0 0 / .7); display: grid; place-items: center; padding: 24px; }
+.settings-modal { width: min(760px, 100%); max-height: calc(100vh - 48px); overflow: hidden; border: 1px solid #35414e; border-radius: 14px; background: #10161d; box-shadow: 0 24px 80px rgb(0 0 0 / .5); display: grid; grid-template-rows: auto minmax(0, 1fr) auto; }
+.settings-modal > header { height: auto; padding: 18px 22px; align-items: flex-start; }
+.settings-modal > header p { color: #8b9bab; margin: 6px 0 0; font-size: 13px; }
+.settings-content { overflow: auto; padding: 20px 22px; display: grid; gap: 18px; }
+.settings-modal fieldset { border: 1px solid #27313c; border-radius: 10px; padding: 14px; display: grid; gap: 12px; }
+.settings-modal legend { color: #66d9b7; padding: 0 6px; font-weight: 700; }
+.settings-modal label { display: grid; gap: 6px; color: #b5c0cb; font-size: 13px; }
+.settings-modal input:not([type="checkbox"]), .settings-modal select { width: 100%; }
+.settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.settings-checks { display: flex; gap: 18px; }
+.settings-checks label { display: flex; align-items: center; gap: 6px; }
+.settings-modal > footer { border-top: 1px solid #27313c; padding: 14px 22px; display: flex; justify-content: flex-end; gap: 8px; }
+:root[data-density="compact"] .panel { padding: 10px; }
+:root[data-density="compact"] .layout aside { padding: 12px; }
+:root[data-density="compact"] button, :root[data-density="compact"] select, :root[data-density="compact"] input { padding: 6px 9px; }
+:root[data-theme="light"] { color-scheme: light; background: #f5f7fa; color: #17212b; }
+:root[data-theme="light"] body, :root[data-theme="light"] .panel, :root[data-theme="light"] .settings-modal { background: #f5f7fa; }
+:root[data-theme="light"] button, :root[data-theme="light"] select, :root[data-theme="light"] input, :root[data-theme="light"] .message, :root[data-theme="light"] .inspector > textarea { background: #fff; color: #17212b; }
+:root[data-theme="light"] .message.user, :root[data-theme="light"] .selected { background: #e6f5f0; }
+@media (prefers-color-scheme: light) {
+  :root[data-theme="system"] { color-scheme: light; background: #f5f7fa; color: #17212b; }
+  :root[data-theme="system"] body, :root[data-theme="system"] .panel, :root[data-theme="system"] .settings-modal { background: #f5f7fa; }
+  :root[data-theme="system"] button, :root[data-theme="system"] select, :root[data-theme="system"] input, :root[data-theme="system"] .message, :root[data-theme="system"] .inspector > textarea { background: #fff; color: #17212b; }
+}
+@media (max-width: 700px) { .settings-grid { grid-template-columns: 1fr; } }
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; transition: none !important; } }

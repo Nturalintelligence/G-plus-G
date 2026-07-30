@@ -69,3 +69,38 @@ SQLite хранится в общей папке данных приложени
 
 Текущая готовность этапов и известные ограничения описаны в
 [`docs/implementation-status.md`](docs/implementation-status.md).
+
+## Предрелизная проверка и резервные копии
+
+Перед ручным тестированием проверьте среду:
+
+```powershell
+npm run preflight
+npm run release:info
+```
+
+`preflight` проверяет версию Node.js, доступность Playwright/браузера и возможность
+записи в каталог данных. `release:info` печатает версию приложения, Git-коммит,
+платформу и фактический каталог данных — этот отчёт полезно прикладывать к баг-репорту.
+
+Создание и проверка резервной копии:
+
+```powershell
+npm run backup -- --file "$env:USERPROFILE\Documents\G-plus-G backups"
+npm run backup:validate -- --file "C:\...\g-plus-g-backup-..."
+```
+
+Копия создаётся как каталог с отметкой времени. SQLite снимается через
+`VACUUM INTO`, поэтому в копию попадают зафиксированные данные из WAL. Manifest
+содержит SHA-256 и результат `PRAGMA quick_check`. Содержимое browser-профилей,
+cookies, токены и тексты логов не копируются. Настройки, если они есть, проходят
+рекурсивное маскирование чувствительных ключей.
+
+Восстановление требует закрытого desktop-приложения:
+
+```powershell
+npm run restore -- --file "C:\...\g-plus-g-backup-..."
+```
+
+Перед заменой выполняются проверка manifest, контрольной суммы и целостности
+SQLite. Предыдущая база сохраняется рядом как `orchestrator.sqlite.before-restore`.

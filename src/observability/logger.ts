@@ -1,4 +1,12 @@
-import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname } from "node:path";
 import { dataPath } from "../paths.js";
 
@@ -6,7 +14,10 @@ type LogLevel = "INFO" | "WARN" | "ERROR";
 
 const SENSITIVE_KEY = /cookie|token|password|authorization|secret|localstorage/i;
 const SENSITIVE_VALUE =
-  /(bearer\s+[a-z0-9._-]+|sk-[a-z0-9_-]+|gh[opsu]_[a-z0-9_]+|oauth[^ ]*)/gi;
+  /(bearer\s+[a-z0-9._-]+|sk-[a-z0-9_-]+|gh[opsu]_[a-z0-9_]+|oauth[^ ]*|[a-z0-9_-]{20,}\.[a-z0-9_-]{20,}\.[a-z0-9_-]{10,})/gi;
+const SENSITIVE_QUERY = /([?&](?:token|key|code|session|auth)[^=]*=)[^&\s]+/gi;
+const MAX_LOG_BYTES = 5 * 1024 * 1024;
+const ROTATED_LOGS = 4;
 
 function safeValue(value: unknown, seen = new WeakSet<object>()): unknown {
   if (value instanceof Error) {
@@ -31,7 +42,19 @@ function safeValue(value: unknown, seen = new WeakSet<object>()): unknown {
 }
 
 function redact(value: string): string {
-  return value.replace(SENSITIVE_VALUE, "[REDACTED]");
+  return value
+    .replace(SENSITIVE_VALUE, "[REDACTED]")
+    .replace(SENSITIVE_QUERY, "$1[REDACTED]");
+}
+
+function rotate(path: string): void {
+  if (!existsSync(path) || statSync(path).size < MAX_LOG_BYTES) return;
+  rmSync(`${path}.${ROTATED_LOGS}`, { force: true });
+  for (let index = ROTATED_LOGS - 1; index >= 1; index -= 1) {
+    const source = `${path}.${index}`;
+    if (existsSync(source)) renameSync(source, `${path}.${index + 1}`);
+  }
+  renameSync(path, `${path}.1`);
 }
 
 export function logEvent(
@@ -41,6 +64,7 @@ export function logEvent(
 ): void {
   const path = dataPath("logs", "application.jsonl");
   mkdirSync(dirname(path), { recursive: true });
+  rotate(path);
   appendFileSync(
     path,
     `${JSON.stringify({

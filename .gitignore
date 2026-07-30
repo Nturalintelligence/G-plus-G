@@ -2,6 +2,7 @@ node_modules/
 dist/
 dist-electron/
 release/
+backups/
 user-data/
 test-results/
 *.log

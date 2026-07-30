@@ -13,6 +13,7 @@ import {
   validateLimits,
   type OrchestrationLimits,
 } from "./limits.js";
+import { QualityMetrics } from "../observability/metrics.js";
 
 export type RunMode = "MANUAL" | "SEQUENTIAL" | "PARALLEL" | "DEBATE";
 export type RunStatus =
@@ -99,16 +100,28 @@ export class Orchestrator {
     try {
       this.setStatus(runId, "RUNNING");
       if (effectiveMode === "PARALLEL") {
-        try {
-          const independent = await Promise.all(
-            providerIds.map(async (providerId) => ({
+        const independent = await Promise.allSettled(
+          providerIds.map(async (providerId) => ({
               providerId,
-              text: await this.ask(projectId, repository, providerId, initialMessage, limits, hooks),
+              text: await this.withSessionLimit(
+                startedAt,
+                limits,
+                this.ask(
+                  projectId,
+                  repository,
+                  providerId,
+                  initialMessage,
+                  limits,
+                  hooks,
+                ),
+              ),
               round: 1,
             })),
-          );
-          responses.push(...independent);
-          for (const response of independent) {
+        );
+        for (const result of independent) {
+          if (result.status === "fulfilled") {
+            const response = result.value;
+            responses.push(response);
             repository.appendConversationEntry({
               projectId,
               runId,
@@ -118,14 +131,29 @@ export class Orchestrator {
               content: response.text,
             });
           }
-        } catch (error) {
+        }
+        const failure = independent.find(
+          (result): result is PromiseRejectedResult => result.status === "rejected",
+        );
+        if (failure) {
           await this.cancelActiveTurns();
-          throw error;
+          throw failure.reason;
         }
       } else if (effectiveMode === "MANUAL") {
         const response = {
           providerId: providerIds[0]!,
-          text: await this.ask(projectId, repository, providerIds[0]!, initialMessage, limits, hooks),
+          text: await this.withSessionLimit(
+            startedAt,
+            limits,
+            this.ask(
+              projectId,
+              repository,
+              providerIds[0]!,
+              initialMessage,
+              limits,
+              hooks,
+            ),
+          ),
           round: 1,
         };
         responses.push(response);
@@ -173,6 +201,11 @@ export class Orchestrator {
       this.setStatus(runId, status);
       return { runId, status, responses };
     } catch (error) {
+      await this.cancelActiveTurns();
+      if (this.stopped) {
+        this.setStatus(runId, "STOPPED");
+        return { runId, status: "STOPPED", responses };
+      }
       this.setStatus(runId, "FAILED");
       throw error;
     } finally {
@@ -198,6 +231,8 @@ export class Orchestrator {
     let attempt = started.attempt;
     repository.addMessage(started.turn.id, attempt.id, "USER", edited);
     let lastError: unknown;
+    const metricStartedAt = Date.now();
+    const metrics = new QualityMetrics(this.database);
     for (let attemptIndex = 0; attemptIndex <= limits.maxRetries; attemptIndex += 1) {
       let turn: TurnRef;
       try {
@@ -213,6 +248,8 @@ export class Orchestrator {
         );
         if (attemptIndex === limits.maxRetries || isNonRetryableTurnError(error)) {
           repository.updateTurnStatus(started.turn.id, "FAILED");
+          metrics.record("provider.turn.success", 0, { providerId });
+          metrics.record("provider.turn.retry_count", attemptIndex, { providerId });
           break;
         }
         await adapter.recover();
@@ -233,6 +270,11 @@ export class Orchestrator {
         repository.addMessage(started.turn.id, attempt.id, "ASSISTANT", result.response);
         repository.finishAttempt(attempt.id, "COMPLETED");
         repository.updateTurnStatus(started.turn.id, "COMPLETED");
+        metrics.record("provider.turn.success", 1, { providerId });
+        metrics.record("provider.turn.elapsed_ms", Date.now() - metricStartedAt, {
+          providerId,
+        });
+        metrics.record("provider.turn.retry_count", attemptIndex, { providerId });
         return result.response;
       } catch (error) {
         // A turn reference means submission may already have reached the provider.
@@ -244,6 +286,11 @@ export class Orchestrator {
           error instanceof Error ? error.message : String(error),
         );
         repository.updateTurnStatus(started.turn.id, "FAILED");
+        metrics.record("provider.turn.success", 0, { providerId });
+        metrics.record("provider.turn.elapsed_ms", Date.now() - metricStartedAt, {
+          providerId,
+        });
+        metrics.record("provider.turn.retry_count", attemptIndex, { providerId });
         throw error;
       } finally {
         this.activeTurns.delete(providerId);
@@ -271,6 +318,29 @@ export class Orchestrator {
   private assertWithinLimits(startedAt: number, limits: OrchestrationLimits): void {
     if (Date.now() - startedAt > limits.maxSessionMs) {
       throw new Error("Session time limit exceeded");
+    }
+  }
+
+  private async withSessionLimit<T>(
+    startedAt: number,
+    limits: OrchestrationLimits,
+    operation: Promise<T>,
+  ): Promise<T> {
+    const remaining = limits.maxSessionMs - (Date.now() - startedAt);
+    if (remaining <= 0) throw new Error("Session time limit exceeded");
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        operation,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error("Session time limit exceeded")),
+            remaining,
+          );
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   }
 

@@ -1,6 +1,9 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
 const api = {
+  system: {
+    preflight: () => ipcRenderer.invoke("system:preflight"),
+  },
   projects: {
     list: () => ipcRenderer.invoke("projects:list"),
     create: (name) => ipcRenderer.invoke("projects:create", name),
@@ -25,6 +28,10 @@ const api = {
   },
   exports: {
     spec: (projectId) => ipcRenderer.invoke("export:spec", projectId),
+  },
+  settings: {
+    get: () => ipcRenderer.invoke("settings:get"),
+    save: (value) => ipcRenderer.invoke("settings:save", value),
   },
 };
 

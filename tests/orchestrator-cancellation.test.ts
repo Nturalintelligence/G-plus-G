@@ -78,4 +78,73 @@ describe("parallel cancellation", () => {
     expect(peerCancelled).toBe(1);
     database.close();
   });
+
+  it("keeps a completed peer response when the other provider fails", async () => {
+    const database = new AppDatabase(join(mkdtempSync(join(tmpdir(), "partial-")), "db.sqlite"));
+    database.migrate();
+    const repository = new ProjectRepository(database);
+    const project = repository.createProject("Partial");
+    const completed = {
+      providerId: "completed",
+      async sendMessage() {
+        return { id: "completed-turn" };
+      },
+      async getFinalResponse() {
+        return { response: "valuable answer", responseFingerprint: "x", elapsedMs: 1 };
+      },
+    } as unknown as ModelAdapter;
+    const failed = {
+      providerId: "failed",
+      async sendMessage() {
+        return { id: "failed-turn" };
+      },
+      async getFinalResponse() {
+        throw new Error("provider failed");
+      },
+      async cancel() {},
+    } as unknown as ModelAdapter;
+    await expect(
+      new Orchestrator(
+        database,
+        new Map([
+          ["completed", completed],
+          ["failed", failed],
+        ]),
+      ).run(project.id, "PARALLEL", "task", ["completed", "failed"], limits()),
+    ).rejects.toThrow(/provider failed/);
+    expect(repository.conversationEntries(project.id).map((entry) => entry.content)).toContain(
+      "valuable answer",
+    );
+    database.close();
+  });
+
+  it("keeps STOPPED as the terminal status after cancelling an active turn", async () => {
+    const database = new AppDatabase(join(mkdtempSync(join(tmpdir(), "stop-")), "db.sqlite"));
+    database.migrate();
+    const project = new ProjectRepository(database).createProject("Stop");
+    let rejectTurn: ((error: Error) => void) | undefined;
+    const adapter = {
+      providerId: "slow",
+      async sendMessage() {
+        return { id: "slow-turn" };
+      },
+      async getFinalResponse() {
+        return new Promise<never>((_resolve, reject) => {
+          rejectTurn = reject;
+        });
+      },
+      async cancel() {
+        rejectTurn?.(new Error("cancelled"));
+      },
+    } as unknown as ModelAdapter;
+    const orchestrator = new Orchestrator(database, new Map([["slow", adapter]]));
+    const running = orchestrator.run(project.id, "MANUAL", "task", ["slow"], limits());
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await orchestrator.stop();
+    await expect(running).resolves.toMatchObject({ status: "STOPPED" });
+    expect(
+      database.raw.prepare("SELECT status FROM orchestration_runs").get()?.status,
+    ).toBe("STOPPED");
+    database.close();
+  });
 });

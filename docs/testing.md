@@ -23,3 +23,16 @@ Then perform the browser acceptance test:
 
 CAPTCHA must always stop automation. Ambiguous DOM must always produce an explicit
 error rather than choosing an element silently.
+
+Before every release candidate:
+
+```powershell
+npm run preflight
+npm run release:info
+npm run backup -- --file "<safe external backup directory>"
+npm run backup:validate -- --file "<created timestamped bundle>"
+```
+
+Record the release-info output with the test results. Exercise restore only while
+the desktop application is closed; confirm that the `.before-restore` rollback
+copy is present and that project history opens normally afterward.

@@ -13,6 +13,7 @@ import { TurnChannel } from "./adapters/turn-channel.js";
 import { ProfileLock } from "./browser/profile-lock.js";
 import { bundledChromiumExecutable } from "./browser/runtime.js";
 import { dataPath } from "./paths.js";
+import { inferSessionState } from "./adapters/session-inference.js";
 import { newId } from "./ids.js";
 import {
   AmbiguousElementError,
@@ -223,12 +224,11 @@ export class ChatGptAdapter implements ModelAdapter {
     const page = this.requirePage();
     if (await this.hasChallenge()) return "CHALLENGE_REQUIRED";
     const body = await page.locator("body").innerText().catch(() => "");
-    if (/log in|sign up|войти|регистрац/i.test(body)) return "LOGIN_REQUIRED";
-    if (/too many requests|rate limit|слишком много запросов/i.test(body)) {
-      return "RATE_LIMITED";
-    }
-    if ((await this.findVisibleComposers()).length === 1) return "AUTHENTICATED";
-    return "UNKNOWN";
+    return inferSessionState(
+      "chatgpt",
+      body,
+      (await this.findVisibleComposers()).length,
+    );
   }
 
   async waitForManualLogin(): Promise<void> {

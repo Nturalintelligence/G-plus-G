@@ -9,6 +9,8 @@
    controlled by automation. Close that dedicated Chrome window after Gemini opens;
    the application then reuses the saved session.
 6. Enter a task, select providers and a bounded mode, then run it.
+7. Open **Profile · Settings** in the header to choose your local display name,
+   preferred mode/providers, orchestration limits, theme, density, and text scale.
 
 No configuration file or API key is required. Browser sessions and the project
 database remain local to the current OS account.
@@ -20,3 +22,5 @@ On Windows all runtime data is stored under:
 ```
 
 The desktop app and CLI share this database, provider profiles, logs, and exports.
+Desktop preferences are stored alongside them in `settings.json`. This file never
+contains passwords, cookies, API keys, or tokens.

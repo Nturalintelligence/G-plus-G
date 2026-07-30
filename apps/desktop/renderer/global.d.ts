@@ -1,5 +1,12 @@
 interface Window {
   orchestrator: {
+    system: {
+      preflight(): Promise<Array<{
+        name: string;
+        status: "pass" | "warn" | "fail";
+        detail: string;
+      }>>;
+    };
     projects: {
       list(): Promise<ProjectView[]>;
       create(name: string): Promise<ProjectView>;
@@ -23,6 +30,31 @@ interface Window {
     exports: {
       spec(projectId: string): Promise<{ directory: string; manifestHash: string }>;
     };
+    settings: {
+      get(): Promise<AppSettingsView>;
+      save(value: AppSettingsView): Promise<AppSettingsView>;
+    };
+  };
+}
+
+interface AppSettingsView {
+  schemaVersion: 1;
+  profile: { displayName: string };
+  defaults: {
+    mode: "MANUAL" | "SEQUENTIAL" | "PARALLEL" | "DEBATE";
+    providers: Array<"chatgpt" | "gemini">;
+    limits: {
+      maxTurns: number;
+      maxTurnMs: number;
+      maxSessionMs: number;
+      maxRetries: number;
+      confirmationEvery: number;
+    };
+  };
+  appearance: {
+    theme: "dark" | "light" | "system";
+    density: "comfortable" | "compact";
+    fontScale: number;
   };
 }
 
@@ -36,6 +68,7 @@ interface ProjectView {
 interface ProjectDetails {
   project: ProjectView;
   recoveredTurns: number;
+  recoveredRuns: number;
   events: Array<{
     sequence: number;
     aggregateType: string;

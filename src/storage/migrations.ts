@@ -154,4 +154,20 @@ export const migrations: readonly Migration[] = [
         ON conversation_entries(project_id, created_at);
     `,
   },
+  {
+    version: 4,
+    name: "quality_metrics",
+    sql: `
+      CREATE TABLE quality_metrics (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        value REAL NOT NULL,
+        tags_json TEXT NOT NULL,
+        occurred_at TEXT NOT NULL
+      );
+
+      CREATE INDEX quality_metrics_name_time_idx
+        ON quality_metrics(name, occurred_at);
+    `,
+  },
 ];

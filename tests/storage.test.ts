@@ -26,7 +26,12 @@ describe("SQLite project state", () => {
     const versions = database.raw
       .prepare("SELECT version FROM schema_migrations ORDER BY version")
       .all();
-    expect(versions).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }]);
+    expect(versions).toEqual([
+      { version: 1 },
+      { version: 2 },
+      { version: 3 },
+      { version: 4 },
+    ]);
   });
 
   it("persists the shared project transcript", () => {
@@ -99,5 +104,27 @@ describe("SQLite project state", () => {
       "TURN_RECOVERED_AS_INTERRUPTED",
     );
     expect(database.raw.prepare("SELECT COUNT(*) AS count FROM messages").get()?.count).toBe(1);
+  });
+
+  it("recovers orphaned orchestration runs after a crash", () => {
+    const database = createDatabase();
+    const repository = new ProjectRepository(database);
+    const project = repository.createProject("Run recovery");
+    const now = new Date().toISOString();
+    database.raw
+      .prepare(
+        `INSERT INTO orchestration_runs
+         (id, project_id, mode, status, limits_json, created_at, updated_at)
+         VALUES ('run_crashed', ?, 'MANUAL', 'RUNNING', '{}', ?, ?)`,
+      )
+      .run(project.id, now, now);
+    expect(repository.recoverUnfinishedRuns(project.id)).toBe(1);
+    expect(repository.recoverUnfinishedRuns(project.id)).toBe(0);
+    expect(
+      database.raw.prepare("SELECT status FROM orchestration_runs").get()?.status,
+    ).toBe("FAILED");
+    expect(repository.projectEvents(project.id).map((event) => event.eventType)).toContain(
+      "RUN_RECOVERED_AS_FAILED",
+    );
   });
 });

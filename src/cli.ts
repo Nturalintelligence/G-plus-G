@@ -9,6 +9,13 @@ import {
   restoreDatabase,
 } from "./maintenance.js";
 import { writeDiagnostic } from "./observability/logger.js";
+import {
+  createBackupBundle,
+  getReleaseInfo,
+  restoreBackupBundle,
+  runPreflight,
+  validateBackupBundle,
+} from "./release/release-tools.js";
 
 const { positionals, values } = parseArgs({
   allowPositionals: true,
@@ -46,8 +53,13 @@ async function run(): Promise<void> {
   npm start -- project:create --name "Название проекта"
   npm start -- project:list
   npm start -- project:open --id "prj_..."
+  npm run preflight
+  npm run release:info
+  npm run backup -- --file "C:\\Backups"
+  npm run backup:validate -- --file "C:\\Backups\\g-plus-g-backup-..."
+  npm run restore -- --file "C:\\Backups\\g-plus-g-backup-..."
 
-Профиль браузера хранится локально в user-data/profiles/chatgpt.`);
+Профили и база хранятся в общей папке данных приложения.`);
     return;
   }
 
@@ -72,6 +84,32 @@ async function run(): Promise<void> {
   if (command === "database:restore") {
     if (!values.file) throw new Error("Передайте путь резервной копии через --file");
     console.log(`База восстановлена: ${await restoreDatabase(values.file)}`);
+    return;
+  }
+  if (command === "backup:create") {
+    if (!values.file) throw new Error("Передайте каталог для резервных копий через --file");
+    console.log(`Резервная копия: ${await createBackupBundle({ destinationRoot: values.file })}`);
+    return;
+  }
+  if (command === "backup:validate") {
+    if (!values.file) throw new Error("Передайте каталог резервной копии через --file");
+    const manifest = await validateBackupBundle(values.file);
+    console.log(`PASS: ${manifest.database.quickCheck}, ${manifest.database.bytes} bytes`);
+    return;
+  }
+  if (command === "backup:restore") {
+    if (!values.file) throw new Error("Передайте каталог резервной копии через --file");
+    console.log(`База восстановлена: ${await restoreBackupBundle(values.file)}`);
+    return;
+  }
+  if (command === "release:info") {
+    console.log(JSON.stringify(await getReleaseInfo(), null, 2));
+    return;
+  }
+  if (command === "preflight") {
+    const checks = await runPreflight();
+    for (const check of checks) console.log(`${check.status.toUpperCase()} ${check.name}: ${check.detail}`);
+    if (checks.some((check) => check.status === "fail")) process.exitCode = 1;
     return;
   }
 

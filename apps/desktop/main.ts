@@ -1,6 +1,15 @@
 import { join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
-import { app, BrowserWindow, dialog, ipcMain, net, protocol } from "electron";
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  net,
+  protocol,
+  shell,
+  type IpcMainInvokeEvent,
+} from "electron";
 import { createAdapter, parseProvider } from "../../src/adapters/adapter-registry.js";
 import { SpecExporter } from "../../src/artifacts/spec-exporter.js";
 import { Orchestrator, type RunMode } from "../../src/orchestrator/orchestrator.js";
@@ -13,11 +22,18 @@ import {
   logEvent,
   writeDiagnostic,
 } from "../../src/observability/logger.js";
+import { SettingsStore } from "../../src/settings/settings.js";
+import {
+  validateLimits,
+  type OrchestrationLimits,
+} from "../../src/orchestrator/limits.js";
+import { runPreflight } from "../../src/release/release-tools.js";
 
 let mainWindow: BrowserWindow | null = null;
 let database: AppDatabase | null = null;
 let activeOrchestrator: Orchestrator | null = null;
 let activeAdapters: Map<string, ModelAdapter> | null = null;
+let providerOperationActive = false;
 let quitAfterCleanup = false;
 
 protocol.registerSchemesAsPrivileged([
@@ -58,9 +74,108 @@ function createWindow(): void {
       sandbox: true,
     },
   });
+  const openExternal = (url: string): void => {
+    try {
+      const parsed = new URL(url);
+      if (parsed.protocol === "https:" || parsed.protocol === "http:") {
+        void shell.openExternal(parsed.toString());
+      }
+    } catch {
+      logEvent("WARN", "renderer.external_link.rejected", { url });
+    }
+  };
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    openExternal(url);
+    return { action: "deny" };
+  });
+  mainWindow.webContents.on("will-navigate", (event, url) => {
+    if (url.startsWith("app://bundle/")) return;
+    event.preventDefault();
+    openExternal(url);
+  });
+  mainWindow.webContents.on("will-redirect", (event, url) => {
+    if (url.startsWith("app://bundle/")) return;
+    event.preventDefault();
+    openExternal(url);
+  });
   void mainWindow
     .loadURL("app://bundle/index.html")
     .catch((error) => console.error("Failed to load desktop renderer", error));
+}
+
+function assertTrustedRenderer(event: IpcMainInvokeEvent): void {
+  const url = event.senderFrame?.url ?? "";
+  if (!url.startsWith("app://bundle/")) {
+    logEvent("WARN", "ipc.untrusted_sender.rejected", { url });
+    throw new Error("Untrusted IPC sender");
+  }
+}
+
+function handle(
+  channel: string,
+  listener: (event: IpcMainInvokeEvent, ...args: any[]) => unknown,
+): void {
+  ipcMain.handle(channel, (event, ...args) => {
+    assertTrustedRenderer(event);
+    return listener(event, ...args);
+  });
+}
+
+function requireString(
+  value: unknown,
+  label: string,
+  maximum: number,
+  allowEmpty = false,
+): string {
+  if (typeof value !== "string") throw new Error(`${label} must be a string`);
+  const clean = value.trim();
+  if (!allowEmpty && !clean) throw new Error(`${label} cannot be empty`);
+  if (clean.length > maximum) throw new Error(`${label} exceeds ${maximum} characters`);
+  return clean;
+}
+
+function validateRunInput(value: unknown): {
+  projectId: string;
+  mode: RunMode;
+  task: string;
+  providers: Array<"chatgpt" | "gemini">;
+  limits?: OrchestrationLimits;
+} {
+  if (!value || typeof value !== "object") throw new Error("Invalid run input");
+  const input = value as Record<string, unknown>;
+  const projectId = requireString(input.projectId, "projectId", 200);
+  const task = requireString(input.task, "task", 100_000);
+  const modes: RunMode[] = ["MANUAL", "SEQUENTIAL", "PARALLEL", "DEBATE"];
+  if (typeof input.mode !== "string" || !modes.includes(input.mode as RunMode)) {
+    throw new Error("Invalid orchestration mode");
+  }
+  if (
+    !Array.isArray(input.providers) ||
+    input.providers.length < 1 ||
+    input.providers.length > 2
+  ) {
+    throw new Error("Select one or two providers");
+  }
+  const providers = [...new Set(input.providers)];
+  if (
+    providers.some(
+      (provider) => provider !== "chatgpt" && provider !== "gemini",
+    )
+  ) {
+    throw new Error("Invalid provider");
+  }
+  const limits =
+    input.limits === undefined
+      ? undefined
+      : (input.limits as OrchestrationLimits);
+  if (limits) validateLimits(limits);
+  return {
+    projectId,
+    mode: input.mode as RunMode,
+    task,
+    providers: providers as Array<"chatgpt" | "gemini">,
+    ...(limits ? { limits } : {}),
+  };
 }
 
 function registerRendererProtocol(): void {
@@ -77,25 +192,52 @@ function registerRendererProtocol(): void {
 }
 
 function registerIpc(): void {
-  ipcMain.handle("projects:list", () => new ProjectRepository(db()).listProjects());
-  ipcMain.handle("projects:create", (_event, name: string) =>
-    new ProjectRepository(db()).createProject(name),
+  const settingsStore = new SettingsStore(dataPath("settings.json"));
+  handle("system:preflight", () => runPreflight());
+  handle("settings:get", () => settingsStore.load());
+  handle("settings:save", (_event, value: unknown) => {
+    const settings = settingsStore.save(value);
+    logEvent("INFO", "settings.saved", {
+      theme: settings.appearance.theme,
+      density: settings.appearance.density,
+    });
+    return settings;
+  });
+  handle("projects:list", () => new ProjectRepository(db()).listProjects());
+  handle("projects:create", (_event, name: unknown) =>
+    new ProjectRepository(db()).createProject(
+      requireString(name, "Project name", 200),
+    ),
   );
-  ipcMain.handle("projects:open", (_event, id: string) => {
+  handle("projects:open", (_event, id: unknown) => {
+    const projectId = requireString(id, "projectId", 200);
     const repository = new ProjectRepository(db());
-    const project = repository.openProject(id);
-    if (!project) throw new Error(`Project not found: ${id}`);
+    const project = repository.openProject(projectId);
+    if (!project) throw new Error(`Project not found: ${projectId}`);
+    const recoveredRuns = activeOrchestrator
+      ? 0
+      : repository.recoverUnfinishedRuns(projectId);
     return {
       project,
-      recoveredTurns: activeOrchestrator ? 0 : repository.recoverUnfinishedTurns(id),
-      events: repository.events(),
-      transcript: repository.conversationEntries(id),
-      state: new ProjectStateService(db()).latest(id),
+      recoveredTurns: activeOrchestrator
+        ? 0
+        : repository.recoverUnfinishedTurns(projectId),
+      recoveredRuns,
+      events: repository.projectEvents(projectId),
+      transcript: repository.conversationEntries(projectId),
+      state: new ProjectStateService(db()).latest(projectId),
     };
   });
-  ipcMain.handle("provider:login", async (_event, providerValue: string) => {
-    const provider = parseProvider(providerValue);
+  handle("provider:login", async (_event, providerValue: unknown) => {
+    if (providerOperationActive || activeOrchestrator || activeAdapters) {
+      throw new Error("Another provider operation is already active");
+    }
+    providerOperationActive = true;
+    const provider = parseProvider(
+      requireString(providerValue, "provider", 20),
+    );
     const adapter = createAdapter(provider);
+    activeAdapters = new Map([[provider, adapter]]);
     logEvent("INFO", "provider.login.started", { provider });
     try {
       await adapter.launch();
@@ -112,14 +254,23 @@ function registerIpc(): void {
         `${error instanceof Error ? error.message : String(error)} Диагностика: ${diagnosticPath}`,
       );
     } finally {
-      await adapter.close();
+      await closeActiveAdapters();
+      providerOperationActive = false;
     }
   });
-  ipcMain.handle(
+  handle(
     "provider:send",
-    async (_event, providerValue: string, message: string) => {
-      const provider = parseProvider(providerValue);
+    async (_event, providerValue: unknown, messageValue: unknown) => {
+      if (providerOperationActive || activeOrchestrator || activeAdapters) {
+        throw new Error("Another provider operation is already active");
+      }
+      providerOperationActive = true;
+      const message = requireString(messageValue, "message", 100_000);
+      const provider = parseProvider(
+        requireString(providerValue, "provider", 20),
+      );
       const adapter = createAdapter(provider);
+      activeAdapters = new Map([[provider, adapter]]);
       logEvent("INFO", "provider.send.started", {
         provider,
         messageLength: message.length,
@@ -144,21 +295,21 @@ function registerIpc(): void {
           `${error instanceof Error ? error.message : String(error)} Диагностика: ${diagnosticPath}`,
         );
       } finally {
-        await adapter.close();
+        await closeActiveAdapters();
+        providerOperationActive = false;
       }
     },
   );
-  ipcMain.handle(
+  handle(
     "orchestration:run",
     async (
       _event,
-      input: {
-        projectId: string;
-        mode: RunMode;
-        task: string;
-        providers: Array<"chatgpt" | "gemini">;
-      },
+      inputValue: unknown,
     ) => {
+      if (providerOperationActive || activeOrchestrator || activeAdapters) {
+        throw new Error("An orchestration run is already active");
+      }
+      const input = validateRunInput(inputValue);
       const adapters = new Map(
         input.providers.map((provider) => [provider, createAdapter(provider)]),
       );
@@ -191,7 +342,7 @@ function registerIpc(): void {
           input.mode,
           input.task,
           input.providers,
-          undefined,
+          input.limits,
           {
             confirm: async (summary) => {
               const result = await dialog.showMessageBox(mainWindow!, {
@@ -225,21 +376,28 @@ function registerIpc(): void {
       }
     },
   );
-  ipcMain.handle("orchestration:pause", () => activeOrchestrator?.pause());
-  ipcMain.handle("orchestration:resume", () => activeOrchestrator?.resume());
-  ipcMain.handle("orchestration:stop", () => activeOrchestrator?.stop());
-  ipcMain.handle(
-    "state:save",
-    (_event, projectId: string, state: ProjectState) =>
-      new ProjectStateService(db()).createVersion(projectId, state),
+  handle("orchestration:pause", () => activeOrchestrator?.pause());
+  handle("orchestration:resume", () => activeOrchestrator?.resume());
+  handle("orchestration:stop", () => activeOrchestrator?.stop());
+  handle("state:save", (_event, projectIdValue: unknown, state: ProjectState) => {
+    const projectId = requireString(projectIdValue, "projectId", 200);
+    if (JSON.stringify(state).length > 1_000_000) {
+      throw new Error("Project State exceeds 1 MB");
+    }
+    return new ProjectStateService(db()).createVersion(projectId, state);
+  });
+  handle("state:approve", (_event, id: unknown) =>
+    new ProjectStateService(db()).approve(
+      requireString(id, "stateId", 200),
+    ),
   );
-  ipcMain.handle("state:approve", (_event, id: string) =>
-    new ProjectStateService(db()).approve(id),
+  handle("state:latest", (_event, projectId: unknown) =>
+    new ProjectStateService(db()).latest(
+      requireString(projectId, "projectId", 200),
+    ),
   );
-  ipcMain.handle("state:latest", (_event, projectId: string) =>
-    new ProjectStateService(db()).latest(projectId),
-  );
-  ipcMain.handle("export:spec", async (_event, projectId: string) => {
+  handle("export:spec", async (_event, projectIdValue: unknown) => {
+    const projectId = requireString(projectIdValue, "projectId", 200);
     const state = new ProjectStateService(db()).latest(projectId);
     if (!state) throw new Error("Create Project State before export");
     return new SpecExporter(db()).export(projectId, state);
@@ -247,7 +405,7 @@ function registerIpc(): void {
 }
 
 app.whenReady().then(() => {
-  configureDataRoot(app.getPath("userData"));
+  configureDataRoot(process.env.G_PLUS_G_USER_DATA ?? app.getPath("userData"));
   registerRendererProtocol();
   database = new AppDatabase(dataPath("orchestrator.sqlite"));
   database.migrate();

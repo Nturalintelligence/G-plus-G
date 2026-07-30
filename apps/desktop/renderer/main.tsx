@@ -15,6 +15,23 @@ const initialState = {
   ],
 };
 
+const fallbackSettings: AppSettingsView = {
+  schemaVersion: 1,
+  profile: { displayName: "" },
+  defaults: {
+    mode: "DEBATE",
+    providers: ["chatgpt", "gemini"],
+    limits: {
+      maxTurns: 6,
+      maxTurnMs: 180_000,
+      maxSessionMs: 900_000,
+      maxRetries: 1,
+      confirmationEvery: 2,
+    },
+  },
+  appearance: { theme: "dark", density: "comfortable", fontScale: 100 },
+};
+
 function App(): React.JSX.Element {
   const [projects, setProjects] = useState<ProjectView[]>([]);
   const [current, setCurrent] = useState<ProjectDetails | null>(null);
@@ -25,10 +42,25 @@ function App(): React.JSX.Element {
   const [stateText, setStateText] = useState(JSON.stringify(initialState, null, 2));
   const [status, setStatus] = useState("Готово");
   const [running, setRunning] = useState(false);
+  const [settings, setSettings] = useState<AppSettingsView>(fallbackSettings);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const outputRef = useRef<HTMLElement>(null);
 
   const refresh = async (): Promise<void> => setProjects(await window.orchestrator.projects.list());
   useEffect(() => void refresh(), []);
+  useEffect(() => {
+    void window.orchestrator.settings.get().then((value) => {
+      setSettings(value);
+      setMode(value.defaults.mode);
+      setProviders(value.defaults.providers);
+    }).catch((error) => setStatus(`Настройки не загружены: ${String(error)}`));
+  }, []);
+  useEffect(() => {
+    const root = document.documentElement;
+    root.dataset.theme = settings.appearance.theme;
+    root.dataset.density = settings.appearance.density;
+    root.style.fontSize = `${settings.appearance.fontScale}%`;
+  }, [settings.appearance]);
   useEffect(() => {
     outputRef.current?.scrollTo({ top: outputRef.current.scrollHeight, behavior: "smooth" });
   }, [current?.transcript.length]);
@@ -60,6 +92,7 @@ function App(): React.JSX.Element {
         mode,
         task: submittedTask,
         providers,
+        limits: settings.defaults.limits,
       });
       setStatus(output.status);
       await openProject(projectId);
@@ -80,6 +113,29 @@ function App(): React.JSX.Element {
     } catch (error) {
       setStatus(error instanceof Error ? error.message : String(error));
     }
+  }
+
+  async function saveSettings(): Promise<void> {
+    try {
+      const saved = await window.orchestrator.settings.save(settings);
+      setSettings(saved);
+      setMode(saved.defaults.mode);
+      setProviders(saved.defaults.providers);
+      setSettingsOpen(false);
+      setStatus("Настройки сохранены");
+    } catch (error) {
+      setStatus(`Настройки не сохранены: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  function updateLimit(name: keyof AppSettingsView["defaults"]["limits"], value: string): void {
+    setSettings((currentSettings) => ({
+      ...currentSettings,
+      defaults: {
+        ...currentSettings.defaults,
+        limits: { ...currentSettings.defaults.limits, [name]: Number(value) },
+      },
+    }));
   }
 
   async function saveState(): Promise<void> {
@@ -108,7 +164,12 @@ function App(): React.JSX.Element {
     <main>
       <header>
         <div><span className="mark">G+G</span><h1>Multi-model workspace</h1></div>
-        <span className="status">{status}</span>
+        <div className="header-actions">
+          <span className="status" role="status" aria-live="polite">{status}</span>
+          <button onClick={() => setSettingsOpen(true)}>
+            {settings.profile.displayName || "Профиль"} · Настройки
+          </button>
+        </div>
       </header>
       <div className="layout">
         <aside>
@@ -123,7 +184,7 @@ function App(): React.JSX.Element {
               });
             }}
           >
-            <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Название проекта" />
+            <input aria-label="Название проекта" value={name} onChange={(event) => setName(event.target.value)} placeholder="Название проекта" />
             <button>Создать</button>
           </form>
           <nav>
@@ -148,6 +209,7 @@ function App(): React.JSX.Element {
           <div className="composer panel">
             <h2>{current?.project.name ?? "Выберите проект"}</h2>
             <textarea
+              aria-label="Сообщение для моделей"
               value={task}
               onChange={(event) => setTask(event.target.value)}
               onKeyDown={(event) => {
@@ -159,7 +221,7 @@ function App(): React.JSX.Element {
               placeholder="Напишите сообщение… Enter — отправить, Shift+Enter — новая строка"
             />
             <div className="controls">
-              <select value={mode} onChange={(event) => setMode(event.target.value)}>
+              <select aria-label="Режим оркестрации" value={mode} onChange={(event) => setMode(event.target.value)}>
                 <option value="DEBATE">Обсуждение — ИИ видят ответы друг друга</option>
                 <option value="SEQUENTIAL">Рецензирование — по очереди</option>
                 <option value="PARALLEL">Независимые ответы</option>
@@ -207,7 +269,24 @@ function App(): React.JSX.Element {
                     <strong>{entry.role === "USER" ? "Вы" : entry.providerId ?? entry.role}</strong>
                     {entry.round ? <small>ход {entry.round}</small> : null}
                   </header>
-                  <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml>{entry.content}</ReactMarkdown>
+                  <ReactMarkdown
+                    remarkPlugins={[remarkGfm]}
+                    skipHtml
+                    components={{
+                      a: ({ href, children }) => {
+                        if (!href || !/^https?:\/\//i.test(href)) {
+                          return <span>{children}</span>;
+                        }
+                        return (
+                          <a href={href} target="_blank" rel="noreferrer noopener">
+                            {children}
+                          </a>
+                        );
+                      },
+                    }}
+                  >
+                    {entry.content}
+                  </ReactMarkdown>
                   {entry.role === "ASSISTANT" ? (
                     <button className="relay" onClick={() => relay(entry)}>
                       Передать дальше
@@ -255,6 +334,103 @@ function App(): React.JSX.Element {
           </ol>
         </aside>
       </div>
+      {settingsOpen ? (
+        <div className="modal-backdrop" role="presentation" onMouseDown={() => setSettingsOpen(false)}>
+          <section
+            className="settings-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="settings-title"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <header>
+              <div>
+                <h1 id="settings-title">Профиль и настройки</h1>
+                <p>Хранятся только локально. Пароли и токены сюда не записываются.</p>
+              </div>
+              <button aria-label="Закрыть настройки" onClick={() => setSettingsOpen(false)}>×</button>
+            </header>
+            <div className="settings-content">
+              <fieldset>
+                <legend>Профиль</legend>
+                <label>Отображаемое имя
+                  <input
+                    maxLength={80}
+                    value={settings.profile.displayName}
+                    onChange={(event) => setSettings((value) => ({
+                      ...value,
+                      profile: { displayName: event.target.value },
+                    }))}
+                    placeholder="Как к вам обращаться"
+                  />
+                </label>
+              </fieldset>
+              <fieldset>
+                <legend>Новый запуск по умолчанию</legend>
+                <label>Режим
+                  <select
+                    value={settings.defaults.mode}
+                    onChange={(event) => setSettings((value) => ({
+                      ...value,
+                      defaults: {
+                        ...value.defaults,
+                        mode: event.target.value as AppSettingsView["defaults"]["mode"],
+                      },
+                    }))}
+                  >
+                    <option value="DEBATE">Обсуждение</option>
+                    <option value="SEQUENTIAL">Рецензирование</option>
+                    <option value="PARALLEL">Независимые ответы</option>
+                    <option value="MANUAL">Один ответ</option>
+                  </select>
+                </label>
+                <div className="settings-checks">
+                  {(["chatgpt", "gemini"] as const).map((provider) => (
+                    <label key={provider}>
+                      <input
+                        type="checkbox"
+                        checked={settings.defaults.providers.includes(provider)}
+                        onChange={() => setSettings((value) => ({
+                          ...value,
+                          defaults: {
+                            ...value.defaults,
+                            providers: value.defaults.providers.includes(provider)
+                              ? value.defaults.providers.filter((item) => item !== provider)
+                              : [...value.defaults.providers, provider],
+                          },
+                        }))}
+                      /> {provider}
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+              <fieldset>
+                <legend>Ограничения оркестрации</legend>
+                <div className="settings-grid">
+                  <label>Максимум ходов<input type="number" min={1} max={50} value={settings.defaults.limits.maxTurns} onChange={(event) => updateLimit("maxTurns", event.target.value)} /></label>
+                  <label>Повторных попыток<input type="number" min={1} max={10} value={settings.defaults.limits.maxRetries} onChange={(event) => updateLimit("maxRetries", event.target.value)} /></label>
+                  <label>Таймаут хода, сек.<input type="number" min={1} max={1800} value={settings.defaults.limits.maxTurnMs / 1000} onChange={(event) => updateLimit("maxTurnMs", String(Number(event.target.value) * 1000))} /></label>
+                  <label>Таймаут сессии, мин.<input type="number" min={1} max={240} value={settings.defaults.limits.maxSessionMs / 60000} onChange={(event) => updateLimit("maxSessionMs", String(Number(event.target.value) * 60000))} /></label>
+                  <label>Подтверждение каждые N ходов<input type="number" min={1} max={50} value={settings.defaults.limits.confirmationEvery} onChange={(event) => updateLimit("confirmationEvery", event.target.value)} /></label>
+                </div>
+              </fieldset>
+              <fieldset>
+                <legend>Внешний вид</legend>
+                <div className="settings-grid">
+                  <label>Тема<select value={settings.appearance.theme} onChange={(event) => setSettings((value) => ({ ...value, appearance: { ...value.appearance, theme: event.target.value as AppSettingsView["appearance"]["theme"] } }))}><option value="dark">Тёмная</option><option value="light">Светлая</option><option value="system">Как в системе</option></select></label>
+                  <label>Плотность<select value={settings.appearance.density} onChange={(event) => setSettings((value) => ({ ...value, appearance: { ...value.appearance, density: event.target.value as AppSettingsView["appearance"]["density"] } }))}><option value="comfortable">Обычная</option><option value="compact">Компактная</option></select></label>
+                  <label>Масштаб текста, %<input type="number" min={80} max={140} step={5} value={settings.appearance.fontScale} onChange={(event) => setSettings((value) => ({ ...value, appearance: { ...value.appearance, fontScale: Number(event.target.value) } }))} /></label>
+                </div>
+              </fieldset>
+            </div>
+            <footer>
+              <button onClick={() => setSettings(fallbackSettings)}>Сбросить</button>
+              <button onClick={() => setSettingsOpen(false)}>Отмена</button>
+              <button className="primary" onClick={() => void saveSettings()}>Сохранить</button>
+            </footer>
+          </section>
+        </div>
+      ) : null}
     </main>
   );
 }
