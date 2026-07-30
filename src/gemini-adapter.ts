@@ -305,8 +305,10 @@ export class GeminiAdapter implements ModelAdapter {
           });
         }
         const stop = page.getByRole("button", { name: /stop|останов/i });
+        const composerReady = (await this.visibleComposers()).length === 1;
         if (
           !(await stop.isVisible().catch(() => false)) &&
+          composerReady &&
           Date.now() - stableSince >= 2_500
         ) {
           channel?.publish({
@@ -329,7 +331,10 @@ export class GeminiAdapter implements ModelAdapter {
       const visible: Locator[] = [];
       for (let index = 0; index < (await locator.count()); index += 1) {
         const candidate = locator.nth(index);
-        if (await candidate.isVisible().catch(() => false)) visible.push(candidate);
+        const usable =
+          (await candidate.isVisible().catch(() => false)) &&
+          (await candidate.isEditable().catch(() => false));
+        if (usable) visible.push(candidate);
       }
       if (visible.length > 0) return visible;
     }

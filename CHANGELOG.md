@@ -2,6 +2,22 @@
 
 All notable project checkpoints are recorded here.
 
+## [0.1.0-pre.8] - 2026-07-31
+
+### Fixed
+
+- A provider response is no longer considered complete while its composer remains
+  disabled or non-editable.
+- The next debate turn waits for the current provider UI to finish generation,
+  preventing stale hidden ChatGPT composer locators and 30-second `fill` timeouts.
+- ChatGPT and Gemini composer discovery now ignores visible-but-disabled elements
+  left behind during reactive page updates.
+
+### Diagnostics
+
+- Confirmed that the active Gemini conversation URL is persisted in SQLite and
+  reused across application runs.
+
 ## [0.1.0-pre.7] - 2026-07-31
 
 ### Added

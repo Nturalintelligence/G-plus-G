@@ -339,7 +339,10 @@ export class ChatGptAdapter implements ModelAdapter {
       const locator = page.locator(selector);
       for (let index = 0; index < (await locator.count()); index += 1) {
         const item = locator.nth(index);
-        if (await item.isVisible().catch(() => false)) matches.push(item);
+        const usable =
+          (await item.isVisible().catch(() => false)) &&
+          (await item.isEditable().catch(() => false));
+        if (usable) matches.push(item);
       }
       if (matches.length > 0) break;
     }
@@ -485,7 +488,13 @@ export class ChatGptAdapter implements ModelAdapter {
           .getByRole("button", { name: /stop generating|остановить создание/i })
           .isVisible()
           .catch(() => false);
-        if (!stopVisible && stableText && Date.now() - stableSince >= this.settleMs) {
+        const composerReady = (await this.findVisibleComposers()).length === 1;
+        if (
+          !stopVisible &&
+          composerReady &&
+          stableText &&
+          Date.now() - stableSince >= this.settleMs
+        ) {
           channel?.publish({
             type: "RESPONSE_COMPLETED",
             at: new Date().toISOString(),
