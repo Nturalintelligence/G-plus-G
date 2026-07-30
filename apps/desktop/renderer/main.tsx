@@ -141,11 +141,18 @@ function App(): React.JSX.Element {
                     type="checkbox"
                     checked={providers.includes(provider)}
                     onChange={() =>
-                      setProviders((value) =>
-                        value.includes(provider)
+                      setProviders((value) => {
+                        const next = value.includes(provider)
                           ? value.filter((item) => item !== provider)
-                          : [...value, provider],
-                      )
+                          : [...value, provider];
+                        if (
+                          next.length < 2 &&
+                          (mode === "DEBATE" || mode === "SEQUENTIAL")
+                        ) {
+                          setMode("MANUAL");
+                        }
+                        return next;
+                      })
                     }
                   /> {provider}
                 </label>

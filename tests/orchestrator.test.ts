@@ -129,4 +129,19 @@ describe("Orchestrator", () => {
     expect(received[0]).toContain("remember-this");
     expect(received[0]).toContain("next question");
   });
+
+  it("runs only one turn when discussion has only one provider", async () => {
+    const { database, projectId } = setup();
+    const received: string[] = [];
+    const orchestrator = new Orchestrator(
+      database,
+      new Map([["a", fakeAdapter("a", received)]]),
+    );
+    const result = await orchestrator.run(projectId, "DEBATE", "one answer", ["a"], {
+      ...limits,
+      maxTurns: 20,
+    });
+    expect(received).toHaveLength(1);
+    expect(result.responses).toHaveLength(1);
+  });
 });

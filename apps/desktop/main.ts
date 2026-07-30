@@ -150,6 +150,20 @@ function registerIpc(): void {
           (result): result is PromiseRejectedResult => result.status === "rejected",
         );
         if (launchFailure) throw launchFailure.reason;
+        const sessions = await Promise.all(
+          [...adapters.entries()].map(async ([provider, adapter]) => ({
+            provider,
+            state: await adapter.checkSession(),
+          })),
+        );
+        const unavailable = sessions.filter(({ state }) => state !== "AUTHENTICATED");
+        if (unavailable.length > 0) {
+          throw new Error(
+            `Провайдеры не готовы: ${unavailable
+              .map(({ provider, state }) => `${provider} (${state})`)
+              .join(", ")}. Сначала выполните вход кнопками слева.`,
+          );
+        }
         activeOrchestrator = new Orchestrator(db(), adapters);
         return await activeOrchestrator.run(
           input.projectId,

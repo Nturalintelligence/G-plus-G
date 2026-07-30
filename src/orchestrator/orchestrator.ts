@@ -75,10 +75,14 @@ export class Orchestrator {
   ): Promise<RunOutput> {
     validateLimits(limits);
     if (providerIds.length === 0) throw new Error("At least one provider is required");
+    const effectiveMode: RunMode =
+      providerIds.length === 1 && (mode === "DEBATE" || mode === "SEQUENTIAL")
+        ? "MANUAL"
+        : mode;
     this.stopped = false;
     const runId = newId("run");
     this.activeRunId = runId;
-    this.createRun(runId, projectId, mode, limits);
+    this.createRun(runId, projectId, effectiveMode, limits);
     const repository = new ProjectRepository(this.database);
     const history = repository.conversationEntries(projectId);
     const initialMessage = buildContinuationPrompt(history, task);
@@ -93,7 +97,7 @@ export class Orchestrator {
 
     try {
       this.setStatus(runId, "RUNNING");
-      if (mode === "PARALLEL") {
+      if (effectiveMode === "PARALLEL") {
         try {
           const independent = await Promise.all(
             providerIds.map(async (providerId) => ({
@@ -117,7 +121,7 @@ export class Orchestrator {
           await this.cancelActiveTurns();
           throw error;
         }
-      } else if (mode === "MANUAL") {
+      } else if (effectiveMode === "MANUAL") {
         const response = {
           providerId: providerIds[0]!,
           text: await this.ask(providerIds[0]!, initialMessage, limits, hooks),
@@ -159,7 +163,7 @@ export class Orchestrator {
             this.setStatus(runId, "RUNNING");
           }
           message =
-            mode === "DEBATE"
+            effectiveMode === "DEBATE"
               ? buildDebatePrompt(initialMessage, responses, turn + 2)
               : buildPeerReviewPrompt(initialMessage, text);
         }
@@ -188,29 +192,34 @@ export class Orchestrator {
       : message;
     let lastError: unknown;
     for (let attempt = 0; attempt <= limits.maxRetries; attempt += 1) {
+      let turn: TurnRef;
       try {
-        const turn = await adapter.sendMessage({ content: edited });
-        this.activeTurns.set(providerId, turn);
-        let timer: ReturnType<typeof setTimeout> | undefined;
-        const timeout = new Promise<never>((_, reject) => {
-          timer = setTimeout(
-            () => reject(new Error(`${providerId} turn timed out`)),
-            limits.maxTurnMs,
-          );
-        });
-        try {
-          return (await Promise.race([adapter.getFinalResponse(turn), timeout])).response;
-        } catch (error) {
-          await adapter.cancel(turn).catch(() => undefined);
-          throw error;
-        } finally {
-          this.activeTurns.delete(providerId);
-          if (timer) clearTimeout(timer);
-        }
+        turn = await adapter.sendMessage({ content: edited });
       } catch (error) {
         lastError = error;
         if (attempt === limits.maxRetries || isNonRetryableTurnError(error)) break;
         await adapter.recover();
+        continue;
+      }
+
+      this.activeTurns.set(providerId, turn);
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timeout = new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`${providerId} turn timed out`)),
+          limits.maxTurnMs,
+        );
+      });
+      try {
+        return (await Promise.race([adapter.getFinalResponse(turn), timeout])).response;
+      } catch (error) {
+        // A turn reference means submission may already have reached the provider.
+        // Retrying here can duplicate the user message, so fail safely.
+        await adapter.cancel(turn).catch(() => undefined);
+        throw error;
+      } finally {
+        this.activeTurns.delete(providerId);
+        if (timer) clearTimeout(timer);
       }
     }
     throw lastError;

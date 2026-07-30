@@ -50,4 +50,45 @@ describe("orchestrator retry", () => {
     expect(recoveries).toBe(1);
     database.close();
   });
+
+  it("never resends after a turn reference was created", async () => {
+    const database = new AppDatabase(join(mkdtempSync(join(tmpdir(), "retry-")), "db.sqlite"));
+    database.migrate();
+    const project = new ProjectRepository(database).createProject("No duplicate");
+    let sends = 0;
+    let recoveries = 0;
+    const adapter = {
+      providerId: "fake",
+      async sendMessage() {
+        sends += 1;
+        return { id: "possibly-submitted" };
+      },
+      async getFinalResponse() {
+        throw new Error("response selector timed out");
+      },
+      async cancel() {},
+      async recover() {
+        recoveries += 1;
+        return { recovered: true };
+      },
+    } as unknown as ModelAdapter;
+    await expect(
+      new Orchestrator(database, new Map([["fake", adapter]])).run(
+        project.id,
+        "MANUAL",
+        "task",
+        ["fake"],
+        {
+          maxTurns: 1,
+          maxTurnMs: 100,
+          maxSessionMs: 1_000,
+          maxRetries: 3,
+          confirmationEvery: 1,
+        },
+      ),
+    ).rejects.toThrow(/selector timed out/);
+    expect(sends).toBe(1);
+    expect(recoveries).toBe(0);
+    database.close();
+  });
 });

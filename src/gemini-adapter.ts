@@ -51,7 +51,7 @@ const USER_MESSAGES = [
   "user-query",
   '[data-message-author-role="user"]',
   ".user-query-content",
-  "message-content",
+  "user-query message-content",
 ];
 const CHALLENGE = [
   /captcha/i,
@@ -129,7 +129,7 @@ export class GeminiAdapter implements ModelAdapter {
 
   async createConversation(): Promise<ConversationRef> {
     const page = await this.ensurePage();
-    await page.goto(GEMINI_URL, { waitUntil: "domcontentloaded" });
+    await this.navigateToGemini(page);
     return { id: newId("gemchat"), url: page.url() };
   }
 
@@ -137,7 +137,7 @@ export class GeminiAdapter implements ModelAdapter {
     if (!ref.url.startsWith("https://gemini.google.com/")) {
       throw new Error("Conversation URL must belong to gemini.google.com");
     }
-    await (await this.ensurePage()).goto(ref.url, { waitUntil: "domcontentloaded" });
+    await (await this.ensurePage()).goto(ref.url, { waitUntil: "commit" });
   }
 
   async sendMessage(input: MessageInput): Promise<TurnRef>;
@@ -410,7 +410,7 @@ export class GeminiAdapter implements ModelAdapter {
       this.context.pages().find((candidate) => !candidate.isClosed()) ??
       (await this.context.newPage());
     if (!this.page.url().includes("gemini.google.com")) {
-      await this.page.goto(GEMINI_URL, { waitUntil: "domcontentloaded" });
+      await this.navigateToGemini(this.page);
     }
     return this.page;
   }
@@ -423,7 +423,18 @@ export class GeminiAdapter implements ModelAdapter {
       ...(executablePath ? { executablePath } : {}),
     });
     this.page = this.context.pages()[0] ?? (await this.context.newPage());
-    await this.page.goto(GEMINI_URL, { waitUntil: "domcontentloaded" });
+    await this.navigateToGemini(this.page);
+  }
+
+  private async navigateToGemini(page: Page): Promise<void> {
+    await page.goto(GEMINI_URL, {
+      waitUntil: "commit",
+      timeout: 30_000,
+    });
+    const state = await this.waitUntilReady();
+    if (state === "UNKNOWN") {
+      throw new TurnTimeoutError("Gemini opened but did not become ready within 30 seconds");
+    }
   }
 
   private requireTurn(turn: TurnRef): GeminiTurn {
