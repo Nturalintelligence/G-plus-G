@@ -11,6 +11,9 @@
 6. Enter a task, select providers and a bounded mode, then run it.
 7. Open **Profile · Settings** in the header to choose your local display name,
    preferred mode/providers, orchestration limits, theme, density, and text scale.
+8. Build the project specification in the right-hand constructor. Requirements,
+   decisions, constraints, questions, and acceptance criteria are saved as a
+   versioned draft. Each item can be linked to a specific model response.
 
 No configuration file or API key is required. Browser sessions and the project
 database remain local to the current OS account.

@@ -2,6 +2,27 @@
 
 All notable project checkpoints are recorded here.
 
+## [0.1.0-pre.4] - 2026-07-31
+
+### Added
+
+- Visual Project State constructor for requirements, constraints, decisions,
+  rejected options, open questions, and acceptance criteria.
+- Decision rationale fields and response-source traceability chips.
+- Draft version/status summary, populated-item counter, and collapsible sections.
+- Advanced JSON mode synchronized with the guided editor.
+- Packaged smoke coverage that persists and reloads a visually authored specification.
+
+### Changed
+
+- Replaced the raw-JSON-first inspector with a task-specification workflow.
+- Updated project documentation to reflect the current desktop product.
+
+### Verification
+
+- TypeScript, Electron renderer, and 48 automated tests.
+- Packaged UI persistence and SQLite round-trip test.
+
 ## [0.1.0-pre.3] - 2026-07-30
 
 ### Added

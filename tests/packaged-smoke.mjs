@@ -23,6 +23,26 @@ try {
   await page.getByRole("button", { name: "Создать" }).click();
   await page.getByRole("heading", { name: projectName }).waitFor();
 
+  await page.getByText("Требования", { exact: true }).click();
+  await page.getByRole("button", { name: "+ Добавить", exact: true }).first().click();
+  await page.getByLabel("Требования, пункт 1").fill("Приложение сохраняет проект локально");
+  await page.getByLabel("Критерии приёмки, пункт 1").fill("Проект открывается после перезапуска");
+  await page.getByRole("button", { name: "Сохранить черновик" }).click();
+  await page.getByText(/Версия 1 · DRAFT/).waitFor();
+
+  const savedProjectState = await page.evaluate(async (name) => {
+    const project = (await window.orchestrator.projects.list())
+      .find((candidate) => candidate.name === name);
+    if (!project) throw new Error("Smoke project not found");
+    return (await window.orchestrator.projects.open(project.id)).state?.state;
+  }, projectName);
+  if (
+    savedProjectState?.requirements[0]?.text !== "Приложение сохраняет проект локально" ||
+    savedProjectState?.acceptanceCriteria[0]?.text !== "Проект открывается после перезапуска"
+  ) {
+    throw new Error(`Visual Project State was not persisted: ${JSON.stringify(savedProjectState)}`);
+  }
+
   await page.getByRole("button", { name: /Профиль.*Настройки/ }).click();
   await page.getByRole("heading", { name: "Профиль и настройки" }).waitFor();
   await page.getByLabel("Отображаемое имя").fill("Smoke tester");
@@ -56,6 +76,7 @@ try {
     ok: true,
     executablePath,
     projectCreated: projectName,
+    visualProjectStatePersisted: true,
     settingsPersistedInUi: true,
     trustedOrigin: urlAfter,
     unsafePopupDenied: true,

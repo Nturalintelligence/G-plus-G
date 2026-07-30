@@ -111,7 +111,23 @@ interface StateVersion {
   id: string;
   version: number;
   status: "DRAFT" | "APPROVED";
-  state: unknown;
+  state: ProjectStateView;
+}
+
+interface ProjectStateItemView {
+  id: string;
+  text: string;
+  sourceTurnIds: string[];
+  rationale?: string;
+}
+
+interface ProjectStateView {
+  requirements: ProjectStateItemView[];
+  constraints: ProjectStateItemView[];
+  decisions: ProjectStateItemView[];
+  rejectedOptions: ProjectStateItemView[];
+  openQuestions: ProjectStateItemView[];
+  acceptanceCriteria: ProjectStateItemView[];
 }
 
 interface RunView {

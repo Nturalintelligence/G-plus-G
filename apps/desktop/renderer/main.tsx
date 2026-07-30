@@ -4,7 +4,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import "./styles.css";
 
-const initialState = {
+const initialState: ProjectStateView = {
   requirements: [],
   constraints: [],
   decisions: [],
@@ -14,6 +14,21 @@ const initialState = {
     { id: "acceptance-1", text: "Define acceptance criterion", sourceTurnIds: [] },
   ],
 };
+
+type StateSection = keyof ProjectStateView;
+const stateSections: Array<{
+  key: StateSection;
+  title: string;
+  empty: string;
+  rationale: boolean;
+}> = [
+  { key: "requirements", title: "Требования", empty: "Добавьте требование", rationale: false },
+  { key: "constraints", title: "Ограничения", empty: "Добавьте ограничение", rationale: false },
+  { key: "decisions", title: "Принятые решения", empty: "Зафиксируйте решение", rationale: true },
+  { key: "rejectedOptions", title: "Отклонённые варианты", empty: "Зафиксируйте отклонённый вариант", rationale: true },
+  { key: "openQuestions", title: "Открытые вопросы", empty: "Добавьте вопрос", rationale: false },
+  { key: "acceptanceCriteria", title: "Критерии приёмки", empty: "Добавьте критерий", rationale: false },
+];
 
 const fallbackSettings: AppSettingsView = {
   schemaVersion: 1,
@@ -40,6 +55,11 @@ function App(): React.JSX.Element {
   const [mode, setMode] = useState("DEBATE");
   const [providers, setProviders] = useState(["chatgpt", "gemini"]);
   const [stateText, setStateText] = useState(JSON.stringify(initialState, null, 2));
+  const [projectState, setProjectState] = useState<ProjectStateView>(initialState);
+  const [advancedStateOpen, setAdvancedStateOpen] = useState(false);
+  const [openStateSections, setOpenStateSections] = useState<Set<StateSection>>(
+    () => new Set(["acceptanceCriteria"]),
+  );
   const [status, setStatus] = useState("Готово");
   const [running, setRunning] = useState(false);
   const [settings, setSettings] = useState<AppSettingsView>(fallbackSettings);
@@ -83,7 +103,9 @@ function App(): React.JSX.Element {
   async function openProject(id: string): Promise<void> {
     const details = await window.orchestrator.projects.open(id);
     setCurrent(details);
-    if (details.state) setStateText(JSON.stringify(details.state.state, null, 2));
+    const nextState = details.state?.state ?? structuredClone(initialState);
+    setProjectState(nextState);
+    setStateText(JSON.stringify(nextState, null, 2));
   }
 
   async function run(): Promise<void> {
@@ -200,14 +222,59 @@ function App(): React.JSX.Element {
   async function saveState(): Promise<void> {
     if (!current) return;
     try {
-      const parsed = JSON.parse(stateText);
-      await window.orchestrator.state.save(current.project.id, parsed);
+      await window.orchestrator.state.save(current.project.id, projectState);
       await openProject(current.project.id);
       setStatus("Черновик Project State сохранён");
     } catch (error) {
       setStatus(
         `Project State не сохранён: ${error instanceof Error ? error.message : String(error)}`,
       );
+    }
+  }
+
+  function replaceProjectState(next: ProjectStateView): void {
+    setProjectState(next);
+    setStateText(JSON.stringify(next, null, 2));
+  }
+
+  function addStateItem(section: StateSection): void {
+    const item: ProjectStateItemView = {
+      id: `manual-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      text: "",
+      sourceTurnIds: [],
+      ...(section === "decisions" || section === "rejectedOptions"
+        ? { rationale: "" }
+        : {}),
+    };
+    replaceProjectState({ ...projectState, [section]: [...projectState[section], item] });
+  }
+
+  function updateStateItem(
+    section: StateSection,
+    id: string,
+    patch: Partial<ProjectStateItemView>,
+  ): void {
+    replaceProjectState({
+      ...projectState,
+      [section]: projectState[section].map((item) =>
+        item.id === id ? { ...item, ...patch } : item),
+    });
+  }
+
+  function removeStateItem(section: StateSection, id: string): void {
+    replaceProjectState({
+      ...projectState,
+      [section]: projectState[section].filter((item) => item.id !== id),
+    });
+  }
+
+  function applyAdvancedState(): void {
+    try {
+      const parsed = JSON.parse(stateText) as ProjectStateView;
+      replaceProjectState(parsed);
+      setStatus("JSON применён к конструктору");
+    } catch (error) {
+      setStatus(`Некорректный JSON: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
@@ -359,9 +426,128 @@ function App(): React.JSX.Element {
           </article>
         </section>
         <aside className="inspector">
-          <h2>Состояние проекта</h2>
-          <textarea value={stateText} onChange={(event) => setStateText(event.target.value)} />
-          <div className="controls">
+          <div className="state-heading">
+            <div>
+              <h2>Конструктор спецификации</h2>
+              <small>
+                {current?.state
+                  ? `Версия ${current.state.version} · ${current.state.status}`
+                  : "Новый черновик"}
+              </small>
+            </div>
+            <span className="state-progress">
+              {Object.values(projectState).flat().filter((item) => item.text.trim()).length} пунктов
+            </span>
+          </div>
+          <div className="state-builder">
+            {stateSections.map((section) => (
+              <details
+                className="state-section"
+                key={section.key}
+                open={openStateSections.has(section.key)}
+                onToggle={(event) => {
+                  const isOpen = event.currentTarget.open;
+                  setOpenStateSections((currentSections) => {
+                    if (currentSections.has(section.key) === isOpen) return currentSections;
+                    const next = new Set(currentSections);
+                    if (isOpen) next.add(section.key);
+                    else next.delete(section.key);
+                    return next;
+                  });
+                }}
+              >
+                <summary>
+                  <span>{section.title}</span>
+                  <small>{projectState[section.key].length}</small>
+                </summary>
+                <div className="state-items">
+                  {projectState[section.key].map((item, index) => (
+                    <article className="state-card" key={item.id}>
+                      <header>
+                        <strong>{index + 1}</strong>
+                        <button
+                          aria-label={`Удалить пункт ${index + 1} из раздела ${section.title}`}
+                          onClick={() => removeStateItem(section.key, item.id)}
+                        >×</button>
+                      </header>
+                      <textarea
+                        aria-label={`${section.title}, пункт ${index + 1}`}
+                        placeholder={section.empty}
+                        value={item.text}
+                        onChange={(event) =>
+                          updateStateItem(section.key, item.id, { text: event.target.value })}
+                      />
+                      {section.rationale ? (
+                        <textarea
+                          className="rationale-input"
+                          aria-label={`Обоснование пункта ${index + 1}`}
+                          placeholder="Почему принято такое решение?"
+                          value={item.rationale ?? ""}
+                          onChange={(event) =>
+                            updateStateItem(section.key, item.id, {
+                              rationale: event.target.value,
+                            })}
+                        />
+                      ) : null}
+                      <div className="source-picker">
+                        <select
+                          aria-label={`Источник пункта ${index + 1}`}
+                          value=""
+                          onChange={(event) => {
+                            const source = event.target.value;
+                            if (source && !item.sourceTurnIds.includes(source)) {
+                              updateStateItem(section.key, item.id, {
+                                sourceTurnIds: [...item.sourceTurnIds, source],
+                              });
+                            }
+                          }}
+                        >
+                          <option value="">Привязать к ответу…</option>
+                          {current?.transcript
+                            .filter((entry) => entry.role === "ASSISTANT")
+                            .map((entry) => (
+                              <option value={entry.id} key={entry.id}>
+                                {entry.providerId ?? "модель"} · {entry.content.slice(0, 55)}
+                              </option>
+                            ))}
+                        </select>
+                        <div className="source-tags">
+                          {item.sourceTurnIds.map((sourceId) => {
+                            const source = current?.transcript.find((entry) => entry.id === sourceId);
+                            return (
+                              <button
+                                key={sourceId}
+                                title="Убрать источник"
+                                onClick={() => updateStateItem(section.key, item.id, {
+                                  sourceTurnIds: item.sourceTurnIds.filter((id) => id !== sourceId),
+                                })}
+                              >
+                                {source?.providerId ?? "источник"} ×
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </article>
+                  ))}
+                  <button className="add-state-item" onClick={() => addStateItem(section.key)}>
+                    + Добавить
+                  </button>
+                </div>
+              </details>
+            ))}
+          </div>
+          <details className="advanced-state" open={advancedStateOpen} onToggle={(event) =>
+            setAdvancedStateOpen((event.currentTarget as HTMLDetailsElement).open)}>
+            <summary>Экспертный режим JSON</summary>
+            <textarea
+              aria-label="Project State JSON"
+              value={stateText}
+              onChange={(event) => setStateText(event.target.value)}
+            />
+            <button onClick={applyAdvancedState}>Применить JSON</button>
+          </details>
+          <div className="controls state-actions">
             <button
               disabled={!current}
               onClick={() => void saveState()}

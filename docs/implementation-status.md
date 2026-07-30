@@ -17,6 +17,8 @@ An item is not considered complete merely because an interface or UI control exi
 - Hashed exports: TASK_SPEC, conversation, decisions, open questions, Project State,
   verification record, and manifest.
 - Electron/React desktop shell with sandboxed renderer and manual relay editing.
+- Guided Project State constructor with section cards, decision rationale, response
+  traceability, draft versioning, and an advanced JSON mode.
 - Redacted JSONL application log and per-failure diagnostic reports.
 
 ## Required acceptance work
@@ -25,7 +27,6 @@ An item is not considered complete merely because an interface or UI control exi
 - Add anonymized mock DOM fixtures and adapter contract tests.
 - Validate streamed, empty, interrupted, rate-limited, challenge, and ambiguous DOM cases.
 - Validate closed-tab recovery against live browser contexts.
-- Add a guided Project State editor instead of relying only on raw JSON.
 - Add second-provider specification review and discrepancy approval workflow.
 - Verify packaged Chromium inclusion for each target platform.
 - Run installer smoke tests and backup/restore tests against the packaged desktop app.

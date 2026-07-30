@@ -13,7 +13,7 @@ h1 { font-size: 18px; margin: 0; }
 h2 { font-size: 13px; letter-spacing: .08em; text-transform: uppercase; color: #8b9bab; }
 .mark { background: #66d9b7; color: #07110e; border-radius: 9px; padding: 8px; font-weight: 900; }
 .status { color: #8b9bab; font-size: 13px; max-width: 58vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.layout { display: grid; grid-template-columns: minmax(0, 240px) minmax(520px, 1fr) minmax(0, 360px); height: calc(100vh - 68px); }
+.layout { display: grid; grid-template-columns: minmax(0, 240px) minmax(500px, 1fr) minmax(360px, 420px); height: calc(100vh - 68px); }
 aside { min-width: 0; padding: 18px; border-right: 1px solid #202832; overflow: auto; overflow-x: hidden; }
 .inspector { border: 0; border-left: 1px solid #202832; }
 aside form { display: grid; gap: 8px; }
@@ -37,6 +37,32 @@ nav small, .timeline small { color: #708090; display: block; }
 .message > :last-child { margin-bottom: 0; }
 .relay { margin-top: 8px; color: #9de7d1; }
 .inspector > textarea { width: 100%; min-height: 330px; background: #0f151c; color: #c8d2dc; border: 1px solid #202832; border-radius: 8px; padding: 10px; font: 12px/1.45 Consolas, monospace; }
+.state-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.state-heading h2 { margin: 0 0 4px; }
+.state-heading small { color: #708090; }
+.state-progress { border: 1px solid #356b5d; border-radius: 999px; color: #9de7d1; padding: 4px 8px; font-size: 11px; white-space: nowrap; }
+.state-builder { display: grid; gap: 8px; }
+.state-section { border: 1px solid #27313c; border-radius: 9px; background: #0f151c; overflow: hidden; }
+.state-section > summary { cursor: pointer; display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; font-weight: 700; }
+.state-section > summary::marker { color: #66d9b7; }
+.state-section > summary small { min-width: 24px; border-radius: 999px; background: #202832; padding: 2px 7px; color: #9aa9b8; text-align: center; }
+.state-items { border-top: 1px solid #27313c; padding: 9px; display: grid; gap: 9px; }
+.state-card { border: 1px solid #303a46; border-radius: 8px; padding: 9px; background: #111820; display: grid; gap: 7px; }
+.state-card > header { height: auto; padding: 0; border: 0; }
+.state-card > header strong { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 6px; background: #1d382f; color: #9de7d1; font-size: 11px; }
+.state-card > header button { border: 0; background: transparent; padding: 2px 7px; color: #8b9bab; }
+.state-card textarea { width: 100%; min-height: 68px; resize: vertical; border: 1px solid #27313c; border-radius: 7px; background: #0d131a; color: inherit; padding: 8px; line-height: 1.4; }
+.state-card .rationale-input { min-height: 52px; color: #aebac6; }
+.source-picker { display: grid; gap: 6px; }
+.source-picker select { min-width: 0; width: 100%; padding: 6px 8px; font-size: 11px; }
+.source-tags { display: flex; flex-wrap: wrap; gap: 5px; }
+.source-tags button { padding: 3px 7px; border-radius: 999px; color: #9de7d1; border-color: #356b5d; font-size: 10px; }
+.add-state-item { border-style: dashed; color: #9de7d1; text-align: center; }
+.advanced-state { margin: 12px 0; border: 1px solid #27313c; border-radius: 8px; padding: 9px; }
+.advanced-state > summary { cursor: pointer; color: #8b9bab; font-size: 12px; }
+.advanced-state textarea { width: 100%; min-height: 260px; margin: 9px 0; resize: vertical; background: #0d131a; color: #c8d2dc; border: 1px solid #27313c; border-radius: 7px; padding: 9px; font: 11px/1.4 Consolas, monospace; }
+.advanced-state button { width: 100%; text-align: center; }
+.state-actions { position: sticky; bottom: -18px; z-index: 2; margin: 12px -18px 0; padding: 12px 18px 18px; background: linear-gradient(transparent, #090d12 18%); }
 .timeline { padding-left: 20px; }
 .timeline li { padding: 5px 0; }
 .header-actions { min-width: 0; justify-content: flex-end; }
