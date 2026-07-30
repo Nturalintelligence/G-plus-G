@@ -1,6 +1,6 @@
 {
   "name": "multi-llm-orchestrator-feasibility",
-  "version": "0.1.0-pre.2",
+  "version": "0.1.0-pre.3",
   "private": true,
   "author": "Nturalintelligence",
   "description": "Local desktop orchestrator for ChatGPT and Gemini web sessions",
@@ -11,8 +11,9 @@
     "desktop:typecheck": "tsc -p tsconfig.renderer.json && tsc -p tsconfig.electron.json --noEmit",
     "desktop:build": "vite build -c vite.desktop.config.ts && tsc -p tsconfig.electron.json",
     "desktop:start": "npm run desktop:build && electron .",
+    "build:info": "node scripts/write-build-info.mjs",
     "browser:install-local": "node scripts/install-local-browser.mjs",
-    "package": "npm run browser:install-local && npm run desktop:build && electron-builder",
+    "package": "npm run build:info && npm run browser:install-local && npm run desktop:build && electron-builder",
     "smoke:packaged": "node tests/packaged-smoke.mjs",
     "start": "tsx src/cli.ts",
     "login": "tsx src/cli.ts login",
@@ -58,6 +59,7 @@
       "dist/desktop/**/*",
       "dist-electron/**/*",
       "apps/desktop/preload.cjs",
+      "build-info.json",
       "package.json",
       "node_modules/**/*",
       "!node_modules/playwright-core/.local-browsers/**/*"

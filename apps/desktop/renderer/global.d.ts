@@ -6,6 +6,16 @@ interface Window {
         status: "pass" | "warn" | "fail";
         detail: string;
       }>>;
+      info(): Promise<ReleaseInfoView>;
+      openDataFolder(): Promise<string>;
+    };
+    maintenance: {
+      backup(): Promise<string>;
+      resetSession(provider: "chatgpt" | "gemini"): Promise<{
+        reset: boolean;
+        provider: string;
+        path?: string;
+      }>;
     };
     projects: {
       list(): Promise<ProjectView[]>;
@@ -56,6 +66,15 @@ interface AppSettingsView {
     density: "comfortable" | "compact";
     fontScale: number;
   };
+}
+
+interface ReleaseInfoView {
+  appVersion: string;
+  commit: string;
+  nodeVersion: string;
+  platform: string;
+  dataPath: string;
+  generatedAt: string;
 }
 
 interface ProjectView {

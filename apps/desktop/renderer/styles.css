@@ -53,6 +53,21 @@ nav small, .timeline small { color: #708090; display: block; }
 .settings-checks { display: flex; gap: 18px; }
 .settings-checks label { display: flex; align-items: center; gap: 6px; }
 .settings-modal > footer { border-top: 1px solid #27313c; padding: 14px 22px; display: flex; justify-content: flex-end; gap: 8px; }
+.settings-note { margin: 0; color: #8b9bab; font-size: 13px; line-height: 1.5; }
+.maintenance-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.release-info { margin: 0; display: grid; gap: 7px; }
+.release-info div { display: grid; grid-template-columns: 75px minmax(0, 1fr); gap: 8px; }
+.release-info dt { color: #8b9bab; }
+.release-info dd { margin: 0; overflow-wrap: anywhere; font-family: Consolas, monospace; font-size: 12px; }
+.preflight-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 7px; }
+.preflight-list li { border: 1px solid #27313c; border-radius: 8px; padding: 9px 11px; display: grid; gap: 3px; }
+.preflight-list li[data-status="pass"] strong { color: #66d9b7; }
+.preflight-list li[data-status="warn"] strong { color: #f0c36b; }
+.preflight-list li[data-status="fail"] strong { color: #ff7b72; }
+.preflight-list span { color: #8b9bab; font-size: 12px; overflow-wrap: anywhere; }
+.danger-zone { border-top: 1px solid #56343a; padding-top: 12px; display: grid; gap: 8px; }
+.danger-zone > strong { color: #ff9a92; }
+.danger-zone > span { color: #8b9bab; font-size: 12px; }
 :root[data-density="compact"] .panel { padding: 10px; }
 :root[data-density="compact"] .layout aside { padding: 12px; }
 :root[data-density="compact"] button, :root[data-density="compact"] select, :root[data-density="compact"] input { padding: 6px 9px; }

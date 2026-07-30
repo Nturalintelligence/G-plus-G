@@ -2,6 +2,27 @@
 
 All notable project checkpoints are recorded here.
 
+## [0.1.0-pre.3] - 2026-07-30
+
+### Added
+
+- Desktop «Диагностика и данные» section in profile settings.
+- In-app environment checks with explicit pass, warning, and failure results.
+- In-app WAL-consistent backup creation with browser credentials excluded.
+- Data-folder access and individually confirmed ChatGPT/Gemini session reset.
+- Packaged smoke coverage for release metadata and backup creation.
+
+### Fixed
+
+- Backup creation now creates a missing destination hierarchy safely.
+- Release metadata lookup now works both from source and packaged `app.asar`.
+- Maintenance operations are blocked while a provider or orchestration run is active.
+
+### Verification
+
+- 47 automated tests plus packaged Electron smoke test.
+- Backup manifest existence and packaged browser availability verified.
+
 ## [0.1.0-pre.2] - 2026-07-30
 
 ### Added

@@ -27,7 +27,12 @@ import {
   validateLimits,
   type OrchestrationLimits,
 } from "../../src/orchestrator/limits.js";
-import { runPreflight } from "../../src/release/release-tools.js";
+import {
+  createBackupBundle,
+  getReleaseInfo,
+  runPreflight,
+} from "../../src/release/release-tools.js";
+import { resetProviderSession } from "../../src/maintenance.js";
 
 let mainWindow: BrowserWindow | null = null;
 let database: AppDatabase | null = null;
@@ -194,6 +199,42 @@ function registerRendererProtocol(): void {
 function registerIpc(): void {
   const settingsStore = new SettingsStore(dataPath("settings.json"));
   handle("system:preflight", () => runPreflight());
+  handle("system:info", () => getReleaseInfo());
+  handle("system:openDataFolder", async () => {
+    const error = await shell.openPath(dataPath());
+    if (error) throw new Error(error);
+    return dataPath();
+  });
+  handle("maintenance:backup", async () => {
+    if (providerOperationActive || activeOrchestrator || activeAdapters) {
+      throw new Error("Cannot create a backup while a provider operation is active");
+    }
+    const destination = dataPath("backups");
+    const path = await createBackupBundle({ destinationRoot: destination });
+    logEvent("INFO", "maintenance.backup.created", { path });
+    return path;
+  });
+  handle("maintenance:resetSession", async (_event, providerValue: unknown) => {
+    if (providerOperationActive || activeOrchestrator || activeAdapters) {
+      throw new Error("Cannot reset a session while a provider operation is active");
+    }
+    const provider = parseProvider(
+      requireString(providerValue, "provider", 20),
+    );
+    const confirmation = await dialog.showMessageBox(mainWindow!, {
+      type: "warning",
+      buttons: ["Сбросить сессию", "Отмена"],
+      defaultId: 1,
+      cancelId: 1,
+      title: `Сброс сессии ${provider}`,
+      message: `Удалить локальную браузерную сессию ${provider}?`,
+      detail: "Проекты и история не удаляются. При следующем использовании потребуется войти снова.",
+    });
+    if (confirmation.response !== 0) return { reset: false, provider };
+    const path = await resetProviderSession(provider);
+    logEvent("INFO", "maintenance.session.reset", { provider });
+    return { reset: true, provider, path };
+  });
   handle("settings:get", () => settingsStore.load());
   handle("settings:save", (_event, value: unknown) => {
     const settings = settingsStore.save(value);

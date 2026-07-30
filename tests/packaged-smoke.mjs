@@ -1,5 +1,5 @@
 import { _electron as electron } from "playwright";
-import { mkdtemp, rm } from "node:fs/promises";
+import { access, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -30,6 +30,9 @@ try {
   await page.getByRole("button", { name: /Smoke tester.*Настройки/ }).waitFor();
 
   const preflight = await page.evaluate(() => window.orchestrator.system.preflight());
+  const releaseInfo = await page.evaluate(() => window.orchestrator.system.info());
+  const backupPath = await page.evaluate(() => window.orchestrator.maintenance.backup());
+  await access(join(backupPath, "manifest.json"));
   const failedChecks = preflight.filter((check) => check.status === "fail");
   const browserCheck = preflight.find((check) => check.name === "browser");
   if (failedChecks.length > 0 || browserCheck?.status !== "pass") {
@@ -57,6 +60,8 @@ try {
     trustedOrigin: urlAfter,
     unsafePopupDenied: true,
     preflight,
+    releaseInfo,
+    backupCreated: backupPath,
   }, null, 2));
 } finally {
   await application?.close().catch(() => undefined);

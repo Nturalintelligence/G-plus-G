@@ -44,6 +44,13 @@ function App(): React.JSX.Element {
   const [running, setRunning] = useState(false);
   const [settings, setSettings] = useState<AppSettingsView>(fallbackSettings);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [releaseInfo, setReleaseInfo] = useState<ReleaseInfoView | null>(null);
+  const [preflight, setPreflight] = useState<Array<{
+    name: string;
+    status: "pass" | "warn" | "fail";
+    detail: string;
+  }>>([]);
+  const [maintenanceBusy, setMaintenanceBusy] = useState(false);
   const outputRef = useRef<HTMLElement>(null);
 
   const refresh = async (): Promise<void> => setProjects(await window.orchestrator.projects.list());
@@ -125,6 +132,58 @@ function App(): React.JSX.Element {
       setStatus("Настройки сохранены");
     } catch (error) {
       setStatus(`Настройки не сохранены: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  async function refreshDiagnostics(): Promise<void> {
+    setMaintenanceBusy(true);
+    try {
+      const [info, checks] = await Promise.all([
+        window.orchestrator.system.info(),
+        window.orchestrator.system.preflight(),
+      ]);
+      setReleaseInfo(info);
+      setPreflight(checks);
+      setStatus(checks.some((check) => check.status === "fail")
+        ? "Диагностика обнаружила ошибку"
+        : "Диагностика завершена");
+    } catch (error) {
+      setStatus(`Диагностика не выполнена: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setMaintenanceBusy(false);
+    }
+  }
+
+  async function createBackup(): Promise<void> {
+    setMaintenanceBusy(true);
+    try {
+      const path = await window.orchestrator.maintenance.backup();
+      setStatus(`Резервная копия создана: ${path}`);
+    } catch (error) {
+      setStatus(`Копия не создана: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setMaintenanceBusy(false);
+    }
+  }
+
+  async function resetSession(provider: "chatgpt" | "gemini"): Promise<void> {
+    setMaintenanceBusy(true);
+    try {
+      const result = await window.orchestrator.maintenance.resetSession(provider);
+      setStatus(result.reset ? `Сессия ${provider} сброшена` : "Сброс сессии отменён");
+    } catch (error) {
+      setStatus(`Сессия не сброшена: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setMaintenanceBusy(false);
+    }
+  }
+
+  async function openDataFolder(): Promise<void> {
+    try {
+      const path = await window.orchestrator.system.openDataFolder();
+      setStatus(`Открыта папка: ${path}`);
+    } catch (error) {
+      setStatus(`Папка не открыта: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
@@ -420,6 +479,49 @@ function App(): React.JSX.Element {
                   <label>Тема<select value={settings.appearance.theme} onChange={(event) => setSettings((value) => ({ ...value, appearance: { ...value.appearance, theme: event.target.value as AppSettingsView["appearance"]["theme"] } }))}><option value="dark">Тёмная</option><option value="light">Светлая</option><option value="system">Как в системе</option></select></label>
                   <label>Плотность<select value={settings.appearance.density} onChange={(event) => setSettings((value) => ({ ...value, appearance: { ...value.appearance, density: event.target.value as AppSettingsView["appearance"]["density"] } }))}><option value="comfortable">Обычная</option><option value="compact">Компактная</option></select></label>
                   <label>Масштаб текста, %<input type="number" min={80} max={140} step={5} value={settings.appearance.fontScale} onChange={(event) => setSettings((value) => ({ ...value, appearance: { ...value.appearance, fontScale: Number(event.target.value) } }))} /></label>
+                </div>
+              </fieldset>
+              <fieldset>
+                <legend>Диагностика и данные</legend>
+                <p className="settings-note">
+                  Проверка выполняется локально. Резервная копия содержит базу проектов и
+                  обезличенные настройки, но не браузерные профили, cookies и пароли.
+                </p>
+                <div className="maintenance-actions">
+                  <button disabled={maintenanceBusy} onClick={() => void refreshDiagnostics()}>
+                    Проверить окружение
+                  </button>
+                  <button disabled={maintenanceBusy} onClick={() => void createBackup()}>
+                    Создать резервную копию
+                  </button>
+                  <button disabled={maintenanceBusy} onClick={() => void openDataFolder()}>
+                    Открыть папку данных
+                  </button>
+                </div>
+                {releaseInfo ? (
+                  <dl className="release-info">
+                    <div><dt>Версия</dt><dd>{releaseInfo.appVersion}</dd></div>
+                    <div><dt>Commit</dt><dd>{releaseInfo.commit}</dd></div>
+                    <div><dt>Данные</dt><dd>{releaseInfo.dataPath}</dd></div>
+                  </dl>
+                ) : null}
+                {preflight.length > 0 ? (
+                  <ul className="preflight-list" aria-label="Результаты диагностики">
+                    {preflight.map((check) => (
+                      <li key={check.name} data-status={check.status}>
+                        <strong>{check.status.toUpperCase()} · {check.name}</strong>
+                        <span>{check.detail}</span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+                <div className="danger-zone">
+                  <strong>Сброс авторизации</strong>
+                  <span>Удаляет только локальную сессию выбранного сервиса.</span>
+                  <div className="maintenance-actions">
+                    <button disabled={maintenanceBusy} onClick={() => void resetSession("chatgpt")}>Сбросить ChatGPT</button>
+                    <button disabled={maintenanceBusy} onClick={() => void resetSession("gemini")}>Сбросить Gemini</button>
+                  </div>
                 </div>
               </fieldset>
             </div>

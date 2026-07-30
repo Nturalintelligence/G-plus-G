@@ -67,6 +67,14 @@ describe("release and backup tools", () => {
     await expect(validateBackupBundle(bundle)).rejects.toThrow();
   });
 
+  it("creates the backup destination when it does not exist", async () => {
+    const root = mkdtempSync(join(tmpdir(), "gpg-data-"));
+    const backups = join(mkdtempSync(join(tmpdir(), "gpg-parent-")), "nested", "backups");
+    makeDatabase(join(root, "orchestrator.sqlite"), "valid");
+    const bundle = await createBackupBundle({ destinationRoot: backups, root });
+    expect(existsSync(join(bundle, "manifest.json"))).toBe(true);
+  });
+
   it("reports release identity without requiring git", async () => {
     const root = mkdtempSync(join(tmpdir(), "gpg-info-"));
     const packageFile = join(root, "package.json");
@@ -77,6 +85,15 @@ describe("release and backup tools", () => {
       commit: "abc123",
       dataPath: root,
     });
+  });
+
+  it("reads the packaged build commit manifest", async () => {
+    const root = mkdtempSync(join(tmpdir(), "gpg-info-"));
+    const packageFile = join(root, "package.json");
+    writeFileSync(packageFile, JSON.stringify({ version: "1.2.3" }));
+    writeFileSync(join(root, "build-info.json"), JSON.stringify({ format: 1, commit: "deadbeef" }));
+    const info = await getReleaseInfo({ root, packageFile });
+    expect(info.commit).toBe("deadbeef");
   });
 
   it("preflight verifies a writable data path and dependencies", async () => {

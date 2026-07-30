@@ -3,6 +3,13 @@ const { contextBridge, ipcRenderer } = require("electron");
 const api = {
   system: {
     preflight: () => ipcRenderer.invoke("system:preflight"),
+    info: () => ipcRenderer.invoke("system:info"),
+    openDataFolder: () => ipcRenderer.invoke("system:openDataFolder"),
+  },
+  maintenance: {
+    backup: () => ipcRenderer.invoke("maintenance:backup"),
+    resetSession: (provider) =>
+      ipcRenderer.invoke("maintenance:resetSession", provider),
   },
   projects: {
     list: () => ipcRenderer.invoke("projects:list"),
