@@ -3,6 +3,9 @@
 Минимальный CLI-прототип проверяет устойчивость одного полного цикла через видимый
 ChatGPT Web. Это только этап 0 исходного плана, не полное приложение.
 
+Проект вырос в локальное приложение **G plus G** с адаптерами ChatGPT и Gemini,
+SQLite, ограниченной оркестрацией, Project State, экспортом и Electron UI.
+
 ## Установка и запуск
 
 ```powershell
@@ -11,6 +14,9 @@ npx playwright install chromium
 npm run login
 npm run send -- --message "Ответь одним словом: тест"
 npm run verify -- --count 20
+npm start -- login --provider gemini
+npm start -- send --provider gemini --message "Ответь одним словом: тест"
+npm run desktop:start
 ```
 
 `login` открывает видимый Chromium и ждёт ручной авторизации. Окно не закрывается,

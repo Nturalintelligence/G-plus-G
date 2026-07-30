@@ -1,6 +1,18 @@
 import { mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
 import { chromium, type BrowserContext, type Locator, type Page } from "playwright";
+import type {
+  ConversationRef,
+  MessageInput,
+  ModelAdapter,
+  RecoveryResult,
+  TurnEvent,
+  TurnRef,
+} from "./adapters/adapter-contract.js";
+import { TurnChannel } from "./adapters/turn-channel.js";
+import { ProfileLock } from "./browser/profile-lock.js";
+import { bundledChromiumExecutable } from "./browser/runtime.js";
+import { newId } from "./ids.js";
 import {
   AmbiguousElementError,
   ChallengeRequiredError,
@@ -45,26 +57,44 @@ export interface AdapterOptions {
   settleMs?: number;
 }
 
-export class ChatGptAdapter {
+interface ActiveTurn {
+  channel: TurnChannel;
+  result: Promise<TurnResult>;
+  resolveManual: (response: string) => void;
+}
+
+export class ChatGptAdapter implements ModelAdapter {
+  readonly providerId = "chatgpt";
   private context: BrowserContext | null = null;
   private page: Page | null = null;
+  private readonly turns = new Map<string, ActiveTurn>();
   private readonly profileDir: string;
+  private readonly profileLock: ProfileLock;
   private readonly timeoutMs: number;
   private readonly settleMs: number;
 
   constructor(options: AdapterOptions = {}) {
     this.profileDir = resolve(options.profileDir ?? "user-data/profiles/chatgpt");
+    this.profileLock = new ProfileLock(this.profileDir);
     this.timeoutMs = options.timeoutMs ?? 180_000;
     this.settleMs = options.settleMs ?? 2_500;
   }
 
   async launch(): Promise<void> {
     await mkdir(this.profileDir, { recursive: true });
-    this.context = await chromium.launchPersistentContext(this.profileDir, {
-      headless: false,
-      viewport: { width: 1440, height: 1000 },
-      args: ["--disable-blink-features=AutomationControlled"],
-    });
+    await this.profileLock.acquire();
+    try {
+      const executablePath = bundledChromiumExecutable();
+      this.context = await chromium.launchPersistentContext(this.profileDir, {
+        headless: false,
+        viewport: { width: 1440, height: 1000 },
+        args: ["--disable-blink-features=AutomationControlled"],
+        ...(executablePath ? { executablePath } : {}),
+      });
+    } catch (error) {
+      await this.profileLock.release();
+      throw error;
+    }
     this.page =
       this.context.pages().find((candidate) => candidate.url().includes("chatgpt.com")) ??
       this.context.pages()[0] ??
@@ -73,9 +103,93 @@ export class ChatGptAdapter {
   }
 
   async close(): Promise<void> {
-    await this.context?.close();
-    this.context = null;
-    this.page = null;
+    try {
+      await this.context?.close();
+      this.context = null;
+      this.page = null;
+    } finally {
+      await this.profileLock.release();
+    }
+  }
+
+  async openLoginMode(): Promise<void> {
+    await this.waitForManualLogin();
+  }
+
+  async createConversation(): Promise<ConversationRef> {
+    const page = await this.ensurePage();
+    await page.goto(CHATGPT_URL, { waitUntil: "domcontentloaded" });
+    return { id: newId("webchat"), url: page.url() };
+  }
+
+  async openConversation(ref: ConversationRef): Promise<void> {
+    if (!ref.url.startsWith("https://chatgpt.com/")) {
+      throw new Error("Conversation URL must belong to chatgpt.com");
+    }
+    await (await this.ensurePage()).goto(ref.url, { waitUntil: "domcontentloaded" });
+  }
+
+  async sendMessage(input: MessageInput): Promise<TurnRef>;
+  async sendMessage(input: string): Promise<TurnResult>;
+  async sendMessage(input: MessageInput | string): Promise<TurnRef | TurnResult> {
+    if (typeof input === "string") return this.sendAndWait(input);
+    const ref: TurnRef = { id: newId("webturn") };
+    const channel = new TurnChannel();
+    let manualResolver: (response: string) => void = () => undefined;
+    const manual = new Promise<string>((resolve) => {
+      manualResolver = resolve;
+    });
+    const automated = this.sendAndWait(input.content, channel);
+    const result = Promise.race([
+      automated,
+      manual.then((response) => ({
+        response,
+        responseFingerprint: fingerprint(response),
+        elapsedMs: 0,
+      })),
+    ]).finally(() => channel.finish());
+    this.turns.set(ref.id, { channel, result, resolveManual: manualResolver });
+    return ref;
+  }
+
+  async *observeTurn(turn: TurnRef): AsyncIterable<TurnEvent> {
+    const active = this.requireTurn(turn);
+    yield* active.channel.observe();
+  }
+
+  async getFinalResponse(turn: TurnRef): Promise<TurnResult> {
+    return this.requireTurn(turn).result;
+  }
+
+  async cancel(turn: TurnRef): Promise<void> {
+    const active = this.requireTurn(turn);
+    const page = await this.ensurePage();
+    const stop = page.getByRole("button", { name: /stop generating|остановить создание/i });
+    if (await stop.isVisible().catch(() => false)) await stop.click();
+    active.channel.publish({ type: "CANCELLED", at: new Date().toISOString() });
+    active.channel.finish();
+  }
+
+  async completeManually(turn: TurnRef, response: string): Promise<void> {
+    const active = this.requireTurn(turn);
+    active.resolveManual(response);
+    active.channel.publish({
+      type: "RESPONSE_COMPLETED",
+      at: new Date().toISOString(),
+      text: response,
+    });
+  }
+
+  async recover(): Promise<RecoveryResult> {
+    const page = await this.ensurePage();
+    return {
+      recovered: true,
+      conversation: { id: newId("recovered"), url: page.url() },
+    };
+  }
+
+  async collectDiagnostics(): Promise<DiagnosticReport> {
+    return this.diagnostics();
   }
 
   async checkSession(): Promise<SessionState> {
@@ -101,27 +215,8 @@ export class ChatGptAdapter {
     throw new TurnTimeoutError("Поле ввода не появилось за 10 минут");
   }
 
-  async sendMessage(message: string): Promise<TurnResult> {
-    const page = this.requirePage();
-    await this.waitUntilReady();
-    const before = await this.captureResponses();
-    const composer = await this.getUniqueComposer();
-    const startedAt = Date.now();
-
-    await composer.fill(message);
-    await composer.press("Enter");
-    await this.waitUntilSubmitted(message);
-
-    const response = await this.waitForBoundResponse(before);
-    return {
-      response: response.text,
-      responseFingerprint: response.fingerprint,
-      elapsedMs: Date.now() - startedAt,
-    };
-  }
-
   async diagnostics(): Promise<DiagnosticReport> {
-    const page = this.requirePage();
+    const page = await this.ensurePage();
     return {
       timestamp: new Date().toISOString(),
       url: page.url(),
@@ -129,6 +224,9 @@ export class ChatGptAdapter {
       sessionState: await this.checkSession(),
       composerCandidates: (await this.findVisibleComposers()).length,
       assistantResponseCount: (await this.captureResponses()).length,
+      mutationCount: await page
+        .evaluate(() => Number((window as unknown as { __orchestratorMutationCount?: number }).__orchestratorMutationCount ?? 0))
+        .catch(() => 0),
     };
   }
 
@@ -136,6 +234,27 @@ export class ChatGptAdapter {
     const state = await this.checkSession();
     if (state === "CHALLENGE_REQUIRED") throw new ChallengeRequiredError();
     if (state !== "AUTHENTICATED") throw new LoginRequiredError(`ChatGPT state: ${state}`);
+  }
+
+  private async sendAndWait(message: string, channel?: TurnChannel): Promise<TurnResult> {
+    const page = await this.ensurePage();
+    await this.waitUntilReady();
+    await this.installMutationObserver();
+    const before = await this.captureResponses();
+    const composer = await this.getUniqueComposer();
+    const startedAt = Date.now();
+
+    await composer.fill(message);
+    await composer.press("Enter");
+    await this.waitUntilSubmitted(message);
+    channel?.publish({ type: "MESSAGE_SUBMITTED", at: new Date().toISOString() });
+
+    const response = await this.waitForBoundResponse(before, channel);
+    return {
+      response: response.text,
+      responseFingerprint: response.fingerprint,
+      elapsedMs: Date.now() - startedAt,
+    };
   }
 
   private async waitUntilReady(): Promise<void> {
@@ -222,6 +341,7 @@ export class ChatGptAdapter {
 
   private async waitForBoundResponse(
     before: readonly ResponseSnapshot[],
+    channel?: TurnChannel,
   ): Promise<ResponseSnapshot> {
     const page = this.requirePage();
     const deadline = Date.now() + this.timeoutMs;
@@ -235,16 +355,29 @@ export class ChatGptAdapter {
       const selected = selectNewResponse(before, after);
 
       if (selected) {
+        if (!candidate) {
+          channel?.publish({ type: "RESPONSE_STARTED", at: new Date().toISOString() });
+        }
         candidate = selected;
         if (selected.text !== stableText) {
           stableText = selected.text;
           stableSince = Date.now();
+          channel?.publish({
+            type: "RESPONSE_UPDATED",
+            at: new Date().toISOString(),
+            text: selected.text,
+          });
         }
         const stopVisible = await page
           .getByRole("button", { name: /stop generating|остановить создание/i })
           .isVisible()
           .catch(() => false);
         if (!stopVisible && stableText && Date.now() - stableSince >= this.settleMs) {
+          channel?.publish({
+            type: "RESPONSE_COMPLETED",
+            at: new Date().toISOString(),
+            text: candidate.text,
+          });
           return candidate;
         }
       }
@@ -266,5 +399,44 @@ export class ChatGptAdapter {
   private requirePage(): Page {
     if (!this.page) throw new Error("Adapter is not launched");
     return this.page;
+  }
+
+  private async ensurePage(): Promise<Page> {
+    if (!this.context) throw new Error("Adapter is not launched");
+    if (this.page && !this.page.isClosed()) return this.page;
+    this.page =
+      this.context.pages().find((candidate) => !candidate.isClosed()) ??
+      (await this.context.newPage());
+    if (!this.page.url().includes("chatgpt.com")) {
+      await this.page.goto(CHATGPT_URL, { waitUntil: "domcontentloaded" });
+    }
+    return this.page;
+  }
+
+  private async installMutationObserver(): Promise<void> {
+    const page = await this.ensurePage();
+    await page.evaluate(() => {
+      const state = window as unknown as {
+        __orchestratorMutationObserver?: MutationObserver;
+        __orchestratorMutationCount?: number;
+      };
+      if (state.__orchestratorMutationObserver) return;
+      state.__orchestratorMutationCount = 0;
+      state.__orchestratorMutationObserver = new MutationObserver((records) => {
+        state.__orchestratorMutationCount =
+          (state.__orchestratorMutationCount ?? 0) + records.length;
+      });
+      state.__orchestratorMutationObserver.observe(document.body, {
+        childList: true,
+        subtree: true,
+        characterData: true,
+      });
+    });
+  }
+
+  private requireTurn(turn: TurnRef): ActiveTurn {
+    const active = this.turns.get(turn.id);
+    if (!active) throw new Error(`Unknown turn: ${turn.id}`);
+    return active;
   }
 }

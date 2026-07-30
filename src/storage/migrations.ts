@@ -89,4 +89,50 @@ export const migrations: readonly Migration[] = [
       END;
     `,
   },
+  {
+    version: 2,
+    name: "orchestration_and_project_state",
+    sql: `
+      CREATE TABLE orchestration_runs (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES projects(id),
+        mode TEXT NOT NULL CHECK (mode IN ('MANUAL', 'SEQUENTIAL', 'PARALLEL', 'DEBATE')),
+        status TEXT NOT NULL CHECK (
+          status IN ('CREATED', 'RUNNING', 'PAUSED', 'AWAITING_CONFIRMATION',
+                     'COMPLETED', 'STOPPED', 'FAILED')
+        ),
+        limits_json TEXT NOT NULL,
+        started_at TEXT,
+        finished_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE project_state_versions (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES projects(id),
+        version INTEGER NOT NULL CHECK (version > 0),
+        status TEXT NOT NULL CHECK (status IN ('DRAFT', 'APPROVED')),
+        state_json TEXT NOT NULL,
+        source_turn_ids_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        approved_at TEXT,
+        UNIQUE(project_id, version)
+      );
+
+      CREATE TABLE exports (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES projects(id),
+        state_version INTEGER NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('DRAFT', 'APPROVED')),
+        directory TEXT NOT NULL,
+        manifest_hash TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+
+      CREATE INDEX orchestration_runs_project_idx ON orchestration_runs(project_id);
+      CREATE INDEX project_state_project_idx ON project_state_versions(project_id, version);
+      CREATE INDEX exports_project_idx ON exports(project_id, created_at);
+    `,
+  },
 ];

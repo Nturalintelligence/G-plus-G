@@ -1,0 +1,214 @@
+import { fingerprint } from "../fingerprint.js";
+import { newId } from "../ids.js";
+import type { ModelAdapter } from "../adapters/adapter-contract.js";
+import type { AppDatabase } from "../storage/database.js";
+import { buildDebatePrompt, buildPeerReviewPrompt } from "./prompt-builder.js";
+import {
+  defaultLimits,
+  validateLimits,
+  type OrchestrationLimits,
+} from "./limits.js";
+
+export type RunMode = "MANUAL" | "SEQUENTIAL" | "PARALLEL" | "DEBATE";
+export type RunStatus =
+  | "CREATED"
+  | "RUNNING"
+  | "PAUSED"
+  | "AWAITING_CONFIRMATION"
+  | "COMPLETED"
+  | "STOPPED"
+  | "FAILED";
+
+export interface RunOutput {
+  runId: string;
+  status: RunStatus;
+  responses: Array<{ providerId: string; text: string; round: number }>;
+}
+
+export interface RunHooks {
+  editBeforeSend?: (providerId: string, message: string) => Promise<string>;
+  confirm?: (summary: string) => Promise<boolean>;
+}
+
+export class Orchestrator {
+  private stopped = false;
+  private paused = false;
+  private resumeWaiters: Array<() => void> = [];
+  private activeRunId: string | null = null;
+
+  constructor(
+    private readonly database: AppDatabase,
+    private readonly adapters: Map<string, ModelAdapter>,
+  ) {}
+
+  pause(): void {
+    this.paused = true;
+    if (this.activeRunId) this.setStatus(this.activeRunId, "PAUSED");
+  }
+
+  resume(): void {
+    this.paused = false;
+    if (this.activeRunId) this.setStatus(this.activeRunId, "RUNNING");
+    this.resumeWaiters.splice(0).forEach((resolve) => resolve());
+  }
+
+  stop(): void {
+    this.stopped = true;
+    if (this.activeRunId) this.setStatus(this.activeRunId, "STOPPED");
+    this.resume();
+  }
+
+  async run(
+    projectId: string,
+    mode: RunMode,
+    task: string,
+    providerIds: string[],
+    limits: OrchestrationLimits = defaultLimits,
+    hooks: RunHooks = {},
+  ): Promise<RunOutput> {
+    validateLimits(limits);
+    if (providerIds.length === 0) throw new Error("At least one provider is required");
+    this.stopped = false;
+    const runId = newId("run");
+    this.activeRunId = runId;
+    this.createRun(runId, projectId, mode, limits);
+    const responses: RunOutput["responses"] = [];
+    const startedAt = Date.now();
+
+    try {
+      this.setStatus(runId, "RUNNING");
+      if (mode === "PARALLEL") {
+        const independent = await Promise.all(
+          providerIds.map(async (providerId) => ({
+            providerId,
+            text: await this.ask(providerId, task, limits, hooks),
+            round: 1,
+          })),
+        );
+        responses.push(...independent);
+      } else if (mode === "MANUAL") {
+        responses.push({
+          providerId: providerIds[0]!,
+          text: await this.ask(providerIds[0]!, task, limits, hooks),
+          round: 1,
+        });
+      } else {
+        let message = task;
+        const seen = new Set<string>();
+        for (let turn = 0; turn < limits.maxTurns; turn += 1) {
+          await this.waitIfPaused();
+          this.assertWithinLimits(startedAt, limits);
+          if (this.stopped) break;
+          const providerId = providerIds[turn % providerIds.length]!;
+          const text = await this.ask(providerId, message, limits, hooks);
+          responses.push({ providerId, text, round: turn + 1 });
+          const hash = fingerprint(text);
+          if (seen.has(hash)) break;
+          seen.add(hash);
+          if ((turn + 1) % limits.confirmationEvery === 0 && hooks.confirm) {
+            this.setStatus(runId, "AWAITING_CONFIRMATION");
+            if (!(await hooks.confirm(`Continue after ${turn + 1} turns?`))) break;
+            this.setStatus(runId, "RUNNING");
+          }
+          message =
+            mode === "DEBATE"
+              ? buildDebatePrompt(task, text, turn + 2)
+              : buildPeerReviewPrompt(task, text);
+        }
+      }
+      const status: RunStatus = this.stopped ? "STOPPED" : "COMPLETED";
+      this.setStatus(runId, status);
+      return { runId, status, responses };
+    } catch (error) {
+      this.setStatus(runId, "FAILED");
+      throw error;
+    } finally {
+      this.activeRunId = null;
+    }
+  }
+
+  private async ask(
+    providerId: string,
+    message: string,
+    limits: OrchestrationLimits,
+    hooks: RunHooks,
+  ): Promise<string> {
+    const adapter = this.adapters.get(providerId);
+    if (!adapter) throw new Error(`Adapter is not registered: ${providerId}`);
+    const edited = hooks.editBeforeSend
+      ? await hooks.editBeforeSend(providerId, message)
+      : message;
+    let lastError: unknown;
+    for (let attempt = 0; attempt <= limits.maxRetries; attempt += 1) {
+      try {
+        const turn = await adapter.sendMessage({ content: edited });
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const timeout = new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error(`${providerId} turn timed out`)),
+            limits.maxTurnMs,
+          );
+        });
+        try {
+          return (await Promise.race([adapter.getFinalResponse(turn), timeout])).response;
+        } finally {
+          if (timer) clearTimeout(timer);
+        }
+      } catch (error) {
+        lastError = error;
+        if (attempt === limits.maxRetries) break;
+        await adapter.recover();
+      }
+    }
+    throw lastError;
+  }
+
+  private async waitIfPaused(): Promise<void> {
+    if (!this.paused) return;
+    await new Promise<void>((resolve) => this.resumeWaiters.push(resolve));
+  }
+
+  private assertWithinLimits(startedAt: number, limits: OrchestrationLimits): void {
+    if (Date.now() - startedAt > limits.maxSessionMs) {
+      throw new Error("Session time limit exceeded");
+    }
+  }
+
+  private createRun(
+    id: string,
+    projectId: string,
+    mode: RunMode,
+    limits: OrchestrationLimits,
+  ): void {
+    const now = new Date().toISOString();
+    this.database.raw
+      .prepare(
+        `INSERT INTO orchestration_runs
+         (id, project_id, mode, status, limits_json, created_at, updated_at)
+         VALUES (?, ?, ?, 'CREATED', ?, ?, ?)`,
+      )
+      .run(id, projectId, mode, JSON.stringify(limits), now, now);
+  }
+
+  private setStatus(id: string, status: RunStatus): void {
+    const now = new Date().toISOString();
+    this.database.transaction(() => {
+      this.database.raw
+        .prepare(
+          `UPDATE orchestration_runs
+           SET status = ?, updated_at = ?,
+               started_at = CASE WHEN ? = 'RUNNING' AND started_at IS NULL THEN ? ELSE started_at END,
+               finished_at = CASE WHEN ? IN ('COMPLETED','STOPPED','FAILED') THEN ? ELSE finished_at END
+           WHERE id = ?`,
+        )
+        .run(status, now, status, now, status, now, id);
+      this.database.raw
+        .prepare(
+          `INSERT INTO events
+           (id, aggregate_type, aggregate_id, event_type, payload_json, occurred_at)
+           VALUES (?, 'OrchestrationRun', ?, 'RUN_STATUS_CHANGED', ?, ?)`,
+        )
+        .run(newId("evt"), id, JSON.stringify({ status }), now);
+    });
+  }
+}

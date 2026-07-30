@@ -26,7 +26,7 @@ describe("SQLite project state", () => {
     const versions = database.raw
       .prepare("SELECT version FROM schema_migrations ORDER BY version")
       .all();
-    expect(versions).toEqual([{ version: 1 }]);
+    expect(versions).toEqual([{ version: 1 }, { version: 2 }]);
   });
 
   it("persists projects after reopening the database", () => {

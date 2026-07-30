@@ -1,0 +1,31 @@
+:root { color-scheme: dark; font-family: Inter, "Segoe UI", sans-serif; background: #090d12; color: #e6edf3; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+button, input, textarea, select { font: inherit; }
+button, select, input { border: 1px solid #303a46; border-radius: 8px; background: #151b23; color: inherit; padding: 9px 12px; }
+button { cursor: pointer; text-align: left; }
+button:hover { border-color: #66d9b7; }
+button:disabled { opacity: .45; cursor: default; }
+header { height: 68px; display: flex; align-items: center; justify-content: space-between; padding: 0 22px; border-bottom: 1px solid #202832; }
+header div { display: flex; align-items: center; gap: 14px; }
+h1 { font-size: 18px; margin: 0; }
+h2 { font-size: 13px; letter-spacing: .08em; text-transform: uppercase; color: #8b9bab; }
+.mark { background: #66d9b7; color: #07110e; border-radius: 9px; padding: 8px; font-weight: 900; }
+.status { color: #8b9bab; font-size: 13px; }
+.layout { display: grid; grid-template-columns: 240px minmax(520px, 1fr) 360px; height: calc(100vh - 68px); }
+aside { padding: 18px; border-right: 1px solid #202832; overflow: auto; }
+.inspector { border: 0; border-left: 1px solid #202832; }
+aside form { display: grid; gap: 8px; }
+nav { display: grid; gap: 7px; margin: 14px 0 26px; }
+nav button { display: flex; justify-content: space-between; }
+nav small, .timeline small { color: #708090; display: block; }
+.selected { border-color: #66d9b7; background: #14251f; }
+.workspace { padding: 18px; overflow: auto; display: grid; grid-template-rows: auto 1fr; gap: 14px; }
+.panel { border: 1px solid #202832; background: #0f151c; border-radius: 12px; padding: 16px; }
+.composer textarea { width: 100%; min-height: 110px; resize: vertical; background: transparent; color: inherit; border: 0; outline: 0; font: inherit; }
+.controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.primary { background: #66d9b7; color: #07110e; border-color: #66d9b7; font-weight: 700; }
+.output { line-height: 1.55; overflow-wrap: anywhere; }
+.inspector > textarea { width: 100%; min-height: 330px; background: #0f151c; color: #c8d2dc; border: 1px solid #202832; border-radius: 8px; padding: 10px; font: 12px/1.45 Consolas, monospace; }
+.timeline { padding-left: 20px; }
+.timeline li { padding: 5px 0; }

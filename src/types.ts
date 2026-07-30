@@ -26,4 +26,5 @@ export interface DiagnosticReport {
   sessionState: SessionState;
   composerCandidates: number;
   assistantResponseCount: number;
+  mutationCount?: number;
 }
