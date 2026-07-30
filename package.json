@@ -1,0 +1,28 @@
+{
+  "name": "multi-llm-orchestrator-feasibility",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Stage 0 feasibility prototype for reliable ChatGPT Web automation",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "tsx src/cli.ts",
+    "login": "tsx src/cli.ts login",
+    "send": "tsx src/cli.ts send",
+    "verify": "tsx src/cli.ts verify",
+    "test": "vitest run",
+    "check": "npm run build && npm test"
+  },
+  "dependencies": {
+    "playwright": "^1.54.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.1.0",
+    "tsx": "^4.20.3",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
