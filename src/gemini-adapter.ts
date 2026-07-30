@@ -100,9 +100,7 @@ export class GeminiAdapter implements ModelAdapter {
     const page = await this.ensurePage();
     if (await this.hasChallenge()) return "CHALLENGE_REQUIRED";
     const body = await page.locator("body").innerText().catch(() => "");
-    if (/sign in|войти/i.test(body) && (await this.visibleComposers()).length === 0) {
-      return "LOGIN_REQUIRED";
-    }
+    if (/sign in|войти/i.test(body)) return "LOGIN_REQUIRED";
     if ((await this.visibleComposers()).length === 1) return "AUTHENTICATED";
     if (/too many requests|rate limit/i.test(body)) return "RATE_LIMITED";
     return "UNKNOWN";
