@@ -12,6 +12,7 @@ import type {
 import { TurnChannel } from "./adapters/turn-channel.js";
 import { ProfileLock } from "./browser/profile-lock.js";
 import { bundledChromiumExecutable } from "./browser/runtime.js";
+import { loginInSystemChrome } from "./browser/system-browser-login.js";
 import {
   AmbiguousElementError,
   ChallengeRequiredError,
@@ -72,14 +73,7 @@ export class GeminiAdapter implements ModelAdapter {
     await mkdir(this.profileDir, { recursive: true });
     await this.lock.acquire();
     try {
-      const executablePath = bundledChromiumExecutable();
-      this.context = await chromium.launchPersistentContext(this.profileDir, {
-        headless: false,
-        viewport: { width: 1440, height: 1000 },
-        ...(executablePath ? { executablePath } : {}),
-      });
-      this.page = this.context.pages()[0] ?? (await this.context.newPage());
-      await this.page.goto(GEMINI_URL, { waitUntil: "domcontentloaded" });
+      await this.launchAutomatedBrowser();
     } catch (error) {
       await this.lock.release();
       throw error;
@@ -107,13 +101,17 @@ export class GeminiAdapter implements ModelAdapter {
   }
 
   async openLoginMode(): Promise<void> {
-    console.log("Войдите в Google/Gemini в открытом окне. Окно закроется после обнаружения редактора.");
-    const deadline = Date.now() + 10 * 60_000;
-    while (Date.now() < deadline) {
-      if ((await this.checkSession()) === "AUTHENTICATED") return;
-      await (await this.ensurePage()).waitForTimeout(1_000);
+    await this.context?.close();
+    this.context = null;
+    this.page = null;
+    await loginInSystemChrome(this.profileDir, GEMINI_URL);
+    await this.launchAutomatedBrowser();
+    const state = await this.waitUntilReady();
+    if (state !== "AUTHENTICATED") {
+      throw new LoginRequiredError(
+        `Вход Gemini не сохранился в выделенном профиле. Текущее состояние: ${state}`,
+      );
     }
-    throw new TurnTimeoutError("Gemini editor did not appear within 10 minutes");
   }
 
   async createConversation(): Promise<ConversationRef> {
@@ -328,6 +326,17 @@ export class GeminiAdapter implements ModelAdapter {
       await this.page.goto(GEMINI_URL, { waitUntil: "domcontentloaded" });
     }
     return this.page;
+  }
+
+  private async launchAutomatedBrowser(): Promise<void> {
+    const executablePath = bundledChromiumExecutable();
+    this.context = await chromium.launchPersistentContext(this.profileDir, {
+      headless: false,
+      viewport: { width: 1440, height: 1000 },
+      ...(executablePath ? { executablePath } : {}),
+    });
+    this.page = this.context.pages()[0] ?? (await this.context.newPage());
+    await this.page.goto(GEMINI_URL, { waitUntil: "domcontentloaded" });
   }
 
   private requireTurn(turn: TurnRef): GeminiTurn {

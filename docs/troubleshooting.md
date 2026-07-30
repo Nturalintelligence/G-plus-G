@@ -15,6 +15,18 @@ automatically. Stale locks are removed only after verifying that their PID is go
 Automation stops intentionally. Resolve the challenge manually and restart the
 command. The application does not bypass service protections.
 
+## Google says the browser is unsafe
+
+Gemini login must happen in ordinary installed Google Chrome. The login command
+temporarily closes Playwright, opens Chrome with the dedicated Gemini profile, and
+waits until you close that Chrome window. If an older experimental profile causes
+problems, reset only Gemini and retry:
+
+```powershell
+npm start -- session:reset --provider gemini
+npm start -- login --provider gemini
+```
+
 ## Reset a session
 
 ```powershell
