@@ -12,6 +12,8 @@ An item is not considered complete merely because an interface or UI control exi
 - SQLite migrations, append-only events, projects, runs, turns, attempts, messages,
   persistent transcript, and interrupted-turn recovery.
 - Manual, sequential, independent parallel, and bounded-debate modes.
+- User-selected first participant, strict sequential turns, persisted provider web
+  chats, and two-provider run-specific consensus termination.
 - User confirmation checkpoints in bounded multi-turn runs.
 - Versioned Project State with draft/approved status.
 - Hashed exports: TASK_SPEC, conversation, decisions, open questions, Project State,

@@ -1,6 +1,10 @@
 import { fingerprint } from "../fingerprint.js";
 import { newId } from "../ids.js";
-import type { ModelAdapter, TurnRef } from "../adapters/adapter-contract.js";
+import type {
+  ConversationRef,
+  ModelAdapter,
+  TurnRef,
+} from "../adapters/adapter-contract.js";
 import type { AppDatabase } from "../storage/database.js";
 import { ProjectRepository } from "../storage/repository.js";
 import {
@@ -28,7 +32,13 @@ export type RunStatus =
 export interface RunOutput {
   runId: string;
   status: RunStatus;
-  responses: Array<{ providerId: string; text: string; round: number }>;
+  responses: Array<{
+    providerId: string;
+    text: string;
+    round: number;
+    agreed?: boolean;
+  }>;
+  consensusReached?: boolean;
 }
 
 export interface RunHooks {
@@ -42,6 +52,7 @@ export class Orchestrator {
   private resumeWaiters: Array<() => void> = [];
   private activeRunId: string | null = null;
   private readonly activeTurns = new Map<string, TurnRef>();
+  private readonly preparedConversations = new Set<string>();
 
   constructor(
     private readonly database: AppDatabase,
@@ -83,6 +94,7 @@ export class Orchestrator {
         : mode;
     this.stopped = false;
     const runId = newId("run");
+    this.preparedConversations.clear();
     this.activeRunId = runId;
     this.createRun(runId, projectId, effectiveMode, limits);
     const repository = new ProjectRepository(this.database);
@@ -97,6 +109,7 @@ export class Orchestrator {
     const responses: RunOutput["responses"] = [];
     const startedAt = Date.now();
     const runMetrics = new QualityMetrics(this.database);
+    let consensusReached = false;
 
     try {
       this.setStatus(runId, "RUNNING");
@@ -169,13 +182,29 @@ export class Orchestrator {
       } else {
         let message = initialMessage;
         const seen = new Set<string>();
-        for (let turn = 0; turn < limits.maxTurns; turn += 1) {
+        const consensusToken = `[[G_PLUS_G_DONE:${runId}]]`;
+        const agreedProviders = new Set<string>();
+        const turnLimit =
+          effectiveMode === "SEQUENTIAL" ? providerIds.length : limits.maxTurns;
+        for (let turn = 0; turn < turnLimit; turn += 1) {
           await this.waitIfPaused();
           this.assertWithinLimits(startedAt, limits);
           if (this.stopped) break;
           const providerId = providerIds[turn % providerIds.length]!;
-          const text = await this.ask(projectId, repository, providerId, message, limits, hooks);
-          responses.push({ providerId, text, round: turn + 1 });
+          const rawText = await this.ask(
+            projectId,
+            repository,
+            providerId,
+            message,
+            limits,
+            hooks,
+          );
+          const agreed =
+            effectiveMode === "DEBATE" && rawText.includes(consensusToken);
+          const text = rawText.replaceAll(consensusToken, "").trim();
+          if (agreed) agreedProviders.add(providerId);
+          else agreedProviders.delete(providerId);
+          responses.push({ providerId, text, round: turn + 1, agreed });
           repository.appendConversationEntry({
             projectId,
             runId,
@@ -184,6 +213,13 @@ export class Orchestrator {
             round: turn + 1,
             content: text,
           });
+          if (
+            effectiveMode === "DEBATE" &&
+            providerIds.every((candidate) => agreedProviders.has(candidate))
+          ) {
+            consensusReached = true;
+            break;
+          }
           const hash = fingerprint(text);
           if (seen.has(hash)) break;
           seen.add(hash);
@@ -194,7 +230,12 @@ export class Orchestrator {
           }
           message =
             effectiveMode === "DEBATE"
-              ? buildDebatePrompt(initialMessage, responses, turn + 2)
+              ? buildDebatePrompt(
+                  initialMessage,
+                  responses,
+                  turn + 2,
+                  consensusToken,
+                )
               : buildPeerReviewPrompt(initialMessage, text);
         }
       }
@@ -206,7 +247,12 @@ export class Orchestrator {
       runMetrics.record("orchestration.run.elapsed_ms", Date.now() - startedAt, {
         mode: effectiveMode,
       });
-      return { runId, status, responses };
+      return {
+        runId,
+        status,
+        responses,
+        consensusReached,
+      };
     } catch (error) {
       await this.cancelActiveTurns();
       if (this.stopped) {
@@ -242,6 +288,7 @@ export class Orchestrator {
       ? await hooks.editBeforeSend(providerId, message)
       : message;
     const conversation = repository.getOrCreateConversation(projectId, providerId);
+    await this.prepareWebConversation(adapter, conversation.id, conversation.externalRef);
     const started = repository.beginTurn(conversation.id);
     let attempt = started.attempt;
     repository.addMessage(started.turn.id, attempt.id, "USER", edited);
@@ -290,6 +337,16 @@ export class Orchestrator {
           providerId,
         });
         metrics.record("provider.turn.retry_count", attemptIndex, { providerId });
+        const currentConversation =
+          typeof adapter.getCurrentConversation === "function"
+            ? await adapter.getCurrentConversation().catch(() => undefined)
+            : undefined;
+        if (currentConversation?.url) {
+          repository.updateConversationExternalRef(
+            conversation.id,
+            currentConversation.url,
+          );
+        }
         return result.response;
       } catch (error) {
         // A turn reference means submission may already have reached the provider.
@@ -334,6 +391,29 @@ export class Orchestrator {
     if (Date.now() - startedAt > limits.maxSessionMs) {
       throw new Error("Session time limit exceeded");
     }
+  }
+
+  private async prepareWebConversation(
+    adapter: ModelAdapter,
+    conversationId: string,
+    externalRef: string | null,
+  ): Promise<void> {
+    if (this.preparedConversations.has(conversationId)) return;
+    if (
+      typeof adapter.createConversation !== "function" ||
+      typeof adapter.openConversation !== "function"
+    ) {
+      // Some deterministic test adapters intentionally implement only turn methods.
+      this.preparedConversations.add(conversationId);
+      return;
+    }
+    if (externalRef) {
+      const ref: ConversationRef = { id: conversationId, url: externalRef };
+      await adapter.openConversation(ref);
+    } else {
+      await adapter.createConversation();
+    }
+    this.preparedConversations.add(conversationId);
   }
 
   private async withSessionLimit<T>(

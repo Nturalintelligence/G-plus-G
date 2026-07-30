@@ -44,6 +44,7 @@ export interface ModelAdapter {
   openLoginMode(): Promise<void>;
   createConversation(): Promise<ConversationRef>;
   openConversation(ref: ConversationRef): Promise<void>;
+  getCurrentConversation(): Promise<ConversationRef>;
   sendMessage(input: MessageInput): Promise<TurnRef>;
   observeTurn(turn: TurnRef): AsyncIterable<TurnEvent>;
   getFinalResponse(turn: TurnRef): Promise<TurnResult>;

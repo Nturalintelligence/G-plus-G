@@ -29,11 +29,17 @@ nav small, .timeline small { color: #708090; display: block; }
 .panel { border: 1px solid #202832; background: #0f151c; border-radius: 12px; padding: 16px; }
 .composer textarea { width: 100%; min-height: 110px; resize: vertical; background: transparent; color: inherit; border: 0; outline: 0; font: inherit; }
 .controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.starter-control { display: flex; align-items: center; gap: 7px; color: #8b9bab; font-size: 12px; }
+.starter-control select { color: #e6edf3; }
 .primary { background: #66d9b7; color: #07110e; border-color: #66d9b7; font-weight: 700; }
 .output { line-height: 1.55; overflow: auto; overflow-wrap: anywhere; }
 .message { border: 1px solid #27313c; border-radius: 12px; padding: 12px 14px; margin-bottom: 12px; background: #111820; }
 .message.user { margin-left: 12%; border-color: #356b5d; background: #13251f; }
 .message.assistant { margin-right: 7%; }
+.message.assistant.chatgpt { border-left: 4px solid #66a3ff; background: linear-gradient(90deg, #102035, #111820 28%); }
+.message.assistant.gemini { border-left: 4px solid #b98cff; background: linear-gradient(90deg, #261936, #111820 28%); }
+.message.assistant.chatgpt > header strong { color: #8fbdff; }
+.message.assistant.gemini > header strong { color: #c9a9ff; }
 .message > header { height: auto; padding: 0 0 8px; border: 0; justify-content: flex-start; gap: 10px; }
 .message > header strong { color: #66d9b7; text-transform: capitalize; }
 .message > header small, .empty { color: #708090; }

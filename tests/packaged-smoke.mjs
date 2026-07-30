@@ -24,6 +24,11 @@ try {
   await page.getByRole("heading", { name: projectName }).waitFor();
   await page.getByRole("button", { name: "Выйти из chatgpt" }).waitFor();
   await page.getByRole("button", { name: "Выйти из gemini" }).waitFor();
+  await page.getByLabel("Режим оркестрации").selectOption("SEQUENTIAL");
+  await page.getByLabel("Первым отвечает").selectOption("gemini");
+  if (await page.getByLabel("Первым отвечает").inputValue() !== "gemini") {
+    throw new Error("Provider starter order was not selectable");
+  }
 
   await page.getByText("Требования", { exact: true }).click();
   await page.getByRole("button", { name: "+ Добавить", exact: true }).first().click();
@@ -81,6 +86,7 @@ try {
     executablePath,
     projectCreated: projectName,
     providerLogoutAvailable: true,
+    providerStarterSelectable: true,
     visualProjectStatePersisted: true,
     settingsPersistedInUi: true,
     trustedOrigin: urlAfter,

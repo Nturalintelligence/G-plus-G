@@ -152,5 +152,11 @@ interface ProjectStateView {
 interface RunView {
   runId: string;
   status: string;
-  responses: Array<{ providerId: string; text: string; round: number }>;
+  responses: Array<{
+    providerId: string;
+    text: string;
+    round: number;
+    agreed?: boolean;
+  }>;
+  consensusReached?: boolean;
 }

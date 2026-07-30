@@ -72,6 +72,7 @@ function App(): React.JSX.Element {
   const [task, setTask] = useState("");
   const [mode, setMode] = useState("DEBATE");
   const [providers, setProviders] = useState(["chatgpt", "gemini"]);
+  const [starter, setStarter] = useState<"chatgpt" | "gemini">("chatgpt");
   const [stateText, setStateText] = useState(JSON.stringify(initialState, null, 2));
   const [projectState, setProjectState] = useState<ProjectStateView>(initialState);
   const [advancedStateOpen, setAdvancedStateOpen] = useState(false);
@@ -99,6 +100,9 @@ function App(): React.JSX.Element {
       setSettings(value);
       setMode(value.defaults.mode);
       setProviders(value.defaults.providers);
+      if (value.defaults.providers[0]) {
+        setStarter(value.defaults.providers[0]);
+      }
     }).catch((error) => setStatus(`Настройки не загружены: ${String(error)}`));
   }, []);
   useEffect(() => {
@@ -138,14 +142,22 @@ function App(): React.JSX.Element {
     setRunning(true);
     setStatus("Модели обсуждают сообщение…");
     try {
+      const orderedProviders = [
+        ...(providers.includes(starter) ? [starter] : []),
+        ...providers.filter((provider) => provider !== starter),
+      ];
       const output = await window.orchestrator.orchestration.run({
         projectId,
         mode,
         task: submittedTask,
-        providers,
+        providers: orderedProviders,
         limits: settings.defaults.limits,
       });
-      setStatus(output.status);
+      setStatus(
+        output.consensusReached
+          ? "Модели независимо подтвердили согласованное решение"
+          : output.status,
+      );
       await openProject(projectId);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -388,11 +400,26 @@ function App(): React.JSX.Element {
             />
             <div className="controls">
               <select aria-label="Режим оркестрации" value={mode} onChange={(event) => setMode(event.target.value)}>
-                <option value="DEBATE">Обсуждение — ИИ видят ответы друг друга</option>
-                <option value="SEQUENTIAL">Рецензирование — по очереди</option>
+                <option value="DEBATE">Рассуждение — до согласия или лимита</option>
+                <option value="SEQUENTIAL">Очередь — по одному ответу каждой модели</option>
                 <option value="PARALLEL">Независимые ответы</option>
                 <option value="MANUAL">Один ответ</option>
               </select>
+              {providers.length > 1 && mode !== "PARALLEL" ? (
+                <label className="starter-control">
+                  Первым отвечает
+                  <select
+                    aria-label="Первым отвечает"
+                    value={starter}
+                    onChange={(event) =>
+                      setStarter(event.target.value as "chatgpt" | "gemini")}
+                  >
+                    {providers.map((provider) => (
+                      <option key={provider} value={provider}>{provider}</option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
               {["chatgpt", "gemini"].map((provider) => (
                 <label key={provider}>
                   <input
@@ -408,6 +435,9 @@ function App(): React.JSX.Element {
                           (mode === "DEBATE" || mode === "SEQUENTIAL")
                         ) {
                           setMode("MANUAL");
+                        }
+                        if (!next.includes(starter) && next[0]) {
+                          setStarter(next[0] as "chatgpt" | "gemini");
                         }
                         return next;
                       })
@@ -430,7 +460,10 @@ function App(): React.JSX.Element {
           <article className="panel output" ref={outputRef}>
             {current?.transcript.length ? (
               current.transcript.map((entry) => (
-                <section className={`message ${entry.role.toLowerCase()}`} key={entry.id}>
+                <section
+                  className={`message ${entry.role.toLowerCase()} ${entry.providerId ?? ""}`}
+                  key={entry.id}
+                >
                   <header>
                     <strong>{entry.role === "USER" ? "Вы" : entry.providerId ?? entry.role}</strong>
                     {entry.round ? <small>ход {entry.round}</small> : null}

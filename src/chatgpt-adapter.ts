@@ -138,6 +138,15 @@ export class ChatGptAdapter implements ModelAdapter {
     await (await this.ensurePage()).goto(ref.url, { waitUntil: "domcontentloaded" });
   }
 
+  async getCurrentConversation(): Promise<ConversationRef> {
+    const page = await this.ensurePage();
+    await page.waitForURL(
+      (url) => url.hostname === "chatgpt.com" && url.pathname.includes("/c/"),
+      { timeout: 5_000 },
+    );
+    return { id: newId("webchat"), url: page.url() };
+  }
+
   async sendMessage(input: MessageInput): Promise<TurnRef>;
   async sendMessage(input: string): Promise<TurnResult>;
   async sendMessage(input: MessageInput | string): Promise<TurnRef | TurnResult> {
@@ -224,11 +233,28 @@ export class ChatGptAdapter implements ModelAdapter {
     const page = this.requirePage();
     if (await this.hasChallenge()) return "CHALLENGE_REQUIRED";
     const body = await page.locator("body").innerText().catch(() => "");
+    const loginControls = await this.visibleLoginControlCount();
     return inferSessionState(
       "chatgpt",
       body,
       (await this.findVisibleComposers()).length,
+      loginControls,
     );
+  }
+
+  private async visibleLoginControlCount(): Promise<number> {
+    const page = this.requirePage();
+    const candidates = [
+      page.getByRole("button", { name: /^(log in|sign up|войти|регистрация)$/i }),
+      page.getByRole("link", { name: /^(log in|sign up|войти|регистрация)$/i }),
+    ];
+    let count = 0;
+    for (const locator of candidates) {
+      for (let index = 0; index < (await locator.count()); index += 1) {
+        if (await locator.nth(index).isVisible().catch(() => false)) count += 1;
+      }
+    }
+    return count;
   }
 
   async waitForManualLogin(): Promise<void> {
@@ -271,12 +297,15 @@ export class ChatGptAdapter implements ModelAdapter {
     await this.waitUntilReady();
     await this.installMutationObserver();
     const before = await this.captureResponses();
+    const userMessageCountBefore = await page
+      .locator('[data-message-author-role="user"]')
+      .count();
     const composer = await this.getUniqueComposer();
     const startedAt = Date.now();
 
     await composer.fill(message);
     await this.submitComposer(composer, message);
-    await this.waitUntilSubmitted(message);
+    await this.waitUntilSubmitted(message, userMessageCountBefore);
     channel?.publish({ type: "MESSAGE_SUBMITTED", at: new Date().toISOString() });
 
     const response = await this.waitForBoundResponse(before, channel);
@@ -352,19 +381,23 @@ export class ChatGptAdapter implements ModelAdapter {
     return [];
   }
 
-  private async waitUntilSubmitted(message: string): Promise<void> {
+  private async waitUntilSubmitted(
+    message: string,
+    userMessageCountBefore: number,
+  ): Promise<void> {
     const page = this.requirePage();
     const normalized = normalizeText(message);
     await page.waitForFunction(
-      ({ expected }) => {
+      ({ expected, countBefore }) => {
         const userNodes = Array.from(
           document.querySelectorAll('[data-message-author-role="user"]'),
         );
+        if (userNodes.length > countBefore) return true;
         return userNodes.some(
           (node) => (node.textContent ?? "").replace(/\s+/g, " ").trim() === expected,
         );
       },
-      { expected: normalized },
+      { expected: normalized, countBefore: userMessageCountBefore },
       { timeout: 30_000 },
     );
   }

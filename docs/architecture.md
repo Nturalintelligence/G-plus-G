@@ -18,3 +18,9 @@ direct filesystem/database access.
 
 Every provider request is persisted as Conversation → Turn → Attempt → Message.
 The shared transcript is used by both later orchestration runs and artifact export.
+
+Each project owns one persisted web conversation reference per provider. A new
+project creates new ChatGPT/Gemini chats once; later user messages reopen those same
+URLs. Sequential mode follows the user-selected provider order exactly once.
+Debate mode alternates providers until limits apply or both independently emit a
+run-specific consensus token. A peer token alone never counts as agreement.

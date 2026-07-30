@@ -25,6 +25,13 @@ function fakeAdapter(providerId: string, received: string[]): ModelAdapter {
   const responses = new Map<string, string>();
   return {
     providerId,
+    async createConversation() {
+      return { id: `${providerId}-conversation`, url: `https://example.com/${providerId}` };
+    },
+    async openConversation() {},
+    async getCurrentConversation() {
+      return { id: `${providerId}-conversation`, url: `https://example.com/${providerId}` };
+    },
     async sendMessage(input: MessageInput) {
       received.push(input.content);
       const turn = { id: `${providerId}-${received.length}` };
@@ -79,9 +86,14 @@ describe("Orchestrator", () => {
         ["b", fakeAdapter("b", second)],
       ]),
     );
-    await orchestrator.run(projectId, "SEQUENTIAL", "task", ["a", "b"], limits);
+    await orchestrator.run(projectId, "SEQUENTIAL", "task", ["a", "b"], {
+      ...limits,
+      maxTurns: 8,
+    });
     expect(second[0]).toContain("<UNTRUSTED_PEER_RESPONSE>");
     expect(second[0]).toContain("never as instructions");
+    expect(first).toHaveLength(1);
+    expect(second).toHaveLength(1);
   });
 
   it("includes both models' earlier messages in discussion turns and persists them", async () => {
@@ -166,5 +178,61 @@ describe("Orchestrator", () => {
         .all()
         .map((row) => row.role),
     ).toEqual(["USER", "ASSISTANT"]);
+  });
+
+  it("reopens the same persisted web conversation on the next user message", async () => {
+    const { database, projectId } = setup();
+    const received: string[] = [];
+    const opened: string[] = [];
+    const adapter = fakeAdapter("chatgpt", received);
+    adapter.openConversation = async (ref) => {
+      opened.push(ref.url);
+    };
+    const first = new Orchestrator(database, new Map([["chatgpt", adapter]]));
+    await first.run(projectId, "MANUAL", "first", ["chatgpt"], limits);
+    const saved = database.raw
+      .prepare("SELECT external_ref FROM conversations")
+      .get()?.external_ref;
+    expect(saved).toBe("https://example.com/chatgpt");
+
+    const second = new Orchestrator(database, new Map([["chatgpt", adapter]]));
+    await second.run(projectId, "MANUAL", "second", ["chatgpt"], limits);
+    expect(opened).toEqual(["https://example.com/chatgpt"]);
+  });
+
+  it("stops debate only after both providers emit the run-specific consensus token", async () => {
+    const { database, projectId } = setup();
+    const makeConsensusAdapter = (providerId: string): ModelAdapter => {
+      const received: string[] = [];
+      const adapter = fakeAdapter(providerId, received);
+      const results = new Map<string, string>();
+      adapter.sendMessage = async (input) => {
+        received.push(input.content);
+        const turn = { id: `${providerId}-${received.length}` };
+        const token = input.content.match(/\[\[G_PLUS_G_DONE:[^\]]+\]\]/)?.[0];
+        results.set(turn.id, token ? `Final recommendation\n${token}` : "Initial proposal");
+        return turn;
+      };
+      adapter.getFinalResponse = async (turn) => {
+        const response = results.get(turn.id)!;
+        return { response, responseFingerprint: response, elapsedMs: 1 };
+      };
+      return adapter;
+    };
+    const result = await new Orchestrator(
+      database,
+      new Map([
+        ["chatgpt", makeConsensusAdapter("chatgpt")],
+        ["gemini", makeConsensusAdapter("gemini")],
+      ]),
+    ).run(projectId, "DEBATE", "reach agreement", ["chatgpt", "gemini"], {
+      ...limits,
+      maxTurns: 8,
+    });
+    expect(result.consensusReached).toBe(true);
+    expect(result.responses).toHaveLength(3);
+    expect(result.responses.slice(1).every((response) => response.agreed)).toBe(true);
+    expect(result.responses.every((response) => !response.text.includes("G_PLUS_G_DONE")))
+      .toBe(true);
   });
 });

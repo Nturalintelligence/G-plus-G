@@ -2,6 +2,30 @@
 
 All notable project checkpoints are recorded here.
 
+## [0.1.0-pre.7] - 2026-07-31
+
+### Added
+
+- User-selectable first participant for ordered multi-model conversations.
+- Strict sequential mode: first provider answers, second provider reviews, then stop.
+- Run-specific consensus protocol requiring independent completion tokens from both models.
+- Persistent per-project ChatGPT and Gemini web conversation URLs.
+- Distinct ChatGPT/Gemini message styling for a clearer dialogue view.
+
+### Fixed
+
+- Later project messages reopen the existing provider chats instead of creating new ones.
+- ChatGPT conversation text mentioning “log in” no longer causes a false logout state.
+- Submission confirmation accepts a newly appended user message and no longer depends
+  solely on exact rendering of a long orchestration prompt.
+- Consensus is checked before duplicate-response early termination.
+
+### Verification
+
+- 54 automated tests covering persistent refs, strict ordering, consensus, retries,
+  cancellation, and session inference.
+- Packaged UI coverage for provider starter selection.
+
 ## [0.1.0-pre.6] - 2026-07-31
 
 ### Fixed

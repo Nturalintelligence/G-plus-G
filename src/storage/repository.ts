@@ -175,6 +175,29 @@ export class ProjectRepository {
     return row ? mapConversation(row) : this.createConversation(projectId, providerId);
   }
 
+  updateConversationExternalRef(id: string, externalRef: string): Conversation {
+    const clean = externalRef.trim();
+    if (!/^https:\/\//i.test(clean)) throw new Error("Conversation reference must be HTTPS");
+    const updatedAt = new Date().toISOString();
+    const result = this.database.raw
+      .prepare(
+        `UPDATE conversations SET external_ref = ?, updated_at = ?
+         WHERE id = ? AND status = 'ACTIVE'`,
+      )
+      .run(clean, updatedAt, id);
+    if (result.changes !== 1) throw new Error(`Active conversation not found: ${id}`);
+    this.appendEventInternal("Conversation", id, "CONVERSATION_REF_UPDATED", {
+      externalRef: clean,
+    });
+    const row = this.database.raw
+      .prepare(
+        `SELECT id, project_id, provider_id, external_ref, status, created_at, updated_at
+         FROM conversations WHERE id = ?`,
+      )
+      .get(id);
+    return mapConversation(row!);
+  }
+
   beginTurn(conversationId: string): { turn: Turn; attempt: Attempt } {
     return this.database.transaction(() => {
       const ordinalRow = this.database.raw

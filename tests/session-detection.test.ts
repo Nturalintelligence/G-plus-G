@@ -19,4 +19,10 @@ describe("session detection precedence", () => {
       inferSessionState("gemini", "Too many requests. Try again later.", 1),
     ).toBe("RATE_LIMITED");
   });
+
+  it("does not treat conversation text mentioning login as an auth control", () => {
+    expect(
+      inferSessionState("chatgpt", "The solution says: log in to continue", 1, 0),
+    ).toBe("AUTHENTICATED");
+  });
 });

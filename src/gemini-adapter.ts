@@ -109,10 +109,18 @@ export class GeminiAdapter implements ModelAdapter {
     const page = await this.ensurePage();
     if (await this.hasChallenge()) return "CHALLENGE_REQUIRED";
     const body = await page.locator("body").innerText().catch(() => "");
+    const loginControls = page.getByRole("button", { name: /^(sign in|войти)$/i });
+    let visibleLoginControls = 0;
+    for (let index = 0; index < (await loginControls.count()); index += 1) {
+      if (await loginControls.nth(index).isVisible().catch(() => false)) {
+        visibleLoginControls += 1;
+      }
+    }
     return inferSessionState(
       "gemini",
       body,
       (await this.visibleComposers()).length,
+      visibleLoginControls,
     );
   }
 
@@ -141,6 +149,16 @@ export class GeminiAdapter implements ModelAdapter {
       throw new Error("Conversation URL must belong to gemini.google.com");
     }
     await (await this.ensurePage()).goto(ref.url, { waitUntil: "commit" });
+  }
+
+  async getCurrentConversation(): Promise<ConversationRef> {
+    const page = await this.ensurePage();
+    await page.waitForURL(
+      (url) =>
+        url.hostname === "gemini.google.com" && url.pathname.startsWith("/app/"),
+      { timeout: 5_000 },
+    );
+    return { id: newId("gemchat"), url: page.url() };
   }
 
   async sendMessage(input: MessageInput): Promise<TurnRef>;
@@ -229,13 +247,16 @@ export class GeminiAdapter implements ModelAdapter {
     const state = await this.waitUntilReady();
     if (state !== "AUTHENTICATED") throw new LoginRequiredError(`Gemini state: ${state}`);
     const before = await this.responses();
+    const userCountsBefore = await Promise.all(
+      USER_MESSAGES.map((selector) => this.ensurePage().then((page) => page.locator(selector).count())),
+    );
     const candidates = await this.visibleComposers();
     if (candidates.length !== 1) {
       throw new AmbiguousElementError(`Expected one Gemini composer, found ${candidates.length}`);
     }
     await candidates[0]!.fill(message);
     await this.submitComposer(candidates[0]!, message);
-    await this.waitUntilUserMessage(message);
+    await this.waitUntilUserMessage(message, userCountsBefore);
     channel?.publish({ type: "MESSAGE_SUBMITTED", at: new Date().toISOString() });
 
     const response = await this.waitForResponse(before, channel);
@@ -351,12 +372,16 @@ export class GeminiAdapter implements ModelAdapter {
     return false;
   }
 
-  private async waitUntilUserMessage(message: string): Promise<void> {
+  private async waitUntilUserMessage(
+    message: string,
+    countsBefore: number[],
+  ): Promise<void> {
     const expected = normalizeText(message);
     const deadline = Date.now() + 30_000;
     while (Date.now() < deadline) {
-      for (const selector of USER_MESSAGES) {
+      for (const [selectorIndex, selector] of USER_MESSAGES.entries()) {
         const nodes = (await this.ensurePage()).locator(selector);
+        if ((await nodes.count()) > (countsBefore[selectorIndex] ?? 0)) return;
         for (let index = 0; index < (await nodes.count()); index += 1) {
           const text = normalizeText(await nodes.nth(index).innerText().catch(() => ""));
           if (text === expected || text.includes(expected)) return;
