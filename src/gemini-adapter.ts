@@ -41,6 +41,18 @@ const RESPONSES = [
   ".model-response-text",
   "message-content",
 ];
+const SEND_BUTTONS = [
+  'button[aria-label*="Send" i]',
+  'button[aria-label*="Отправ" i]',
+  "button.send-button",
+  'button[data-test-id*="send" i]',
+];
+const USER_MESSAGES = [
+  "user-query",
+  '[data-message-author-role="user"]',
+  ".user-query-content",
+  "message-content",
+];
 const CHALLENGE = [
   /captcha/i,
   /verify.*human/i,
@@ -52,6 +64,7 @@ interface GeminiTurn {
   channel: TurnChannel;
   result: Promise<TurnResult>;
   resolveManual: (text: string) => void;
+  rejectCancellation: (error: Error) => void;
 }
 
 export class GeminiAdapter implements ModelAdapter {
@@ -134,18 +147,23 @@ export class GeminiAdapter implements ModelAdapter {
     const ref = { id: newId("gemturn") };
     const channel = new TurnChannel();
     let resolveManual: (text: string) => void = () => undefined;
+    let rejectCancellation: (error: Error) => void = () => undefined;
     const manual = new Promise<string>((resolveManualPromise) => {
       resolveManual = resolveManualPromise;
     });
+    const cancellation = new Promise<never>((_resolve, reject) => {
+      rejectCancellation = reject;
+    });
     const result = Promise.race([
       this.sendAndWait(input.content, channel),
+      cancellation,
       manual.then((response) => ({
         response,
         responseFingerprint: fingerprint(response),
         elapsedMs: 0,
       })),
     ]).finally(() => channel.finish());
-    this.turns.set(ref.id, { channel, result, resolveManual });
+    this.turns.set(ref.id, { channel, result, resolveManual, rejectCancellation });
     return ref;
   }
 
@@ -159,9 +177,13 @@ export class GeminiAdapter implements ModelAdapter {
 
   async cancel(turn: TurnRef): Promise<void> {
     const active = this.requireTurn(turn);
-    const stop = (await this.ensurePage()).getByRole("button", { name: /stop|останов/i });
-    if (await stop.isVisible().catch(() => false)) await stop.click();
+    const page = this.page;
+    if (page && !page.isClosed()) {
+      const stop = page.getByRole("button", { name: /stop|останов/i });
+      if (await stop.isVisible().catch(() => false)) await stop.click().catch(() => undefined);
+    }
     active.channel.publish({ type: "CANCELLED", at: new Date().toISOString() });
+    active.rejectCancellation(new Error(`Gemini turn cancelled: ${turn.id}`));
     active.channel.finish();
   }
 
@@ -205,7 +227,7 @@ export class GeminiAdapter implements ModelAdapter {
       throw new AmbiguousElementError(`Expected one Gemini composer, found ${candidates.length}`);
     }
     await candidates[0]!.fill(message);
-    await candidates[0]!.press("Enter");
+    await this.submitComposer(candidates[0]!, message);
     channel?.publish({ type: "MESSAGE_SUBMITTED", at: new Date().toISOString() });
 
     const response = await this.waitForResponse(before, channel);
@@ -274,6 +296,71 @@ export class GeminiAdapter implements ModelAdapter {
   private async visibleComposers(): Promise<Locator[]> {
     const page = await this.ensurePage();
     for (const selector of COMPOSERS) {
+      const locator = page.locator(selector);
+      const visible: Locator[] = [];
+      for (let index = 0; index < (await locator.count()); index += 1) {
+        const candidate = locator.nth(index);
+        if (await candidate.isVisible().catch(() => false)) visible.push(candidate);
+      }
+      if (visible.length > 0) return visible;
+    }
+    return [];
+  }
+
+  private async submitComposer(composer: Locator, message: string): Promise<void> {
+    await composer.press("Enter");
+    if (await this.composerWasCleared(composer)) {
+      await this.waitUntilUserMessage(message);
+      return;
+    }
+
+    const buttons = await this.visibleBySelectors(SEND_BUTTONS);
+    if (buttons.length !== 1) {
+      throw new AmbiguousElementError(
+        `Gemini message was not submitted by Enter; expected one send button, found ${buttons.length}`,
+      );
+    }
+    await buttons[0]!.click();
+    await this.waitUntilUserMessage(message);
+  }
+
+  private async composerWasCleared(composer: Locator): Promise<boolean> {
+    const deadline = Date.now() + 3_000;
+    while (Date.now() < deadline) {
+      const text = normalizeText(
+        await composer
+          .evaluate((element) =>
+            element instanceof HTMLTextAreaElement
+              ? element.value
+              : (element.textContent ?? ""),
+          )
+          .catch(() => ""),
+      );
+      if (!text) return true;
+      await (await this.ensurePage()).waitForTimeout(150);
+    }
+    return false;
+  }
+
+  private async waitUntilUserMessage(message: string): Promise<void> {
+    const expected = normalizeText(message);
+    const deadline = Date.now() + 30_000;
+    while (Date.now() < deadline) {
+      for (const selector of USER_MESSAGES) {
+        const nodes = (await this.ensurePage()).locator(selector);
+        for (let index = 0; index < (await nodes.count()); index += 1) {
+          const text = normalizeText(await nodes.nth(index).innerText().catch(() => ""));
+          if (text === expected || text.includes(expected)) return;
+        }
+      }
+      await (await this.ensurePage()).waitForTimeout(250);
+    }
+    throw new TurnTimeoutError("Gemini did not confirm that the user message was submitted");
+  }
+
+  private async visibleBySelectors(selectors: readonly string[]): Promise<Locator[]> {
+    const page = await this.ensurePage();
+    for (const selector of selectors) {
       const locator = page.locator(selector);
       const visible: Locator[] = [];
       for (let index = 0; index < (await locator.count()); index += 1) {

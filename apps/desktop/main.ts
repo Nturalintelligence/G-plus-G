@@ -11,6 +11,7 @@ import { ProjectRepository } from "../../src/storage/repository.js";
 let mainWindow: BrowserWindow | null = null;
 let database: AppDatabase | null = null;
 let activeOrchestrator: Orchestrator | null = null;
+let quitAfterCleanup = false;
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -163,7 +164,19 @@ app.on("activate", () => {
 });
 
 app.on("window-all-closed", () => {
+  if (process.platform !== "darwin") app.quit();
+});
+
+app.on("before-quit", (event) => {
+  if (!activeOrchestrator || quitAfterCleanup) return;
+  event.preventDefault();
+  void activeOrchestrator.stop().finally(() => {
+    quitAfterCleanup = true;
+    app.quit();
+  });
+});
+
+app.on("will-quit", () => {
   database?.close();
   database = null;
-  if (process.platform !== "darwin") app.quit();
 });

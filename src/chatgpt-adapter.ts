@@ -43,6 +43,12 @@ const COMPOSER_SELECTORS = [
   'form textarea',
   'form [contenteditable="true"]',
 ];
+const SEND_BUTTON_SELECTORS = [
+  '[data-testid="send-button"]',
+  'button[aria-label*="Send" i]',
+  'button[aria-label*="Отправ" i]',
+  'form button[type="submit"]',
+];
 const CHALLENGE_PATTERNS = [
   /captcha/i,
   /verify you are human/i,
@@ -61,6 +67,7 @@ interface ActiveTurn {
   channel: TurnChannel;
   result: Promise<TurnResult>;
   resolveManual: (response: string) => void;
+  rejectCancellation: (error: Error) => void;
 }
 
 export class ChatGptAdapter implements ModelAdapter {
@@ -136,19 +143,29 @@ export class ChatGptAdapter implements ModelAdapter {
     const ref: TurnRef = { id: newId("webturn") };
     const channel = new TurnChannel();
     let manualResolver: (response: string) => void = () => undefined;
+    let rejectCancellation: (error: Error) => void = () => undefined;
     const manual = new Promise<string>((resolve) => {
       manualResolver = resolve;
+    });
+    const cancellation = new Promise<never>((_resolve, reject) => {
+      rejectCancellation = reject;
     });
     const automated = this.sendAndWait(input.content, channel);
     const result = Promise.race([
       automated,
+      cancellation,
       manual.then((response) => ({
         response,
         responseFingerprint: fingerprint(response),
         elapsedMs: 0,
       })),
     ]).finally(() => channel.finish());
-    this.turns.set(ref.id, { channel, result, resolveManual: manualResolver });
+    this.turns.set(ref.id, {
+      channel,
+      result,
+      resolveManual: manualResolver,
+      rejectCancellation,
+    });
     return ref;
   }
 
@@ -163,10 +180,15 @@ export class ChatGptAdapter implements ModelAdapter {
 
   async cancel(turn: TurnRef): Promise<void> {
     const active = this.requireTurn(turn);
-    const page = await this.ensurePage();
-    const stop = page.getByRole("button", { name: /stop generating|остановить создание/i });
-    if (await stop.isVisible().catch(() => false)) await stop.click();
+    const page = this.page;
+    if (page && !page.isClosed()) {
+      const stop = page.getByRole("button", {
+        name: /stop generating|остановить создание/i,
+      });
+      if (await stop.isVisible().catch(() => false)) await stop.click().catch(() => undefined);
+    }
     active.channel.publish({ type: "CANCELLED", at: new Date().toISOString() });
+    active.rejectCancellation(new Error(`ChatGPT turn cancelled: ${turn.id}`));
     active.channel.finish();
   }
 
@@ -245,8 +267,7 @@ export class ChatGptAdapter implements ModelAdapter {
     const startedAt = Date.now();
 
     await composer.fill(message);
-    await composer.press("Enter");
-    await this.waitUntilSubmitted(message);
+    await this.submitComposer(composer, message);
     channel?.publish({ type: "MESSAGE_SUBMITTED", at: new Date().toISOString() });
 
     const response = await this.waitForBoundResponse(before, channel);
@@ -337,6 +358,55 @@ export class ChatGptAdapter implements ModelAdapter {
       { expected: normalized },
       { timeout: 30_000 },
     );
+  }
+
+  private async submitComposer(composer: Locator, message: string): Promise<void> {
+    await composer.press("Enter");
+    if (await this.composerWasCleared(composer)) {
+      await this.waitUntilSubmitted(message);
+      return;
+    }
+
+    const buttons = await this.findVisibleBySelectors(SEND_BUTTON_SELECTORS);
+    if (buttons.length !== 1) {
+      throw new AmbiguousElementError(
+        `ChatGPT message was not submitted by Enter; expected one send button, found ${buttons.length}`,
+      );
+    }
+    await buttons[0]!.click();
+    await this.waitUntilSubmitted(message);
+  }
+
+  private async composerWasCleared(composer: Locator): Promise<boolean> {
+    const deadline = Date.now() + 3_000;
+    while (Date.now() < deadline) {
+      const text = normalizeText(
+        await composer
+          .evaluate((element) =>
+            element instanceof HTMLTextAreaElement
+              ? element.value
+              : (element.textContent ?? ""),
+          )
+          .catch(() => ""),
+      );
+      if (!text) return true;
+      await this.requirePage().waitForTimeout(150);
+    }
+    return false;
+  }
+
+  private async findVisibleBySelectors(selectors: readonly string[]): Promise<Locator[]> {
+    const page = this.requirePage();
+    for (const selector of selectors) {
+      const locator = page.locator(selector);
+      const visible: Locator[] = [];
+      for (let index = 0; index < (await locator.count()); index += 1) {
+        const candidate = locator.nth(index);
+        if (await candidate.isVisible().catch(() => false)) visible.push(candidate);
+      }
+      if (visible.length > 0) return visible;
+    }
+    return [];
   }
 
   private async waitForBoundResponse(

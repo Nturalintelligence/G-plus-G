@@ -1,6 +1,6 @@
 import { fingerprint } from "../fingerprint.js";
 import { newId } from "../ids.js";
-import type { ModelAdapter } from "../adapters/adapter-contract.js";
+import type { ModelAdapter, TurnRef } from "../adapters/adapter-contract.js";
 import type { AppDatabase } from "../storage/database.js";
 import { buildDebatePrompt, buildPeerReviewPrompt } from "./prompt-builder.js";
 import {
@@ -35,6 +35,7 @@ export class Orchestrator {
   private paused = false;
   private resumeWaiters: Array<() => void> = [];
   private activeRunId: string | null = null;
+  private readonly activeTurns = new Map<string, TurnRef>();
 
   constructor(
     private readonly database: AppDatabase,
@@ -52,10 +53,11 @@ export class Orchestrator {
     this.resumeWaiters.splice(0).forEach((resolve) => resolve());
   }
 
-  stop(): void {
+  async stop(): Promise<void> {
     this.stopped = true;
     if (this.activeRunId) this.setStatus(this.activeRunId, "STOPPED");
     this.resume();
+    await this.cancelActiveTurns();
   }
 
   async run(
@@ -78,14 +80,19 @@ export class Orchestrator {
     try {
       this.setStatus(runId, "RUNNING");
       if (mode === "PARALLEL") {
-        const independent = await Promise.all(
-          providerIds.map(async (providerId) => ({
-            providerId,
-            text: await this.ask(providerId, task, limits, hooks),
-            round: 1,
-          })),
-        );
-        responses.push(...independent);
+        try {
+          const independent = await Promise.all(
+            providerIds.map(async (providerId) => ({
+              providerId,
+              text: await this.ask(providerId, task, limits, hooks),
+              round: 1,
+            })),
+          );
+          responses.push(...independent);
+        } catch (error) {
+          await this.cancelActiveTurns();
+          throw error;
+        }
       } else if (mode === "MANUAL") {
         responses.push({
           providerId: providerIds[0]!,
@@ -142,6 +149,7 @@ export class Orchestrator {
     for (let attempt = 0; attempt <= limits.maxRetries; attempt += 1) {
       try {
         const turn = await adapter.sendMessage({ content: edited });
+        this.activeTurns.set(providerId, turn);
         let timer: ReturnType<typeof setTimeout> | undefined;
         const timeout = new Promise<never>((_, reject) => {
           timer = setTimeout(
@@ -151,16 +159,30 @@ export class Orchestrator {
         });
         try {
           return (await Promise.race([adapter.getFinalResponse(turn), timeout])).response;
+        } catch (error) {
+          await adapter.cancel(turn).catch(() => undefined);
+          throw error;
         } finally {
+          this.activeTurns.delete(providerId);
           if (timer) clearTimeout(timer);
         }
       } catch (error) {
         lastError = error;
-        if (attempt === limits.maxRetries) break;
+        if (attempt === limits.maxRetries || isNonRetryableTurnError(error)) break;
         await adapter.recover();
       }
     }
     throw lastError;
+  }
+
+  private async cancelActiveTurns(): Promise<void> {
+    const pending = [...this.activeTurns.entries()];
+    this.activeTurns.clear();
+    await Promise.allSettled(
+      pending.map(([providerId, turn]) =>
+        this.adapters.get(providerId)?.cancel(turn),
+      ),
+    );
   }
 
   private async waitIfPaused(): Promise<void> {
@@ -211,4 +233,11 @@ export class Orchestrator {
         .run(newId("evt"), id, JSON.stringify({ status }), now);
     });
   }
+}
+
+function isNonRetryableTurnError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /target (page|context|browser).*closed|turn cancelled|profile is already in use/i.test(
+    message,
+  );
 }
