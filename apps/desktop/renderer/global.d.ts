@@ -17,6 +17,9 @@ interface Window {
         path?: string;
       }>;
     };
+    quality: {
+      dashboard(): Promise<QualityDashboardView>;
+    };
     projects: {
       list(): Promise<ProjectView[]>;
       create(name: string): Promise<ProjectView>;
@@ -75,6 +78,22 @@ interface ReleaseInfoView {
   platform: string;
   dataPath: string;
   generatedAt: string;
+}
+
+interface MetricSummaryView {
+  name: string;
+  count: number;
+  average: number;
+  minimum: number;
+  maximum: number;
+}
+
+interface QualityDashboardView {
+  generatedAt: string;
+  windowDays: number;
+  totalSamples: number;
+  overall: MetricSummaryView[];
+  providers: Record<string, MetricSummaryView[]>;
 }
 
 interface ProjectView {

@@ -96,6 +96,7 @@ export class Orchestrator {
     });
     const responses: RunOutput["responses"] = [];
     const startedAt = Date.now();
+    const runMetrics = new QualityMetrics(this.database);
 
     try {
       this.setStatus(runId, "RUNNING");
@@ -199,14 +200,28 @@ export class Orchestrator {
       }
       const status: RunStatus = this.stopped ? "STOPPED" : "COMPLETED";
       this.setStatus(runId, status);
+      runMetrics.record("orchestration.run.success", status === "COMPLETED" ? 1 : 0, {
+        mode: effectiveMode,
+      });
+      runMetrics.record("orchestration.run.elapsed_ms", Date.now() - startedAt, {
+        mode: effectiveMode,
+      });
       return { runId, status, responses };
     } catch (error) {
       await this.cancelActiveTurns();
       if (this.stopped) {
         this.setStatus(runId, "STOPPED");
+        runMetrics.record("orchestration.run.success", 0, { mode: effectiveMode });
+        runMetrics.record("orchestration.run.elapsed_ms", Date.now() - startedAt, {
+          mode: effectiveMode,
+        });
         return { runId, status: "STOPPED", responses };
       }
       this.setStatus(runId, "FAILED");
+      runMetrics.record("orchestration.run.success", 0, { mode: effectiveMode });
+      runMetrics.record("orchestration.run.elapsed_ms", Date.now() - startedAt, {
+        mode: effectiveMode,
+      });
       throw error;
     } finally {
       this.activeRunId = null;

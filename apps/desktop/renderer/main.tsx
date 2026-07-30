@@ -30,6 +30,24 @@ const stateSections: Array<{
   { key: "acceptanceCriteria", title: "Критерии приёмки", empty: "Добавьте критерий", rationale: false },
 ];
 
+const metricLabels: Record<string, string> = {
+  "provider.turn.success": "Успешность",
+  "provider.turn.elapsed_ms": "Время ответа",
+  "provider.turn.retry_count": "Повторные попытки",
+  "orchestration.run.success": "Успешность запусков",
+  "orchestration.run.elapsed_ms": "Время запуска",
+};
+
+function metricValue(metric: MetricSummaryView): string {
+  if (metric.name.endsWith(".success")) return `${Math.round(metric.average * 100)}%`;
+  if (metric.name.endsWith("_ms")) {
+    return metric.average >= 60_000
+      ? `${(metric.average / 60_000).toFixed(1)} мин`
+      : `${(metric.average / 1_000).toFixed(1)} сек`;
+  }
+  return metric.average.toFixed(metric.average % 1 === 0 ? 0 : 1);
+}
+
 const fallbackSettings: AppSettingsView = {
   schemaVersion: 1,
   profile: { displayName: "" },
@@ -71,6 +89,7 @@ function App(): React.JSX.Element {
     detail: string;
   }>>([]);
   const [maintenanceBusy, setMaintenanceBusy] = useState(false);
+  const [qualityDashboard, setQualityDashboard] = useState<QualityDashboardView | null>(null);
   const outputRef = useRef<HTMLElement>(null);
 
   const refresh = async (): Promise<void> => setProjects(await window.orchestrator.projects.list());
@@ -99,6 +118,9 @@ function App(): React.JSX.Element {
     }, 1_000);
     return () => window.clearInterval(timer);
   }, [running, current?.project.id]);
+  useEffect(() => {
+    if (settingsOpen) void loadQualityDashboard();
+  }, [settingsOpen]);
 
   async function openProject(id: string): Promise<void> {
     const details = await window.orchestrator.projects.open(id);
@@ -173,6 +195,14 @@ function App(): React.JSX.Element {
       setStatus(`Диагностика не выполнена: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
       setMaintenanceBusy(false);
+    }
+  }
+
+  async function loadQualityDashboard(): Promise<void> {
+    try {
+      setQualityDashboard(await window.orchestrator.quality.dashboard());
+    } catch (error) {
+      setStatus(`Метрики не загружены: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
@@ -666,6 +696,62 @@ function App(): React.JSX.Element {
                   <label>Плотность<select value={settings.appearance.density} onChange={(event) => setSettings((value) => ({ ...value, appearance: { ...value.appearance, density: event.target.value as AppSettingsView["appearance"]["density"] } }))}><option value="comfortable">Обычная</option><option value="compact">Компактная</option></select></label>
                   <label>Масштаб текста, %<input type="number" min={80} max={140} step={5} value={settings.appearance.fontScale} onChange={(event) => setSettings((value) => ({ ...value, appearance: { ...value.appearance, fontScale: Number(event.target.value) } }))} /></label>
                 </div>
+              </fieldset>
+              <fieldset>
+                <legend>Центр качества · последние 30 дней</legend>
+                <div className="quality-heading">
+                  <p className="settings-note">
+                    Локальная статистика помогает отличить сбой провайдера от ошибки
+                    приложения. Тексты сообщений в метрики не попадают.
+                  </p>
+                  <button onClick={() => void loadQualityDashboard()}>Обновить</button>
+                </div>
+                {qualityDashboard?.totalSamples ? (
+                  <>
+                    <div className="quality-providers">
+                      {Object.entries(qualityDashboard.providers).map(([provider, metrics]) => {
+                        const success = metrics.find((metric) =>
+                          metric.name === "provider.turn.success");
+                        const elapsed = metrics.find((metric) =>
+                          metric.name === "provider.turn.elapsed_ms");
+                        const retries = metrics.find((metric) =>
+                          metric.name === "provider.turn.retry_count");
+                        return (
+                          <article className="provider-score" key={provider}>
+                            <header>
+                              <strong>{provider}</strong>
+                              <span data-score={
+                                !success ? "unknown" : success.average >= .98 ? "good"
+                                  : success.average >= .85 ? "warn" : "bad"
+                              }>
+                                {success ? metricValue(success) : "нет данных"}
+                              </span>
+                            </header>
+                            <dl>
+                              <div><dt>Ходов</dt><dd>{success?.count ?? 0}</dd></div>
+                              <div><dt>Средний ответ</dt><dd>{elapsed ? metricValue(elapsed) : "—"}</dd></div>
+                              <div><dt>Повторы</dt><dd>{retries ? metricValue(retries) : "—"}</dd></div>
+                            </dl>
+                          </article>
+                        );
+                      })}
+                    </div>
+                    <div className="metric-grid">
+                      {qualityDashboard.overall.map((metric) => (
+                        <article className="metric-card" key={metric.name}>
+                          <span>{metricLabels[metric.name] ?? metric.name}</span>
+                          <strong>{metricValue(metric)}</strong>
+                          <small>{metric.count} измерений · min {Math.round(metric.minimum)} · max {Math.round(metric.maximum)}</small>
+                        </article>
+                      ))}
+                    </div>
+                  </>
+                ) : (
+                  <div className="quality-empty">
+                    <strong>Пока недостаточно данных</strong>
+                    <span>Метрики появятся после первых запусков моделей.</span>
+                  </div>
+                )}
               </fieldset>
               <fieldset>
                 <legend>Диагностика и данные</legend>

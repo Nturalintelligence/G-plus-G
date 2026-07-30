@@ -11,6 +11,9 @@ const api = {
     resetSession: (provider) =>
       ipcRenderer.invoke("maintenance:resetSession", provider),
   },
+  quality: {
+    dashboard: () => ipcRenderer.invoke("quality:dashboard"),
+  },
   projects: {
     list: () => ipcRenderer.invoke("projects:list"),
     create: (name) => ipcRenderer.invoke("projects:create", name),

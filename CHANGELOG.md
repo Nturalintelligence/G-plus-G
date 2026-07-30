@@ -2,6 +2,21 @@
 
 All notable project checkpoints are recorded here.
 
+## [0.1.0-pre.5] - 2026-07-31
+
+### Added
+
+- Local 30-day Quality Center in profile settings.
+- Per-provider success rate, average latency, turn count, and retry indicators.
+- Traffic-light provider health scoring and overall metric cards.
+- Orchestration-level success and elapsed-time measurements.
+- Safe packaged IPC access to aggregate metrics without message content.
+
+### Verification
+
+- 49 automated tests, including provider-tag aggregation and reporting-window validation.
+- Packaged smoke coverage for the Quality Center UI and API.
+
 ## [0.1.0-pre.4] - 2026-07-31
 
 ### Added

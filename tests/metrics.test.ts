@@ -16,6 +16,27 @@ describe("quality metrics", () => {
       minimum: 100,
       maximum: 300,
     });
+    metrics.record("provider.turn.success", 1, { providerId: "chatgpt" });
+    metrics.record("provider.turn.success", 0, { providerId: "gemini" });
+    const dashboard = metrics.dashboard();
+    expect(dashboard.totalSamples).toBe(4);
+    expect(dashboard.providers.chatgpt).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "provider.turn.success", average: 1 }),
+      ]),
+    );
+    expect(dashboard.providers.gemini).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "provider.turn.success", average: 0 }),
+      ]),
+    );
+    database.close();
+  });
+
+  it("rejects unsafe reporting windows", () => {
+    const database = new AppDatabase(":memory:");
+    database.migrate();
+    expect(() => new QualityMetrics(database).dashboard(0)).toThrow();
     database.close();
   });
 });

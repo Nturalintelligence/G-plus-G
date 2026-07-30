@@ -45,11 +45,13 @@ try {
 
   await page.getByRole("button", { name: /Профиль.*Настройки/ }).click();
   await page.getByRole("heading", { name: "Профиль и настройки" }).waitFor();
+  await page.getByText("Центр качества · последние 30 дней", { exact: true }).waitFor();
   await page.getByLabel("Отображаемое имя").fill("Smoke tester");
   await page.getByRole("button", { name: "Сохранить", exact: true }).click();
   await page.getByRole("button", { name: /Smoke tester.*Настройки/ }).waitFor();
 
   const preflight = await page.evaluate(() => window.orchestrator.system.preflight());
+  const qualityDashboard = await page.evaluate(() => window.orchestrator.quality.dashboard());
   const releaseInfo = await page.evaluate(() => window.orchestrator.system.info());
   const backupPath = await page.evaluate(() => window.orchestrator.maintenance.backup());
   await access(join(backupPath, "manifest.json"));
@@ -81,6 +83,7 @@ try {
     trustedOrigin: urlAfter,
     unsafePopupDenied: true,
     preflight,
+    qualityDashboardAvailable: Array.isArray(qualityDashboard.overall),
     releaseInfo,
     backupCreated: backupPath,
   }, null, 2));

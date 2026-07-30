@@ -20,6 +20,8 @@ An item is not considered complete merely because an interface or UI control exi
 - Guided Project State constructor with section cards, decision rationale, response
   traceability, draft versioning, and an advanced JSON mode.
 - Redacted JSONL application log and per-failure diagnostic reports.
+- Local 30-day quality dashboard with provider success, latency, retries, run
+  outcomes, and traffic-light health indicators.
 
 ## Required acceptance work
 

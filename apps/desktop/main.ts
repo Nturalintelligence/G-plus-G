@@ -33,6 +33,7 @@ import {
   runPreflight,
 } from "../../src/release/release-tools.js";
 import { resetProviderSession } from "../../src/maintenance.js";
+import { QualityMetrics } from "../../src/observability/metrics.js";
 
 let mainWindow: BrowserWindow | null = null;
 let database: AppDatabase | null = null;
@@ -200,6 +201,7 @@ function registerIpc(): void {
   const settingsStore = new SettingsStore(dataPath("settings.json"));
   handle("system:preflight", () => runPreflight());
   handle("system:info", () => getReleaseInfo());
+  handle("quality:dashboard", () => new QualityMetrics(db()).dashboard());
   handle("system:openDataFolder", async () => {
     const error = await shell.openPath(dataPath());
     if (error) throw new Error(error);
