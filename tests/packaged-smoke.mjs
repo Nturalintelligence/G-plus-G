@@ -30,7 +30,7 @@ try {
     throw new Error("Provider starter order was not selectable");
   }
 
-  await page.getByText("Требования", { exact: true }).click();
+  await page.locator("summary").filter({ hasText: "Требования" }).click();
   await page.getByRole("button", { name: "+ Добавить", exact: true }).first().click();
   await page.getByLabel("Требования, пункт 1").fill("Приложение сохраняет проект локально");
   await page.getByLabel("Критерии приёмки, пункт 1").fill("Проект открывается после перезапуска");
@@ -52,8 +52,10 @@ try {
 
   await page.getByRole("button", { name: /Профиль.*Настройки/ }).click();
   await page.getByRole("heading", { name: "Профиль и настройки" }).waitFor();
+  await page.getByRole("button", { name: /Центр качества/ }).click();
   await page.getByText("Центр качества · последние 30 дней", { exact: true }).waitFor();
-  await page.getByLabel("Отображаемое имя").fill("Smoke tester");
+  await page.getByRole("button", { name: "👤 Профиль", exact: true }).click();
+  await page.getByPlaceholder("Отображаемое имя").fill("Smoke tester");
   await page.getByRole("button", { name: "Сохранить", exact: true }).click();
   await page.getByRole("button", { name: /Smoke tester.*Настройки/ }).waitFor();
 
