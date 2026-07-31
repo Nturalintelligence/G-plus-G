@@ -60,6 +60,7 @@ const fallbackSettings: AppSettingsView = {
       maxSessionMs: 900_000,
       maxRetries: 1,
       confirmationEvery: 2,
+      requireConfirmation: false,
     },
   },
   appearance: { theme: "dark", density: "comfortable", fontScale: 100 },
@@ -467,6 +468,28 @@ function App(): React.JSX.Element {
                 <option value="PARALLEL">Независимые ответы</option>
                 <option value="MANUAL">Один ответ</option>
               </select>
+              {mode === "DEBATE" ? (
+                <label className="starter-control">
+                  Продолжение обсуждения
+                  <select
+                    aria-label="Продолжение обсуждения"
+                    value={settings.defaults.limits.requireConfirmation ? "approval" : "auto"}
+                    onChange={(event) => setSettings((value) => ({
+                      ...value,
+                      defaults: {
+                        ...value.defaults,
+                        limits: {
+                          ...value.defaults.limits,
+                          requireConfirmation: event.target.value === "approval",
+                        },
+                      },
+                    }))}
+                  >
+                    <option value="auto">Автономно — до консенсуса</option>
+                    <option value="approval">С подтверждением пользователя</option>
+                  </select>
+                </label>
+              ) : null}
               {providers.length > 1 && mode !== "PARALLEL" ? (
                 <label className="starter-control">
                   Первым отвечает
@@ -900,6 +923,27 @@ function App(): React.JSX.Element {
                     </fieldset>
                     <fieldset>
                       <legend>Ограничения оркестрации</legend>
+                      <label className="settings-toggle">
+                        <input
+                          type="checkbox"
+                          checked={settings.defaults.limits.requireConfirmation === true}
+                          onChange={(event) => setSettings((value) => ({
+                            ...value,
+                            defaults: {
+                              ...value.defaults,
+                              limits: {
+                                ...value.defaults.limits,
+                                requireConfirmation: event.target.checked,
+                              },
+                            },
+                          }))}
+                        />
+                        Спрашивать разрешение на продолжение обсуждения
+                      </label>
+                      <p className="settings-help">
+                        Выключено: модели работают до независимого консенсуса или защитного лимита ходов.
+                        Включено: G+G останавливается через заданный интервал и ждёт вашего решения.
+                      </p>
                       <div className="settings-grid">
                         <label>Максимум ходов
                           <select
@@ -948,8 +992,9 @@ function App(): React.JSX.Element {
                             <option value={14400000}>4 часа</option>
                           </select>
                         </label>
-                        <label>Подтверждение каждые N ходов
+                        <label>Интервал подтверждения (ходов)
                           <select
+                            disabled={settings.defaults.limits.requireConfirmation !== true}
                             value={settings.defaults.limits.confirmationEvery}
                             onChange={(event) => updateLimit("confirmationEvery", event.target.value)}
                           >

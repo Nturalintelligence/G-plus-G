@@ -78,6 +78,7 @@ interface AppSettingsView {
       maxSessionMs: number;
       maxRetries: number;
       confirmationEvery: number;
+      requireConfirmation?: boolean;
     };
   };
   appearance: {

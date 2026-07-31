@@ -137,6 +137,9 @@ export function parseSettings(value: unknown): AppSettings {
     maxSessionMs: integer(limits.maxSessionMs, defaultLimits.maxSessionMs),
     maxRetries: integer(limits.maxRetries, defaultLimits.maxRetries),
     confirmationEvery: integer(limits.confirmationEvery, defaultLimits.confirmationEvery),
+    requireConfirmation: typeof limits.requireConfirmation === "boolean"
+      ? limits.requireConfirmation
+      : defaultLimits.requireConfirmation === true,
   };
   validateLimits(parsedLimits);
   if (parsedLimits.maxTurnMs > 1_800_000) throw new Error("Turn timeout cannot exceed 30 minutes");

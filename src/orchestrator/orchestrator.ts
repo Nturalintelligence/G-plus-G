@@ -238,7 +238,11 @@ export class Orchestrator {
           const hash = fingerprint(text);
           if (seen.has(hash)) break;
           seen.add(hash);
-          if ((turn + 1) % limits.confirmationEvery === 0 && hooks.confirm) {
+          if (
+            limits.requireConfirmation === true &&
+            (turn + 1) % limits.confirmationEvery === 0 &&
+            hooks.confirm
+          ) {
             this.setStatus(runId, "AWAITING_CONFIRMATION");
             if (!(await hooks.confirm(`Continue after ${turn + 1} turns?`))) break;
             this.setStatus(runId, "RUNNING");

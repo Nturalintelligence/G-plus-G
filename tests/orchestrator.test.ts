@@ -215,6 +215,52 @@ describe("Orchestrator", () => {
     expect(opened).toEqual(["https://example.com/chatgpt"]);
   });
 
+  it("separates autonomous debate from user-approved continuation", async () => {
+    const autonomousSetup = setup();
+    let autonomousConfirmations = 0;
+    const autonomous = await new Orchestrator(
+      autonomousSetup.database,
+      new Map([
+        ["a", fakeAdapter("a", [])],
+        ["b", fakeAdapter("b", [])],
+      ]),
+    ).run(autonomousSetup.projectId, "DEBATE", "improve this", ["a", "b"], {
+      ...limits,
+      maxTurns: 4,
+      confirmationEvery: 2,
+      requireConfirmation: false,
+    }, {
+      confirm: async () => {
+        autonomousConfirmations += 1;
+        return false;
+      },
+    });
+    expect(autonomous.responses.length).toBeGreaterThan(2);
+    expect(autonomousConfirmations).toBe(0);
+
+    const reviewedSetup = setup();
+    let reviewedConfirmations = 0;
+    const reviewed = await new Orchestrator(
+      reviewedSetup.database,
+      new Map([
+        ["a", fakeAdapter("a", [])],
+        ["b", fakeAdapter("b", [])],
+      ]),
+    ).run(reviewedSetup.projectId, "DEBATE", "improve this", ["a", "b"], {
+      ...limits,
+      maxTurns: 4,
+      confirmationEvery: 2,
+      requireConfirmation: true,
+    }, {
+      confirm: async () => {
+        reviewedConfirmations += 1;
+        return false;
+      },
+    });
+    expect(reviewed.responses).toHaveLength(2);
+    expect(reviewedConfirmations).toBe(1);
+  });
+
   it("stops debate only after both providers emit the run-specific consensus token", async () => {
     const { database, projectId } = setup();
     const makeConsensusAdapter = (providerId: string): ModelAdapter => {

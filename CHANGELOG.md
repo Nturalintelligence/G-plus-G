@@ -6,6 +6,11 @@ All notable project checkpoints are recorded here.
 
 ### Added
 
+- Debate continuation is now explicitly selectable: autonomous operation runs
+  without approval prompts until independent consensus or the safety limit, while
+  user-approved operation pauses at the configured turn interval.
+- The continuation policy is available beside the debate mode and persists in
+  Behavior and limits settings; the approval interval is disabled when irrelevant.
 - A shared G+G multi-AI protocol now tells sequential and debate participants
   that they are collaborating through an orchestration environment, distinguishes
   the user from the peer model, and enforces zero-fluff, independent critique,

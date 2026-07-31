@@ -22,13 +22,14 @@ describe("settings", () => {
       defaults: {
         mode: "PARALLEL",
         providers: ["gemini", "gemini"],
-        limits: { maxTurns: 8, maxTurnMs: 90000, maxSessionMs: 600000, maxRetries: 2, confirmationEvery: 3 },
+        limits: { maxTurns: 8, maxTurnMs: 90000, maxSessionMs: 600000, maxRetries: 2, confirmationEvery: 3, requireConfirmation: true },
       },
       appearance: { theme: "light", density: "compact", fontScale: 110 },
       secret: "must-not-survive",
     });
     expect(saved.profile.displayName).toBe("Ada");
     expect(saved.defaults.providers).toEqual(["gemini"]);
+    expect(saved.defaults.limits.requireConfirmation).toBe(true);
     expect(readFileSync(file, "utf8")).not.toContain("must-not-survive");
     expect(store.load()).toEqual(saved);
   });
