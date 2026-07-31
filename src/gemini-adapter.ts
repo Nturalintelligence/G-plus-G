@@ -23,6 +23,7 @@ import { fingerprint, normalizeText, selectNewResponse } from "./fingerprint.js"
 import { newId } from "./ids.js";
 import { dataPath } from "./paths.js";
 import { inferSessionState } from "./adapters/session-inference.js";
+import { inferChallengePage } from "./adapters/challenge-inference.js";
 import type {
   DiagnosticReport,
   ResponseSnapshot,
@@ -55,13 +56,6 @@ const USER_MESSAGES = [
   ".user-query-content",
   "user-query message-content",
 ];
-const CHALLENGE = [
-  /captcha/i,
-  /verify.*human/i,
-  /провер.*человек/i,
-  /unusual traffic/i,
-];
-
 interface GeminiTurn {
   channel: TurnChannel;
   result: Promise<TurnResult>;
@@ -148,7 +142,7 @@ export class GeminiAdapter implements ModelAdapter {
     if (!ref.url.startsWith("https://gemini.google.com/")) {
       throw new Error("Conversation URL must belong to gemini.google.com");
     }
-    await (await this.ensurePage()).goto(ref.url, { waitUntil: "commit" });
+    await (await this.ensurePage()).goto(ref.url, { waitUntil: "domcontentloaded" });
   }
 
   async getCurrentConversation(): Promise<ConversationRef> {
@@ -245,18 +239,19 @@ export class GeminiAdapter implements ModelAdapter {
   private async sendAndWait(message: string, channel?: TurnChannel): Promise<TurnResult> {
     const started = Date.now();
     const state = await this.waitUntilReady();
-    if (state !== "AUTHENTICATED") throw new LoginRequiredError(`Gemini state: ${state}`);
+    const composers = await this.visibleComposers();
+    if (state !== "AUTHENTICATED" && composers.length !== 1) {
+      throw new LoginRequiredError(`Gemini state: ${state}`);
+    }
     const before = await this.responses();
-    const userCountsBefore = await Promise.all(
-      USER_MESSAGES.map((selector) => this.ensurePage().then((page) => page.locator(selector).count())),
-    );
-    const candidates = await this.visibleComposers();
+    const userMessagesBefore = await this.captureUserMessageSignatures();
+    const candidates = composers;
     if (candidates.length !== 1) {
       throw new AmbiguousElementError(`Expected one Gemini composer, found ${candidates.length}`);
     }
     await candidates[0]!.fill(message);
     await this.submitComposer(candidates[0]!, message);
-    await this.waitUntilUserMessage(message, userCountsBefore);
+    await this.waitUntilUserMessage(userMessagesBefore);
     channel?.publish({ type: "MESSAGE_SUBMITTED", at: new Date().toISOString() });
 
     const response = await this.waitForResponse(before, channel);
@@ -272,10 +267,34 @@ export class GeminiAdapter implements ModelAdapter {
     let state: SessionState = "UNKNOWN";
     while (Date.now() < deadline) {
       state = await this.checkSession();
-      if (state !== "UNKNOWN") return state;
+      const composers = await this.visibleComposers();
+      if (state === "AUTHENTICATED" || composers.length === 1) {
+        await this.waitUntilStableResponses();
+        return state;
+      }
+      if (state === "CHALLENGE_REQUIRED") {
+        return state;
+      }
       await (await this.ensurePage()).waitForTimeout(500);
     }
     return state;
+  }
+
+  private async waitUntilStableResponses(): Promise<void> {
+    const page = await this.ensurePage();
+    let lastCount = -1;
+    let stableSince = Date.now();
+    const deadline = Date.now() + 5_000;
+    while (Date.now() < deadline) {
+      const currentCount = (await this.responses()).length;
+      if (currentCount !== lastCount) {
+        lastCount = currentCount;
+        stableSince = Date.now();
+      } else if (Date.now() - stableSince >= 1_000) {
+        break;
+      }
+      await page.waitForTimeout(200);
+    }
   }
 
   private async waitForResponse(
@@ -377,21 +396,32 @@ export class GeminiAdapter implements ModelAdapter {
     return false;
   }
 
+  private async captureUserMessageSignatures(): Promise<Set<string>> {
+    const page = await this.ensurePage();
+    const signatures = new Set<string>();
+    for (const selector of USER_MESSAGES) {
+      const nodes = page.locator(selector);
+      for (let index = 0; index < (await nodes.count().catch(() => 0)); index += 1) {
+        const node = nodes.nth(index);
+        const id =
+          (await node.getAttribute("data-message-id").catch(() => null)) ??
+          (await node.getAttribute("id").catch(() => null));
+        const text = normalizeText(await node.innerText().catch(() => ""));
+        if (id || text) signatures.add(id ? `id:${id}` : `text:${fingerprint(text)}`);
+      }
+    }
+    return signatures;
+  }
+
   private async waitUntilUserMessage(
-    message: string,
-    countsBefore: number[],
+    userMessagesBefore: ReadonlySet<string>,
   ): Promise<void> {
-    const expected = normalizeText(message);
     const deadline = Date.now() + 30_000;
     while (Date.now() < deadline) {
-      for (const [selectorIndex, selector] of USER_MESSAGES.entries()) {
-        const nodes = (await this.ensurePage()).locator(selector);
-        if ((await nodes.count()) > (countsBefore[selectorIndex] ?? 0)) return;
-        for (let index = 0; index < (await nodes.count()); index += 1) {
-          const text = normalizeText(await nodes.nth(index).innerText().catch(() => ""));
-          if (text === expected || text.includes(expected)) return;
-        }
-      }
+      if (await this.hasChallenge()) throw new ChallengeRequiredError();
+
+      const current = await this.captureUserMessageSignatures();
+      if ([...current].some((signature) => !userMessagesBefore.has(signature))) return;
       await (await this.ensurePage()).waitForTimeout(250);
     }
     throw new TurnTimeoutError("Gemini did not confirm that the user message was submitted");
@@ -415,15 +445,52 @@ export class GeminiAdapter implements ModelAdapter {
     const page = await this.ensurePage();
     for (const selector of RESPONSES) {
       const locator = page.locator(selector);
-      if ((await locator.count()) === 0) continue;
+      const count = await locator.count().catch(() => 0);
+      if (count === 0) continue;
       const result: ResponseSnapshot[] = [];
-      for (let index = 0; index < (await locator.count()); index += 1) {
+      for (let index = 0; index < count; index += 1) {
         const node = locator.nth(index);
-        const text = normalizeText(await node.innerText().catch(() => ""));
+        const text = normalizeText(
+          await node
+            .evaluate((el) => {
+              const noiseSelectors = [
+                "button",
+                "svg",
+                ".action-area",
+                ".message-actions",
+                "mat-icon",
+                ".ql-clipboard",
+                "pre > div",
+              ];
+              const hidden: Array<{ element: any; display: string }> = [];
+              noiseSelectors.forEach((sel) => {
+                el.querySelectorAll(sel).forEach((noise) => {
+                  const htmlNoise = noise as any;
+                  if (htmlNoise && htmlNoise.style) {
+                    const originalDisplay = window.getComputedStyle(htmlNoise).display;
+                    htmlNoise.style.setProperty("display", "none", "important");
+                    hidden.push({ element: htmlNoise, display: originalDisplay });
+                  }
+                });
+              });
+              const textVal = (el as any).innerText || el.textContent || "";
+              hidden.forEach((item) => {
+                if (item.display === "none") {
+                  item.element.style.removeProperty("display");
+                } else {
+                  item.element.style.display = item.display;
+                }
+              });
+              return textVal;
+            })
+            .catch(() => ""),
+        );
         if (!text) continue;
         result.push({
           ordinal: index,
-          domId: (await node.getAttribute("id")) ?? (await node.getAttribute("data-message-id")),
+          domId:
+            (await node.getAttribute("id").catch(() => null)) ??
+            (await node.getAttribute("data-message-id").catch(() => null)),
           text,
           fingerprint: fingerprint(text),
         });
@@ -435,11 +502,18 @@ export class GeminiAdapter implements ModelAdapter {
 
   private async hasChallenge(): Promise<boolean> {
     const page = await this.ensurePage();
-    const sample = `${await page.title().catch(() => "")}\n${await page
-      .locator("body")
-      .innerText({ timeout: 2_000 })
-      .catch(() => "")}`;
-    return CHALLENGE.some((pattern) => pattern.test(sample.slice(0, 5_000)));
+    const title = await page.title().catch(() => "");
+    const structuralSignals = await page
+      .locator(
+        'iframe[src*="recaptcha"], iframe[src*="challenges.cloudflare.com"], textarea[name="g-recaptcha-response"], input[name="cf-turnstile-response"], #challenge-form',
+      )
+      .count()
+      .catch(() => 0);
+    return inferChallengePage({
+      url: page.url(),
+      title,
+      structuralSignals,
+    });
   }
 
   private async ensurePage(): Promise<Page> {
@@ -467,7 +541,7 @@ export class GeminiAdapter implements ModelAdapter {
 
   private async navigateToGemini(page: Page): Promise<void> {
     await page.goto(GEMINI_URL, {
-      waitUntil: "commit",
+      waitUntil: "domcontentloaded",
       timeout: 30_000,
     });
     const state = await this.waitUntilReady();

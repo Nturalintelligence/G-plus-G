@@ -24,10 +24,13 @@ An item is not considered complete merely because an interface or UI control exi
 - Redacted JSONL application log and per-failure diagnostic reports.
 - Local 30-day quality dashboard with provider success, latency, retries, run
   outcomes, and traffic-light health indicators.
+- Incremental live response rendering and content-free per-phase diagnostics.
+- Live 20x20 endurance acceptance completed for ChatGPT and Gemini in one project.
 
 ## Required acceptance work
 
-- Run and record 50 live unique-marker turns for each provider.
+- Run and record the remaining unique-marker matrix beyond the completed shared
+  20x20 ChatGPT/Gemini endurance dialogue.
 - Add anonymized mock DOM fixtures and adapter contract tests.
 - Validate streamed, empty, interrupted, rate-limited, challenge, and ambiguous DOM cases.
 - Validate closed-tab recovery against live browser contexts.

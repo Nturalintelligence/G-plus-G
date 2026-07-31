@@ -2,6 +2,40 @@
 
 All notable project checkpoints are recorded here.
 
+## [0.1.0-pre.9] - 2026-07-31
+
+### Added
+
+- Live incremental response rendering from provider DOM updates through the
+  orchestrator, Electron IPC, and React conversation view.
+- Content-free phase tracing for provider launch, session checks, conversation
+  reuse, submission, streaming, completion, confirmation, and failures.
+- Reproducible `npm run verify:dialogue` live acceptance runner for 20 ChatGPT
+  and 20 Gemini responses in one persistent project.
+- Experimental provider registry and adapters introduced by the concurrent UI
+  expansion; ChatGPT and Gemini remain the endurance-verified providers.
+
+### Fixed
+
+- Later project messages no longer resend the stored local transcript into web
+  chats that already own their history.
+- Discussion turns now send only the current user task and latest peer response,
+  preventing recursively nested prompts and exponential context growth.
+- ChatGPT submission prefers the explicit enabled send button and verifies a new
+  user-message signature instead of trusting composer clearing or old text matches.
+- Gemini submission uses the same stable-id/fingerprint verification strategy.
+- Challenge detection uses URL, title, and structural CAPTCHA controls rather
+  than conversation text mentioning CAPTCHA or Cloudflare.
+- Response binding supports virtualized ChatGPT lists where a new stable DOM id
+  reuses an old ordinal and the rendered response count does not increase.
+
+### Live acceptance
+
+- Project `prj_04fd5b93-ca55-4d8e-b79a-0307c99fb055` completed 40 alternating
+  turns: ChatGPT 20, Gemini 20, with one persisted conversation URL per provider.
+- All responses were observed incrementally and the run finished `COMPLETED`.
+- 57 automated tests pass across 17 test files.
+
 ## [0.1.0-pre.8] - 2026-07-31
 
 ### Fixed

@@ -1,6 +1,6 @@
 {
   "name": "multi-llm-orchestrator-feasibility",
-  "version": "0.1.0-pre.8",
+  "version": "0.1.0-pre.9",
   "private": true,
   "author": "Nturalintelligence",
   "description": "Local desktop orchestrator for ChatGPT and Gemini web sessions",
@@ -19,6 +19,7 @@
     "login": "tsx src/cli.ts login",
     "send": "tsx src/cli.ts send",
     "verify": "tsx src/cli.ts verify",
+    "verify:dialogue": "tsx scripts/endurance-dialogue.ts",
     "backup": "tsx src/cli.ts backup:create",
     "backup:validate": "tsx src/cli.ts backup:validate",
     "restore": "tsx src/cli.ts backup:restore",

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { inferSessionState } from "../src/adapters/session-inference.js";
+import { inferChallengePage } from "../src/adapters/challenge-inference.js";
 
 describe("session detection precedence", () => {
   it("does not mistake the anonymous composer for an authenticated session", () => {
@@ -24,5 +25,28 @@ describe("session detection precedence", () => {
     expect(
       inferSessionState("chatgpt", "The solution says: log in to continue", 1, 0),
     ).toBe("AUTHENTICATED");
+  });
+});
+
+describe("challenge page inference", () => {
+  it("does not treat model discussion of CAPTCHA or Cloudflare as a challenge", () => {
+    expect(inferChallengePage({
+      url: "https://chatgpt.com/c/example",
+      title: "ChatGPT",
+      structuralSignals: 0,
+    })).toBe(false);
+  });
+
+  it("detects structural and dedicated challenge pages", () => {
+    expect(inferChallengePage({
+      url: "https://chatgpt.com/cdn-cgi/challenge-platform/test",
+      title: "Just a moment",
+      structuralSignals: 0,
+    })).toBe(true);
+    expect(inferChallengePage({
+      url: "https://chatgpt.com/",
+      title: "ChatGPT",
+      structuralSignals: 1,
+    })).toBe(true);
   });
 });

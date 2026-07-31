@@ -25,7 +25,7 @@ ChatGPT Web и Gemini Web через Playwright и видимые браузер
 
 ## 2. Текущее состояние
 
-- Текущая версия: `0.1.0-pre.8`.
+- Текущая версия: `0.1.0-pre.9`.
 - Рабочая ветка на момент создания файла: `agent/stage-0-and-1`.
 - Последний функциональный коммит: `d164820` —
   `Wait for provider composer readiness between turns`.
@@ -49,6 +49,7 @@ ChatGPT Web и Gemini Web через Playwright и видимые браузер
 | pre.6 | Поиск локального Chromium и выход из аккаунтов |
 | pre.7 | Постоянные веб-чаты, выбор первой модели, очередь и consensus-протокол |
 | pre.8 | Ожидание разблокировки composer между ходами, защита от stale DOM |
+| pre.9 | 20x20 live endurance, incremental prompts/streaming, virtualized DOM binding |
 
 Подробности каждой версии находятся в `CHANGELOG.md`.
 

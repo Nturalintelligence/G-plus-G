@@ -7,13 +7,44 @@ import {
   type OrchestrationLimits,
 } from "../orchestrator/limits.js";
 
-export type ProviderId = "chatgpt" | "gemini";
+export type ProviderId =
+  | "chatgpt"
+  | "gemini"
+  | "deepseek"
+  | "claude"
+  | "copilot"
+  | "perplexity"
+  | "huggingchat"
+  | "groq"
+  | "duckduckgo"
+  | "mistral";
+
 export type Theme = "dark" | "light" | "system";
 export type Density = "comfortable" | "compact";
 
+export const PROVIDER_METADATA: Record<
+  ProviderId,
+  { name: string; url: string; requiresAuth: boolean }
+> = {
+  chatgpt: { name: "ChatGPT", url: "https://chatgpt.com/", requiresAuth: false },
+  gemini: { name: "Gemini", url: "https://gemini.google.com/app", requiresAuth: false },
+  deepseek: { name: "DeepSeek", url: "https://chat.deepseek.com/", requiresAuth: false },
+  claude: { name: "Claude", url: "https://claude.ai/new", requiresAuth: true },
+  copilot: { name: "Copilot", url: "https://copilot.microsoft.com/", requiresAuth: false },
+  perplexity: { name: "Perplexity", url: "https://www.perplexity.ai/", requiresAuth: false },
+  huggingchat: { name: "HuggingChat", url: "https://huggingface.co/chat/", requiresAuth: false },
+  groq: { name: "Groq", url: "https://groq.com/", requiresAuth: true },
+  duckduckgo: { name: "DuckDuckGo", url: "https://duckduckgo.com/?q=DuckDuckGo+AI+Chat&ia=chat", requiresAuth: false },
+  mistral: { name: "Mistral", url: "https://chat.mistral.ai/", requiresAuth: true },
+};
+
 export interface AppSettings {
   schemaVersion: 1;
-  profile: { displayName: string };
+  profile: {
+    displayName: string;
+    realName: string;
+    greetingStyle: "display" | "real" | "generic";
+  };
   defaults: {
     mode: RunMode;
     providers: ProviderId[];
@@ -28,7 +59,11 @@ export interface AppSettings {
 
 export const defaultSettings: AppSettings = {
   schemaVersion: 1,
-  profile: { displayName: "" },
+  profile: {
+    displayName: "",
+    realName: "",
+    greetingStyle: "generic",
+  },
   defaults: {
     mode: "DEBATE",
     providers: ["chatgpt", "gemini"],
@@ -42,7 +77,18 @@ export const defaultSettings: AppSettings = {
 };
 
 const modes: RunMode[] = ["MANUAL", "SEQUENTIAL", "PARALLEL", "DEBATE"];
-const providerIds: ProviderId[] = ["chatgpt", "gemini"];
+const providerIds: ProviderId[] = [
+  "chatgpt",
+  "gemini",
+  "deepseek",
+  "claude",
+  "copilot",
+  "perplexity",
+  "huggingchat",
+  "groq",
+  "duckduckgo",
+  "mistral",
+];
 const themes: Theme[] = ["dark", "light", "system"];
 const densities: Density[] = ["comfortable", "compact"];
 
@@ -65,6 +111,13 @@ export function parseSettings(value: unknown): AppSettings {
   const displayName =
     typeof profile.displayName === "string" ? profile.displayName.trim() : "";
   if (displayName.length > 80) throw new Error("Display name cannot exceed 80 characters");
+  const realName =
+    typeof profile.realName === "string" ? profile.realName.trim() : "";
+  if (realName.length > 80) throw new Error("Real name cannot exceed 80 characters");
+  const greetingStyles: Array<AppSettings["profile"]["greetingStyle"]> = ["display", "real", "generic"];
+  const greetingStyle = greetingStyles.includes(profile.greetingStyle as any)
+    ? profile.greetingStyle as AppSettings["profile"]["greetingStyle"]
+    : defaultSettings.profile.greetingStyle;
 
   const mode = modes.includes(defaults.mode as RunMode)
     ? defaults.mode as RunMode
@@ -106,7 +159,7 @@ export function parseSettings(value: unknown): AppSettings {
 
   return {
     schemaVersion: 1,
-    profile: { displayName },
+    profile: { displayName, realName, greetingStyle },
     defaults: { mode, providers, limits: parsedLimits },
     appearance: { theme, density, fontScale },
   };

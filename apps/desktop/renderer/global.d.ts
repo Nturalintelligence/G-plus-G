@@ -22,7 +22,7 @@ interface Window {
     };
     projects: {
       list(): Promise<ProjectView[]>;
-      create(name: string): Promise<ProjectView>;
+      create(name: string, providers: string[]): Promise<ProjectView>;
       open(id: string): Promise<ProjectDetails>;
     };
     provider: {
@@ -34,6 +34,7 @@ interface Window {
       pause(): Promise<void>;
       resume(): Promise<void>;
       stop(): Promise<void>;
+      onProgress(callback: (value: { providerId: string; text: string }) => void): () => void;
     };
     state: {
       latest(projectId: string): Promise<StateVersion | null>;
@@ -52,10 +53,25 @@ interface Window {
 
 interface AppSettingsView {
   schemaVersion: 1;
-  profile: { displayName: string };
+  profile: {
+    displayName: string;
+    realName: string;
+    greetingStyle: "display" | "real" | "generic";
+  };
   defaults: {
     mode: "MANUAL" | "SEQUENTIAL" | "PARALLEL" | "DEBATE";
-    providers: Array<"chatgpt" | "gemini">;
+    providers: Array<
+      | "chatgpt"
+      | "gemini"
+      | "deepseek"
+      | "claude"
+      | "copilot"
+      | "perplexity"
+      | "huggingchat"
+      | "groq"
+      | "duckduckgo"
+      | "mistral"
+    >;
     limits: {
       maxTurns: number;
       maxTurnMs: number;
@@ -101,6 +117,7 @@ interface ProjectView {
   name: string;
   status: string;
   updatedAt: string;
+  providers?: string[];
 }
 
 interface ProjectDetails {

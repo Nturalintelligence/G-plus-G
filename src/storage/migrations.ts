@@ -170,4 +170,15 @@ export const migrations: readonly Migration[] = [
         ON quality_metrics(name, occurred_at);
     `,
   },
+  {
+    version: 5,
+    name: "project_providers",
+    sql: `
+      CREATE TABLE project_providers (
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        provider_id TEXT NOT NULL,
+        PRIMARY KEY (project_id, provider_id)
+      );
+    `,
+  },
 ];

@@ -19,10 +19,24 @@ describe("selectNewResponse", () => {
     expect(selectNewResponse(before, after)).toBeNull();
   });
 
-  it("fails closed when multiple new response candidates are present", () => {
+  it("returns the newest candidate when multiple new response candidates are present", () => {
     const before = [response(0, "old", "a")];
     const after = [...before, response(1, "one", "b"), response(2, "two", "c")];
-    expect(selectNewResponse(before, after)).toBeNull();
+    expect(selectNewResponse(before, after)?.text).toBe("two");
+  });
+
+  it("binds a new stable id when a virtualized list reuses the last ordinal", () => {
+    const before = [
+      response(0, "old one", "a"),
+      response(1, "old two", "b"),
+      response(2, "old three", "c"),
+    ];
+    const after = [
+      response(0, "old two", "b"),
+      response(1, "old three", "c"),
+      response(2, "new streamed response", "d"),
+    ];
+    expect(selectNewResponse(before, after)?.text).toBe("new streamed response");
   });
 
   it("can bind an id-less response by baseline ordinal", () => {

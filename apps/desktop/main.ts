@@ -22,7 +22,7 @@ import {
   logEvent,
   writeDiagnostic,
 } from "../../src/observability/logger.js";
-import { SettingsStore } from "../../src/settings/settings.js";
+import { SettingsStore, type ProviderId, PROVIDER_METADATA } from "../../src/settings/settings.js";
 import {
   validateLimits,
   type OrchestrationLimits,
@@ -73,6 +73,7 @@ function createWindow(): void {
     minWidth: 1100,
     minHeight: 700,
     backgroundColor: "#0d1117",
+    icon: join(app.getAppPath(), "dist/desktop/logo.png"),
     webPreferences: {
       preload: join(app.getAppPath(), "apps/desktop/preload.cjs"),
       contextIsolation: true,
@@ -144,7 +145,7 @@ function validateRunInput(value: unknown): {
   projectId: string;
   mode: RunMode;
   task: string;
-  providers: Array<"chatgpt" | "gemini">;
+  providers: ProviderId[];
   limits?: OrchestrationLimits;
 } {
   if (!value || typeof value !== "object") throw new Error("Invalid run input");
@@ -158,14 +159,14 @@ function validateRunInput(value: unknown): {
   if (
     !Array.isArray(input.providers) ||
     input.providers.length < 1 ||
-    input.providers.length > 2
+    input.providers.length > 10
   ) {
-    throw new Error("Select one or two providers");
+    throw new Error("Select between one and ten providers");
   }
-  const providers = [...new Set(input.providers)];
+  const providers = [...new Set(input.providers)] as ProviderId[];
   if (
     providers.some(
-      (provider) => provider !== "chatgpt" && provider !== "gemini",
+      (provider) => !(provider in PROVIDER_METADATA),
     )
   ) {
     throw new Error("Invalid provider");
@@ -179,7 +180,7 @@ function validateRunInput(value: unknown): {
     projectId,
     mode: input.mode as RunMode,
     task,
-    providers: providers as Array<"chatgpt" | "gemini">,
+    providers,
     ...(limits ? { limits } : {}),
   };
 }
@@ -247,11 +248,15 @@ function registerIpc(): void {
     return settings;
   });
   handle("projects:list", () => new ProjectRepository(db()).listProjects());
-  handle("projects:create", (_event, name: unknown) =>
-    new ProjectRepository(db()).createProject(
+  handle("projects:create", (_event, name: unknown, providersValue: unknown) => {
+    const providers = Array.isArray(providersValue)
+      ? providersValue.map(p => String(p))
+      : [];
+    return new ProjectRepository(db()).createProject(
       requireString(name, "Project name", 200),
-    ),
-  );
+      providers,
+    );
+  });
   handle("projects:open", (_event, id: unknown) => {
     const projectId = requireString(id, "projectId", 200);
     const repository = new ProjectRepository(db());
@@ -359,17 +364,35 @@ function registerIpc(): void {
       activeAdapters = adapters;
       try {
         const launches = await Promise.allSettled(
-          [...adapters.values()].map((adapter) => adapter.launch()),
+          [...adapters.entries()].map(async ([provider, adapter]) => {
+            const startedAt = Date.now();
+            logEvent("INFO", "provider.launch.started", { provider });
+            try {
+              await adapter.launch();
+              logEvent("INFO", "provider.launch.completed", {
+                provider,
+                elapsedMs: Date.now() - startedAt,
+              });
+            } catch (error) {
+              logEvent("ERROR", "provider.launch.failed", {
+                provider,
+                elapsedMs: Date.now() - startedAt,
+                error,
+              });
+              throw error;
+            }
+          }),
         );
         const launchFailure = launches.find(
           (result): result is PromiseRejectedResult => result.status === "rejected",
         );
         if (launchFailure) throw launchFailure.reason;
         const sessions = await Promise.all(
-          [...adapters.entries()].map(async ([provider, adapter]) => ({
-            provider,
-            state: await adapter.checkSession(),
-          })),
+          [...adapters.entries()].map(async ([provider, adapter]) => {
+            const state = await adapter.checkSession();
+            logEvent("INFO", "provider.session.checked", { provider, state });
+            return { provider, state };
+          }),
         );
         const unavailable = sessions.filter(({ state }) => state !== "AUTHENTICATED");
         if (unavailable.length > 0) {
@@ -388,6 +411,10 @@ function registerIpc(): void {
           input.limits,
           {
             confirm: async (summary) => {
+              logEvent("INFO", "orchestration.confirmation.shown", {
+                projectId: input.projectId,
+                summaryLength: summary.length,
+              });
               const result = await dialog.showMessageBox(mainWindow!, {
                 type: "question",
                 buttons: ["Продолжить", "Остановить"],
@@ -397,7 +424,16 @@ function registerIpc(): void {
                 message: summary,
                 detail: "Модели достигли контрольной точки ограниченной дискуссии.",
               });
+              logEvent("INFO", "orchestration.confirmation.resolved", {
+                projectId: input.projectId,
+                continued: result.response === 0,
+              });
               return result.response === 0;
+            },
+            onResponseUpdate: (providerId, text) => {
+              if (mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.webContents.send("orchestration:progress", { providerId, text });
+              }
             },
           },
         );
@@ -409,9 +445,17 @@ function registerIpc(): void {
           providers: input.providers,
         });
         const rawMessage = error instanceof Error ? error.message : String(error);
-        const message = /LOGIN_REQUIRED/.test(rawMessage)
-          ? "Нужен вход в ChatGPT. Нажмите «Войти · chatgpt», завершите вход и повторите отправку."
-          : rawMessage;
+        let message = rawMessage;
+        if (/LOGIN_REQUIRED/.test(rawMessage)) {
+          const providerMatch = rawMessage.match(/(\w+) state: LOGIN_REQUIRED/i);
+          if (providerMatch && providerMatch[1]) {
+            const providerId = providerMatch[1].toLowerCase() as ProviderId;
+            const providerName = PROVIDER_METADATA[providerId]?.name ?? providerMatch[1];
+            message = `Нужен вход в ${providerName}. Нажмите «Войти · ${providerId}» в левой панели, завершите вход и повторите отправку.`;
+          } else {
+            message = "Один или несколько провайдеров требуют авторизации. Завершите вход в панели слева и повторите отправку.";
+          }
+        }
         throw new Error(`${message} Диагностика: ${diagnosticPath}`);
       } finally {
         await closeActiveAdapters();

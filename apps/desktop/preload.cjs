@@ -29,6 +29,11 @@ const api = {
     pause: () => ipcRenderer.invoke("orchestration:pause"),
     resume: () => ipcRenderer.invoke("orchestration:resume"),
     stop: () => ipcRenderer.invoke("orchestration:stop"),
+    onProgress: (callback) => {
+      const subscription = (_event, value) => callback(value);
+      ipcRenderer.on("orchestration:progress", subscription);
+      return () => ipcRenderer.off("orchestration:progress", subscription);
+    },
   },
   state: {
     latest: (projectId) => ipcRenderer.invoke("state:latest", projectId),

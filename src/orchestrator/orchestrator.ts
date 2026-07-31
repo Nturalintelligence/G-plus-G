@@ -8,9 +8,8 @@ import type {
 import type { AppDatabase } from "../storage/database.js";
 import { ProjectRepository } from "../storage/repository.js";
 import {
-  buildContinuationPrompt,
-  buildDebatePrompt,
   buildPeerReviewPrompt,
+  buildIncrementalPrompt,
 } from "./prompt-builder.js";
 import {
   defaultLimits,
@@ -18,6 +17,7 @@ import {
   type OrchestrationLimits,
 } from "./limits.js";
 import { QualityMetrics } from "../observability/metrics.js";
+import { logEvent } from "../observability/logger.js";
 
 export type RunMode = "MANUAL" | "SEQUENTIAL" | "PARALLEL" | "DEBATE";
 export type RunStatus =
@@ -44,6 +44,7 @@ export interface RunOutput {
 export interface RunHooks {
   editBeforeSend?: (providerId: string, message: string) => Promise<string>;
   confirm?: (summary: string) => Promise<boolean>;
+  onResponseUpdate?: (providerId: string, text: string) => void;
 }
 
 export class Orchestrator {
@@ -98,8 +99,9 @@ export class Orchestrator {
     this.activeRunId = runId;
     this.createRun(runId, projectId, effectiveMode, limits);
     const repository = new ProjectRepository(this.database);
-    const history = repository.conversationEntries(projectId);
-    const initialMessage = buildContinuationPrompt(history, task);
+    // Each provider web chat already owns its history. Re-sending the local
+    // transcript duplicates old messages and makes every later prompt larger.
+    const initialMessage = task;
     repository.appendConversationEntry({
       projectId,
       runId,
@@ -110,6 +112,15 @@ export class Orchestrator {
     const startedAt = Date.now();
     const runMetrics = new QualityMetrics(this.database);
     let consensusReached = false;
+
+    logEvent("INFO", "orchestration.run.started", {
+      runId,
+      projectId,
+      mode: effectiveMode,
+      providers: providerIds,
+      taskLength: task.length,
+      turnLimit: effectiveMode === "SEQUENTIAL" ? providerIds.length : limits.maxTurns,
+    });
 
     try {
       this.setStatus(runId, "RUNNING");
@@ -228,15 +239,14 @@ export class Orchestrator {
             if (!(await hooks.confirm(`Continue after ${turn + 1} turns?`))) break;
             this.setStatus(runId, "RUNNING");
           }
-          message =
-            effectiveMode === "DEBATE"
-              ? buildDebatePrompt(
-                  initialMessage,
-                  responses,
-                  turn + 2,
-                  consensusToken,
-                )
-              : buildPeerReviewPrompt(initialMessage, text);
+          message = effectiveMode === "DEBATE"
+            ? buildIncrementalPrompt(
+                initialMessage,
+                [responses[responses.length - 1]!],
+                turn + 2,
+                consensusToken,
+              )
+            : buildPeerReviewPrompt(initialMessage, text);
         }
       }
       const status: RunStatus = this.stopped ? "STOPPED" : "COMPLETED";
@@ -247,6 +257,14 @@ export class Orchestrator {
       runMetrics.record("orchestration.run.elapsed_ms", Date.now() - startedAt, {
         mode: effectiveMode,
       });
+      logEvent("INFO", "orchestration.run.completed", {
+        runId,
+        mode: effectiveMode,
+        status,
+        responseCount: responses.length,
+        consensusReached,
+        elapsedMs: Date.now() - startedAt,
+      });
       return {
         runId,
         status,
@@ -254,6 +272,13 @@ export class Orchestrator {
         consensusReached,
       };
     } catch (error) {
+      logEvent("ERROR", "orchestration.run.failed", {
+        runId,
+        mode: effectiveMode,
+        responseCount: responses.length,
+        elapsedMs: Date.now() - startedAt,
+        error,
+      });
       await this.cancelActiveTurns();
       if (this.stopped) {
         this.setStatus(runId, "STOPPED");
@@ -288,6 +313,14 @@ export class Orchestrator {
       ? await hooks.editBeforeSend(providerId, message)
       : message;
     const conversation = repository.getOrCreateConversation(projectId, providerId);
+    logEvent("INFO", "provider.turn.preparing", {
+      runId: this.activeRunId,
+      projectId,
+      providerId,
+      conversationId: conversation.id,
+      hasExternalRef: Boolean(conversation.externalRef),
+      messageLength: edited.length,
+    });
     await this.prepareWebConversation(adapter, conversation.id, conversation.externalRef);
     const started = repository.beginTurn(conversation.id);
     let attempt = started.attempt;
@@ -298,10 +331,29 @@ export class Orchestrator {
     for (let attemptIndex = 0; attemptIndex <= limits.maxRetries; attemptIndex += 1) {
       let turn: TurnRef;
       try {
+        logEvent("INFO", "provider.turn.submitting", {
+          runId: this.activeRunId,
+          providerId,
+          turnId: started.turn.id,
+          attempt: attemptIndex + 1,
+        });
         repository.updateTurnStatus(started.turn.id, "SUBMITTING");
         turn = await adapter.sendMessage({ content: edited });
         repository.updateTurnStatus(started.turn.id, "WAITING_RESPONSE");
+        logEvent("INFO", "provider.turn.submitted", {
+          runId: this.activeRunId,
+          providerId,
+          turnId: started.turn.id,
+          adapterTurnId: turn.id,
+        });
       } catch (error) {
+        logEvent("ERROR", "provider.turn.submit_failed", {
+          runId: this.activeRunId,
+          providerId,
+          turnId: started.turn.id,
+          attempt: attemptIndex + 1,
+          error,
+        });
         lastError = error;
         repository.finishAttempt(
           attempt.id,
@@ -320,6 +372,30 @@ export class Orchestrator {
       }
 
       this.activeTurns.set(providerId, turn);
+      const observePromise = (async () => {
+        try {
+          if (typeof adapter.observeTurn === "function") {
+            const iterable = adapter.observeTurn(turn);
+            if (iterable && typeof iterable[Symbol.asyncIterator] === "function") {
+              for await (const event of iterable) {
+                if (event.type === "RESPONSE_UPDATED" && event.text && hooks.onResponseUpdate) {
+                  hooks.onResponseUpdate(providerId, event.text);
+                }
+                logEvent("INFO", "provider.turn.event", {
+                  runId: this.activeRunId,
+                  providerId,
+                  turnId: started.turn.id,
+                  eventType: event.type,
+                  textLength: event.text?.length ?? 0,
+                  elapsedMs: Date.now() - metricStartedAt,
+                });
+              }
+            }
+          }
+        } catch (error) {
+          console.error(`[${providerId}] Streaming error:`, error);
+        }
+      })();
       let timer: ReturnType<typeof setTimeout> | undefined;
       const timeout = new Promise<never>((_, reject) => {
         timer = setTimeout(
@@ -329,6 +405,8 @@ export class Orchestrator {
       });
       try {
         const result = await Promise.race([adapter.getFinalResponse(turn), timeout]);
+        if (timer) clearTimeout(timer);
+        await observePromise;
         repository.addMessage(started.turn.id, attempt.id, "ASSISTANT", result.response);
         repository.finishAttempt(attempt.id, "COMPLETED");
         repository.updateTurnStatus(started.turn.id, "COMPLETED");
@@ -347,6 +425,13 @@ export class Orchestrator {
             currentConversation.url,
           );
         }
+        logEvent("INFO", "provider.turn.completed", {
+          runId: this.activeRunId,
+          providerId,
+          turnId: started.turn.id,
+          responseLength: result.response.length,
+          elapsedMs: Date.now() - metricStartedAt,
+        });
         return result.response;
       } catch (error) {
         // A turn reference means submission may already have reached the provider.
@@ -363,6 +448,13 @@ export class Orchestrator {
           providerId,
         });
         metrics.record("provider.turn.retry_count", attemptIndex, { providerId });
+        logEvent("ERROR", "provider.turn.failed", {
+          runId: this.activeRunId,
+          providerId,
+          turnId: started.turn.id,
+          elapsedMs: Date.now() - metricStartedAt,
+          error,
+        });
         throw error;
       } finally {
         this.activeTurns.delete(providerId);
@@ -408,12 +500,28 @@ export class Orchestrator {
       return;
     }
     if (externalRef) {
+      logEvent("INFO", "provider.conversation.opening", {
+        runId: this.activeRunId,
+        providerId: adapter.providerId,
+        conversationId,
+      });
       const ref: ConversationRef = { id: conversationId, url: externalRef };
       await adapter.openConversation(ref);
     } else {
+      logEvent("INFO", "provider.conversation.creating", {
+        runId: this.activeRunId,
+        providerId: adapter.providerId,
+        conversationId,
+      });
       await adapter.createConversation();
     }
     this.preparedConversations.add(conversationId);
+    logEvent("INFO", "provider.conversation.ready", {
+      runId: this.activeRunId,
+      providerId: adapter.providerId,
+      conversationId,
+      reused: Boolean(externalRef),
+    });
   }
 
   private async withSessionLimit<T>(

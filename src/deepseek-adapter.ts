@@ -14,7 +14,6 @@ import { ProfileLock } from "./browser/profile-lock.js";
 import { bundledChromiumExecutable } from "./browser/runtime.js";
 import { dataPath } from "./paths.js";
 import { inferSessionState } from "./adapters/session-inference.js";
-import { inferChallengePage } from "./adapters/challenge-inference.js";
 import { newId } from "./ids.js";
 import {
   AmbiguousElementError,
@@ -29,55 +28,56 @@ import type {
   SessionState,
   TurnResult,
 } from "./types.js";
-import { logEvent } from "./observability/logger.js";
 
-const CHATGPT_URL = "https://chatgpt.com/";
+const DEEPSEEK_URL = "https://chat.deepseek.com/";
 const RESPONSE_SELECTORS = [
-  '[data-message-author-role="assistant"]',
-  'article:has([data-message-author-role="assistant"])',
+  ".ds-markdown",
+  ".ds-markdown--html",
+  ".chat-message-assistant",
 ];
 const COMPOSER_SELECTORS = [
-  '#prompt-textarea',
-  '[data-testid="composer-input"]',
-  'div.ProseMirror[contenteditable="true"]',
-  '[contenteditable="true"][data-lexical-editor="true"]',
-  'textarea[placeholder*="Message"]',
-  'textarea[placeholder*="сообщ"]',
-  'div[contenteditable="true"][role="textbox"]',
-  'form textarea',
-  'form [contenteditable="true"]',
+  "#chat-input",
+  "textarea[placeholder*=\"message\" i]",
+  "textarea[placeholder*=\"deepseek\" i]",
+  "textarea[placeholder*=\"спроси\" i]",
+  "textarea",
 ];
 const SEND_BUTTON_SELECTORS = [
-  '[data-testid="send-button"]',
-  'button[aria-label*="Send" i]',
-  'button[aria-label*="Отправ" i]',
-  'form button[type="submit"]',
+  ".ds-textarea-send-button",
+  "button[aria-label*=\"send\" i]",
+  ".chat-input-send-button",
 ];
-export interface AdapterOptions {
-  profileDir?: string;
-  timeoutMs?: number;
-  settleMs?: number;
-}
+const USER_MESSAGE_SELECTORS = [
+  ".chat-message-user",
+  "div.user-query",
+  ".user-message",
+];
+const CHALLENGE_PATTERNS = [
+  /captcha/i,
+  /verify you are human/i,
+  /checking your browser/i,
+  /cloudflare/i,
+  /unusual activity/i,
+  /один момент/i,
+];
 
-interface ActiveTurn {
-  channel: TurnChannel;
-  result: Promise<TurnResult>;
-  resolveManual: (response: string) => void;
-  rejectCancellation: (error: Error) => void;
-}
-
-export class ChatGptAdapter implements ModelAdapter {
-  readonly providerId = "chatgpt";
+export class DeepSeekAdapter implements ModelAdapter {
+  readonly providerId = "deepseek";
   private context: BrowserContext | null = null;
   private page: Page | null = null;
-  private readonly turns = new Map<string, ActiveTurn>();
+  private readonly turns = new Map<string, {
+    channel: TurnChannel;
+    result: Promise<TurnResult>;
+    resolveManual: (response: string) => void;
+    rejectCancellation: (error: Error) => void;
+  }>();
   private readonly profileDir: string;
   private readonly profileLock: ProfileLock;
   private readonly timeoutMs: number;
   private readonly settleMs: number;
 
-  constructor(options: AdapterOptions = {}) {
-    this.profileDir = resolve(options.profileDir ?? dataPath("profiles", "chatgpt"));
+  constructor(options: { profileDir?: string; timeoutMs?: number; settleMs?: number } = {}) {
+    this.profileDir = resolve(options.profileDir ?? dataPath("profiles", "deepseek"));
     this.profileLock = new ProfileLock(this.profileDir);
     this.timeoutMs = options.timeoutMs ?? 180_000;
     this.settleMs = options.settleMs ?? 2_500;
@@ -94,23 +94,19 @@ export class ChatGptAdapter implements ModelAdapter {
         args: ["--disable-blink-features=AutomationControlled"],
         ...(executablePath ? { executablePath } : {}),
       });
+      await this.ensurePage();
     } catch (error) {
       await this.profileLock.release();
       throw error;
     }
-    this.page =
-      this.context.pages().find((candidate) => candidate.url().includes("chatgpt.com")) ??
-      this.context.pages()[0] ??
-      (await this.context.newPage());
-    await this.page.goto(CHATGPT_URL, { waitUntil: "domcontentloaded" });
   }
 
   async close(): Promise<void> {
     try {
       await this.context?.close();
+    } finally {
       this.context = null;
       this.page = null;
-    } finally {
       await this.profileLock.release();
     }
   }
@@ -121,43 +117,42 @@ export class ChatGptAdapter implements ModelAdapter {
 
   async createConversation(): Promise<ConversationRef> {
     const page = await this.ensurePage();
-    await page.goto(CHATGPT_URL, { waitUntil: "domcontentloaded" });
-    return { id: newId("webchat"), url: page.url() };
+    if (page.url() !== DEEPSEEK_URL) {
+      await page.goto(DEEPSEEK_URL, { waitUntil: "domcontentloaded" });
+    }
+    return { id: newId("dschat"), url: page.url() };
   }
 
   async openConversation(ref: ConversationRef): Promise<void> {
-    if (!ref.url.startsWith("https://chatgpt.com/")) {
-      throw new Error("Conversation URL must belong to chatgpt.com");
+    if (!ref.url.startsWith(DEEPSEEK_URL)) {
+      throw new Error("Conversation URL must belong to chat.deepseek.com");
     }
     await (await this.ensurePage()).goto(ref.url, { waitUntil: "domcontentloaded" });
   }
 
   async getCurrentConversation(): Promise<ConversationRef> {
     const page = await this.ensurePage();
-    await page.waitForURL(
-      (url) => url.hostname === "chatgpt.com" && url.pathname.includes("/c/"),
-      { timeout: 5_000 },
-    );
-    return { id: newId("webchat"), url: page.url() };
+    return { id: newId("dschat"), url: page.url() };
   }
 
   async sendMessage(input: MessageInput): Promise<TurnRef>;
   async sendMessage(input: string): Promise<TurnResult>;
   async sendMessage(input: MessageInput | string): Promise<TurnRef | TurnResult> {
     if (typeof input === "string") return this.sendAndWait(input);
-    const ref: TurnRef = { id: newId("webturn") };
+
+    const ref = { id: newId("dsturn") };
     const channel = new TurnChannel();
-    let manualResolver: (response: string) => void = () => undefined;
+    let resolveManual: (response: string) => void = () => undefined;
     let rejectCancellation: (error: Error) => void = () => undefined;
-    const manual = new Promise<string>((resolve) => {
-      manualResolver = resolve;
+    const manual = new Promise<string>((resolveManualPromise) => {
+      resolveManual = resolveManualPromise;
     });
     const cancellation = new Promise<never>((_resolve, reject) => {
       rejectCancellation = reject;
     });
-    const automated = this.sendAndWait(input.content, channel);
+
     const result = Promise.race([
-      automated,
+      this.sendAndWait(input.content, channel),
       cancellation,
       manual.then((response) => ({
         response,
@@ -165,12 +160,8 @@ export class ChatGptAdapter implements ModelAdapter {
         elapsedMs: 0,
       })),
     ]).finally(() => channel.finish());
-    this.turns.set(ref.id, {
-      channel,
-      result,
-      resolveManual: manualResolver,
-      rejectCancellation,
-    });
+
+    this.turns.set(ref.id, { channel, result, resolveManual, rejectCancellation });
     return ref;
   }
 
@@ -191,13 +182,11 @@ export class ChatGptAdapter implements ModelAdapter {
     const active = this.requireTurn(turn);
     const page = this.page;
     if (page && !page.isClosed()) {
-      const stop = page.getByRole("button", {
-        name: /stop generating|остановить создание/i,
-      });
+      const stop = page.locator("button:has-text(\"Stop\"), button:has-text(\"Остановить\")");
       if (await stop.isVisible().catch(() => false)) await stop.click().catch(() => undefined);
     }
     active.channel.publish({ type: "CANCELLED", at: new Date().toISOString() });
-    active.rejectCancellation(new Error(`ChatGPT turn cancelled: ${turn.id}`));
+    active.rejectCancellation(new Error(`DeepSeek turn cancelled: ${turn.id}`));
     active.channel.finish();
   }
 
@@ -209,6 +198,12 @@ export class ChatGptAdapter implements ModelAdapter {
       at: new Date().toISOString(),
       text: response,
     });
+  }
+
+  private requireTurn(turn: TurnRef) {
+    const active = this.turns.get(turn.id);
+    if (!active) throw new Error(`Unknown turn: ${turn.id}`);
+    return active;
   }
 
   async recover(): Promise<RecoveryResult> {
@@ -229,7 +224,7 @@ export class ChatGptAdapter implements ModelAdapter {
     const body = await page.locator("body").innerText().catch(() => "");
     const loginControls = await this.visibleLoginControlCount();
     return inferSessionState(
-      "chatgpt",
+      "deepseek",
       body,
       (await this.findVisibleComposers()).length,
       loginControls,
@@ -244,7 +239,7 @@ export class ChatGptAdapter implements ModelAdapter {
     ];
     let count = 0;
     for (const locator of candidates) {
-      for (let index = 0; index < (await locator.count()); index += 1) {
+      for (let index = 0; index < (await locator.count().catch(() => 0)); index += 1) {
         if (await locator.nth(index).isVisible().catch(() => false)) count += 1;
       }
     }
@@ -252,7 +247,7 @@ export class ChatGptAdapter implements ModelAdapter {
   }
 
   async waitForManualLogin(): Promise<void> {
-    console.log("Войдите в ChatGPT в открытом окне. CLI продолжит работу после появления поля ввода.");
+    console.log("Войдите в DeepSeek в открытом окне. CLI продолжит работу после появления поля ввода.");
     const deadline = Date.now() + 10 * 60_000;
     while (Date.now() < deadline) {
       const state = await this.checkSession();
@@ -285,7 +280,7 @@ export class ChatGptAdapter implements ModelAdapter {
     if (state === "CHALLENGE_REQUIRED") throw new ChallengeRequiredError();
     const composers = await this.findVisibleComposers();
     if (composers.length === 1) return; // Usable
-    if (state !== "AUTHENTICATED") throw new LoginRequiredError(`ChatGPT state: ${state}`);
+    if (state !== "AUTHENTICATED") throw new LoginRequiredError(`DeepSeek state: ${state}`);
   }
 
   private async sendAndWait(message: string, channel?: TurnChannel): Promise<TurnResult> {
@@ -293,13 +288,22 @@ export class ChatGptAdapter implements ModelAdapter {
     await this.waitUntilReady();
     await this.installMutationObserver();
     const before = await this.captureResponses();
-    const userMessagesBefore = await this.captureUserMessageSignatures();
+    
+    let userMessageCountBefore = 0;
+    for (const selector of USER_MESSAGE_SELECTORS) {
+      const cnt = await page.locator(selector).count().catch(() => 0);
+      if (cnt > 0) {
+        userMessageCountBefore = cnt;
+        break;
+      }
+    }
+
     const composer = await this.getUniqueComposer();
     const startedAt = Date.now();
 
     await composer.fill(message);
     await this.submitComposer(composer, message);
-    await this.waitUntilSubmitted(userMessagesBefore);
+    await this.waitUntilSubmitted(message, userMessageCountBefore);
     channel?.publish({ type: "MESSAGE_SUBMITTED", at: new Date().toISOString() });
 
     const response = await this.waitForBoundResponse(before, channel);
@@ -324,7 +328,7 @@ export class ChatGptAdapter implements ModelAdapter {
       }
       if (state === "CHALLENGE_REQUIRED") throw new ChallengeRequiredError();
       if (state === "LOGIN_REQUIRED" && composers.length === 0) {
-        throw new LoginRequiredError(`ChatGPT state: ${state}`);
+        throw new LoginRequiredError(`DeepSeek state: ${state}`);
       }
       await page.waitForTimeout(500);
     }
@@ -350,20 +354,21 @@ export class ChatGptAdapter implements ModelAdapter {
   }
 
   private async findVisibleComposers(): Promise<Locator[]> {
+    return this.findVisibleBySelectors(COMPOSER_SELECTORS);
+  }
+
+  private async findVisibleBySelectors(selectors: readonly string[]): Promise<Locator[]> {
     const page = this.requirePage();
-    const matches: Locator[] = [];
-    for (const selector of COMPOSER_SELECTORS) {
+    for (const selector of selectors) {
       const locator = page.locator(selector);
-      for (let index = 0; index < (await locator.count()); index += 1) {
-        const item = locator.nth(index);
-        const usable =
-          (await item.isVisible().catch(() => false)) &&
-          (await item.isEditable().catch(() => false));
-        if (usable) matches.push(item);
+      const visible: Locator[] = [];
+      for (let index = 0; index < (await locator.count().catch(() => 0)); index += 1) {
+        const candidate = locator.nth(index);
+        if (await candidate.isVisible().catch(() => false)) visible.push(candidate);
       }
-      if (matches.length > 0) break;
+      if (visible.length > 0) return visible;
     }
-    return matches;
+    return [];
   }
 
   private async getUniqueComposer(): Promise<Locator> {
@@ -435,114 +440,55 @@ export class ChatGptAdapter implements ModelAdapter {
     return [];
   }
 
-  private async captureUserMessageSignatures(): Promise<Set<string>> {
-    const nodes = this.requirePage().locator('[data-message-author-role="user"]');
-    const signatures = new Set<string>();
-    for (let index = 0; index < (await nodes.count().catch(() => 0)); index += 1) {
-      const node = nodes.nth(index);
-      const id =
-        (await node.getAttribute("data-message-id").catch(() => null)) ??
-        (await node.getAttribute("id").catch(() => null));
-      const text = normalizeText(await node.innerText().catch(() => ""));
-      if (id || text) signatures.add(id ? `id:${id}` : `text:${fingerprint(text)}`);
-    }
-    return signatures;
-  }
-
   private async waitUntilSubmitted(
-    userMessagesBefore: ReadonlySet<string>,
+    message: string,
+    userMessageCountBefore: number,
   ): Promise<void> {
     const page = this.requirePage();
+    const normalized = normalizeText(message);
+    const expectedPrefix = normalized.slice(0, 100);
+    const expectedSuffix = normalized.slice(-100);
     const deadline = Date.now() + 30_000;
 
     while (Date.now() < deadline) {
       if (await this.hasChallenge()) throw new ChallengeRequiredError();
 
-      const current = await this.captureUserMessageSignatures();
-      if ([...current].some((signature) => !userMessagesBefore.has(signature))) return;
+      for (const selector of USER_MESSAGE_SELECTORS) {
+        const currentCount = await page.locator(selector).count().catch(() => 0);
+        if (currentCount > userMessageCountBefore) return;
+
+        const userNodes = page.locator(selector);
+        const count = await userNodes.count().catch(() => 0);
+        for (let i = 0; i < count; i++) {
+          const text = normalizeText(await userNodes.nth(i).innerText().catch(() => ""));
+          if (normalized.length > 200) {
+            if (text.includes(expectedPrefix) || text.includes(expectedSuffix)) {
+              return;
+            }
+          } else {
+            if (text.includes(normalized)) {
+              return;
+            }
+          }
+        }
+      }
 
       await page.waitForTimeout(250);
     }
 
-    throw new TurnTimeoutError("ChatGPT did not confirm that the user message was submitted");
+    const responses = await this.captureResponses();
+    if (responses.length > 0) return;
+
+    throw new TurnTimeoutError("DeepSeek did not confirm that the user message was submitted");
   }
 
   private async submitComposer(composer: Locator, message: string): Promise<void> {
-    // ChatGPT may treat Enter as a newline after a reactive composer update.
-    // Prefer the explicit enabled submit control and use Enter only when the
-    // control is genuinely absent. waitUntilSubmitted() remains the authority
-    // that proves the message reached the conversation.
-    const deadline = Date.now() + 5_000;
-    let buttons: Locator[] = [];
-    while (Date.now() < deadline) {
-      buttons = await this.findVisibleEnabledBySelectors(SEND_BUTTON_SELECTORS);
-      if (buttons.length > 0) break;
-      await this.requirePage().waitForTimeout(150);
-    }
+    const buttons = await this.findVisibleBySelectors(SEND_BUTTON_SELECTORS);
     if (buttons.length === 1) {
       await buttons[0]!.click();
-      return;
+    } else {
+      await composer.press("Enter");
     }
-    if (buttons.length > 1) {
-      throw new AmbiguousElementError(
-        `Expected one enabled ChatGPT send button, found ${buttons.length}`,
-      );
-    }
-    await composer.focus();
-    await composer.press("Enter");
-  }
-
-  private async composerWasCleared(composer: Locator): Promise<boolean> {
-    const deadline = Date.now() + 3_000;
-    while (Date.now() < deadline) {
-      const text = normalizeText(
-        await composer
-          .evaluate((element) =>
-            element instanceof HTMLTextAreaElement
-              ? element.value
-              : (element.textContent ?? ""),
-          )
-          .catch(() => ""),
-      );
-      if (!text) return true;
-      await this.requirePage().waitForTimeout(150);
-    }
-    return false;
-  }
-
-  private async findVisibleBySelectors(selectors: readonly string[]): Promise<Locator[]> {
-    const page = this.requirePage();
-    for (const selector of selectors) {
-      const locator = page.locator(selector);
-      const visible: Locator[] = [];
-      for (let index = 0; index < (await locator.count()); index += 1) {
-        const candidate = locator.nth(index);
-        if (await candidate.isVisible().catch(() => false)) visible.push(candidate);
-      }
-      if (visible.length > 0) return visible;
-    }
-    return [];
-  }
-
-  private async findVisibleEnabledBySelectors(
-    selectors: readonly string[],
-  ): Promise<Locator[]> {
-    const page = this.requirePage();
-    for (const selector of selectors) {
-      const locator = page.locator(selector);
-      const usable: Locator[] = [];
-      for (let index = 0; index < (await locator.count()); index += 1) {
-        const candidate = locator.nth(index);
-        if (
-          (await candidate.isVisible().catch(() => false)) &&
-          (await candidate.isEnabled().catch(() => false))
-        ) {
-          usable.push(candidate);
-        }
-      }
-      if (usable.length > 0) return usable;
-    }
-    return [];
   }
 
   private async waitForBoundResponse(
@@ -554,50 +500,11 @@ export class ChatGptAdapter implements ModelAdapter {
     let candidate: ResponseSnapshot | null = null;
     let stableText = "";
     let stableSince = 0;
-    const startedAt = Date.now();
-    let nextUiTraceAt = startedAt + 10_000;
-    let lastRecoveryAt = 0;
-    let recoveryAttempts = 0;
 
     while (Date.now() < deadline) {
       if (await this.hasChallenge()) throw new ChallengeRequiredError();
       const after = await this.captureResponses();
       const selected = selectNewResponse(before, after);
-
-      if (Date.now() >= nextUiTraceAt) {
-        await this.logResponseUiState(before.length, after.length, Date.now() - startedAt);
-        nextUiTraceAt = Date.now() + 10_000;
-      }
-
-      if (
-        !selected &&
-        Date.now() - startedAt >= 15_000 &&
-        Date.now() - lastRecoveryAt >= 30_000 &&
-        recoveryAttempts < 3
-      ) {
-        const retry = page.getByRole("button", {
-          name: /^(try again|retry|regenerate|continue generating|попробовать снова|повторить|продолжить генерацию)$/i,
-        });
-        const candidates: Locator[] = [];
-        for (let index = 0; index < (await retry.count().catch(() => 0)); index += 1) {
-          const candidateButton = retry.nth(index);
-          if (
-            (await candidateButton.isVisible().catch(() => false)) &&
-            (await candidateButton.isEnabled().catch(() => false))
-          ) {
-            candidates.push(candidateButton);
-          }
-        }
-        if (candidates.length === 1) {
-          recoveryAttempts += 1;
-          lastRecoveryAt = Date.now();
-          logEvent("WARN", "chatgpt.response.recovery_clicked", {
-            recoveryAttempts,
-            elapsedMs: Date.now() - startedAt,
-          });
-          await candidates[0]!.click();
-        }
-      }
 
       if (selected) {
         if (!candidate) {
@@ -614,7 +521,7 @@ export class ChatGptAdapter implements ModelAdapter {
           });
         }
         const stopVisible = await page
-          .getByRole("button", { name: /stop generating|остановить создание/i })
+          .locator("button:has-text(\"Stop\"), button:has-text(\"Остановить\")")
           .isVisible()
           .catch(() => false);
         const composerReady = (await this.findVisibleComposers()).length === 1;
@@ -642,49 +549,9 @@ export class ChatGptAdapter implements ModelAdapter {
   private async hasChallenge(): Promise<boolean> {
     const page = this.requirePage();
     const title = await page.title().catch(() => "");
-    const structuralSignals = await page
-      .locator(
-        'iframe[src*="challenges.cloudflare.com"], iframe[src*="recaptcha"], input[name="cf-turnstile-response"], .cf-challenge-running, #challenge-form',
-      )
-      .count()
-      .catch(() => 0);
-    return inferChallengePage({
-      url: page.url(),
-      title,
-      structuralSignals,
-    });
-  }
-
-  private async logResponseUiState(
-    beforeCount: number,
-    afterCount: number,
-    elapsedMs: number,
-  ): Promise<void> {
-    const page = this.requirePage();
-    const buttons = await page
-      .locator("button:visible")
-      .evaluateAll((nodes) =>
-        nodes.slice(-20).map((node) => ({
-          ariaLabel: node.getAttribute("aria-label"),
-          testId: node.getAttribute("data-testid"),
-          title: node.getAttribute("title"),
-          disabled: (node as HTMLButtonElement).disabled,
-        })),
-      )
-      .catch(() => []);
-    const notices = await page
-      .locator('[role="alert"]:visible, [role="status"]:visible')
-      .allInnerTexts()
-      .then((values) => values.slice(-5).map((value) => value.slice(0, 240)))
-      .catch(() => []);
-    logEvent("INFO", "chatgpt.response.ui_state", {
-      elapsedMs,
-      beforeCount,
-      afterCount,
-      composerCount: (await this.findVisibleComposers()).length,
-      buttons,
-      notices,
-    });
+    const body = await page.locator("body").innerText({ timeout: 2_000 }).catch(() => "");
+    const sample = `${title}\n${body.slice(0, 5_000)}`;
+    return CHALLENGE_PATTERNS.some((pattern) => pattern.test(sample));
   }
 
   private requirePage(): Page {
@@ -698,8 +565,8 @@ export class ChatGptAdapter implements ModelAdapter {
     this.page =
       this.context.pages().find((candidate) => !candidate.isClosed()) ??
       (await this.context.newPage());
-    if (!this.page.url().includes("chatgpt.com")) {
-      await this.page.goto(CHATGPT_URL, { waitUntil: "domcontentloaded" });
+    if (!this.page.url().includes("deepseek.com")) {
+      await this.page.goto(DEEPSEEK_URL, { waitUntil: "domcontentloaded" });
     }
     return this.page;
   }
@@ -723,11 +590,5 @@ export class ChatGptAdapter implements ModelAdapter {
         characterData: true,
       });
     });
-  }
-
-  private requireTurn(turn: TurnRef): ActiveTurn {
-    const active = this.turns.get(turn.id);
-    if (!active) throw new Error(`Unknown turn: ${turn.id}`);
-    return active;
   }
 }

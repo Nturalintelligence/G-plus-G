@@ -96,24 +96,36 @@ describe("Orchestrator", () => {
     expect(second).toHaveLength(1);
   });
 
-  it("includes both models' earlier messages in discussion turns and persists them", async () => {
+  it("passes only the latest peer response between discussion turns and persists all locally", async () => {
     const { database, projectId } = setup();
     const first: string[] = [];
     const second: string[] = [];
+    const firstAdapter = fakeAdapter("a", first);
+    const secondAdapter = fakeAdapter("b", second);
+    firstAdapter.getFinalResponse = async () => ({
+      response: `a-response-${first.length}`,
+      responseFingerprint: `a-${first.length}`,
+      elapsedMs: 1,
+    });
+    secondAdapter.getFinalResponse = async () => ({
+      response: `b-response-${second.length}`,
+      responseFingerprint: `b-${second.length}`,
+      elapsedMs: 1,
+    });
     const orchestrator = new Orchestrator(
       database,
       new Map([
-        ["a", fakeAdapter("a", first)],
-        ["b", fakeAdapter("b", second)],
+        ["a", firstAdapter],
+        ["b", secondAdapter],
       ]),
     );
     await orchestrator.run(projectId, "DEBATE", "shared task", ["a", "b"], {
       ...limits,
       maxTurns: 3,
     });
-    expect(first[1]).toContain("<UNTRUSTED_PEER_TRANSCRIPT>");
-    expect(first[1]).toContain("a:shared task");
-    expect(first[1]).toContain("b:");
+    expect(first[1]).toContain("Here is only the latest turn from the peer model:");
+    expect(first[1]).toContain("b-response-1");
+    expect(first[1]).not.toContain("a-response-1");
     const transcript = new ProjectRepository(database).conversationEntries(projectId);
     expect(transcript.map((entry) => entry.role)).toEqual([
       "USER",
@@ -123,7 +135,7 @@ describe("Orchestrator", () => {
     ]);
   });
 
-  it("passes the persisted project conversation into a later user message", async () => {
+  it("keeps persisted history local and sends only the latest user message", async () => {
     const { database, projectId } = setup();
     const repository = new ProjectRepository(database);
     repository.appendConversationEntry({
@@ -138,8 +150,8 @@ describe("Orchestrator", () => {
       new Map([["a", fakeAdapter("a", received)]]),
     );
     await orchestrator.run(projectId, "MANUAL", "next question", ["a"], limits);
-    expect(received[0]).toContain("remember-this");
-    expect(received[0]).toContain("next question");
+    expect(received[0]).toBe("next question");
+    expect(received[0]).not.toContain("remember-this");
   });
 
   it("runs only one turn when discussion has only one provider", async () => {

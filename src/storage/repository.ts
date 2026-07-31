@@ -18,7 +18,7 @@ type SqlValue = string | number | null;
 export class ProjectRepository {
   constructor(private readonly database: AppDatabase) {}
 
-  createProject(name: string): Project {
+  createProject(name: string, providers?: string[]): Project {
     const cleanName = name.trim();
     if (!cleanName) throw new Error("Project name cannot be empty");
     const project: Project = {
@@ -27,6 +27,7 @@ export class ProjectRepository {
       status: "ACTIVE",
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
+      providers: providers || [],
     };
     this.database.transaction(() => {
       this.database.raw
@@ -35,21 +36,34 @@ export class ProjectRepository {
            VALUES (?, ?, ?, ?, ?)`,
         )
         .run(project.id, project.name, project.status, project.createdAt, project.updatedAt);
+      if (providers && providers.length > 0) {
+        const stmt = this.database.raw.prepare(
+          `INSERT INTO project_providers(project_id, provider_id) VALUES (?, ?)`
+        );
+        for (const provider of providers) {
+          stmt.run(project.id, provider);
+        }
+      }
       this.appendEventInternal("Project", project.id, "PROJECT_CREATED", {
         name: project.name,
+        providers: project.providers,
       });
     });
     return project;
   }
 
   listProjects(): Project[] {
-    return this.database.raw
+    const projects = this.database.raw
       .prepare(
         `SELECT id, name, status, created_at, updated_at
          FROM projects ORDER BY created_at DESC`,
       )
       .all()
       .map(mapProject);
+    for (const project of projects) {
+      project.providers = this.getProjectProviders(project.id);
+    }
+    return projects;
   }
 
   openProject(id: string): Project | null {
@@ -58,7 +72,17 @@ export class ProjectRepository {
         `SELECT id, name, status, created_at, updated_at FROM projects WHERE id = ?`,
       )
       .get(id);
-    return row ? mapProject(row) : null;
+    if (!row) return null;
+    const project = mapProject(row);
+    project.providers = this.getProjectProviders(project.id);
+    return project;
+  }
+
+  private getProjectProviders(projectId: string): string[] {
+    const rows = this.database.raw
+      .prepare(`SELECT provider_id FROM project_providers WHERE project_id = ?`)
+      .all(projectId) as Array<{ provider_id: string }>;
+    return rows.map((r) => r.provider_id);
   }
 
   appendConversationEntry(input: {

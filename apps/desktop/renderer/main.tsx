@@ -50,7 +50,7 @@ function metricValue(metric: MetricSummaryView): string {
 
 const fallbackSettings: AppSettingsView = {
   schemaVersion: 1,
-  profile: { displayName: "" },
+  profile: { displayName: "", realName: "", greetingStyle: "generic" },
   defaults: {
     mode: "DEBATE",
     providers: ["chatgpt", "gemini"],
@@ -72,7 +72,7 @@ function App(): React.JSX.Element {
   const [task, setTask] = useState("");
   const [mode, setMode] = useState("DEBATE");
   const [providers, setProviders] = useState(["chatgpt", "gemini"]);
-  const [starter, setStarter] = useState<"chatgpt" | "gemini">("chatgpt");
+  const [starter, setStarter] = useState<string>("chatgpt");
   const [stateText, setStateText] = useState(JSON.stringify(initialState, null, 2));
   const [projectState, setProjectState] = useState<ProjectStateView>(initialState);
   const [advancedStateOpen, setAdvancedStateOpen] = useState(false);
@@ -83,6 +83,7 @@ function App(): React.JSX.Element {
   const [running, setRunning] = useState(false);
   const [settings, setSettings] = useState<AppSettingsView>(fallbackSettings);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<"profile" | "behavior" | "appearance" | "quality" | "diagnostics">("profile");
   const [releaseInfo, setReleaseInfo] = useState<ReleaseInfoView | null>(null);
   const [preflight, setPreflight] = useState<Array<{
     name: string;
@@ -91,15 +92,32 @@ function App(): React.JSX.Element {
   }>>([]);
   const [maintenanceBusy, setMaintenanceBusy] = useState(false);
   const [qualityDashboard, setQualityDashboard] = useState<QualityDashboardView | null>(null);
+  const [showSplash, setShowSplash] = useState(true);
+  const [creationProviders, setCreationProviders] = useState<string[]>(["chatgpt", "gemini"]);
+  const [streaming, setStreaming] = useState<Record<string, string>>({});
   const outputRef = useRef<HTMLElement>(null);
 
+  useEffect(() => {
+    return window.orchestrator.orchestration.onProgress((data) => {
+      setStreaming((currentStreaming) => ({
+        ...currentStreaming,
+        [data.providerId]: data.text,
+      }));
+    });
+  }, []);
+
   const refresh = async (): Promise<void> => setProjects(await window.orchestrator.projects.list());
-  useEffect(() => void refresh(), []);
+  useEffect(() => {
+    void refresh();
+    const timer = setTimeout(() => setShowSplash(false), 2500);
+    return () => clearTimeout(timer);
+  }, []);
   useEffect(() => {
     void window.orchestrator.settings.get().then((value) => {
       setSettings(value);
       setMode(value.defaults.mode);
       setProviders(value.defaults.providers);
+      setCreationProviders(value.defaults.providers);
       if (value.defaults.providers[0]) {
         setStarter(value.defaults.providers[0]);
       }
@@ -139,6 +157,7 @@ function App(): React.JSX.Element {
     if (!current || !submittedTask || running || providers.length === 0) return;
     const projectId = current.project.id;
     setTask("");
+    setStreaming({});
     setRunning(true);
     setStatus("Модели обсуждают сообщение…");
     try {
@@ -165,6 +184,7 @@ function App(): React.JSX.Element {
       await openProject(projectId);
     } finally {
       setRunning(false);
+      setStreaming({});
     }
   }
 
@@ -230,7 +250,7 @@ function App(): React.JSX.Element {
     }
   }
 
-  async function resetSession(provider: "chatgpt" | "gemini"): Promise<void> {
+  async function resetSession(provider: any): Promise<void> {
     setMaintenanceBusy(true);
     try {
       const result = await window.orchestrator.maintenance.resetSession(provider);
@@ -328,10 +348,32 @@ function App(): React.JSX.Element {
     setStatus("Ответ помещён в редактор. Выберите модель, отредактируйте текст и отправьте.");
   }
 
+  if (showSplash) {
+    const nameToUse =
+      settings.profile.greetingStyle === "display"
+        ? settings.profile.displayName
+        : settings.profile.greetingStyle === "real"
+        ? settings.profile.realName
+        : "";
+    const greetingText = nameToUse
+      ? `Привет, ${nameToUse}!`
+      : "С возвращением!";
+    return (
+      <div className="splash-screen">
+        <div className="splash-content">
+          <img src="./logo.png" className="splash-logo" alt="G+G Logo" />
+          <h1 className="splash-greeting">{greetingText}</h1>
+          <p className="splash-subtitle">Multi-model orchestrator workspace</p>
+          <div className="splash-loader"></div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <main>
       <header>
-        <div><span className="mark">G+G</span><h1>Multi-model workspace</h1></div>
+        <div><img src="./logo.png" className="header-logo" alt="G+G Logo" /><h1>Multi-model workspace</h1></div>
         <div className="header-actions">
           <span className="status" role="status" aria-live="polite">{status}</span>
           <button onClick={() => setSettingsOpen(true)}>
@@ -345,7 +387,7 @@ function App(): React.JSX.Element {
           <form
             onSubmit={(event) => {
               event.preventDefault();
-              void window.orchestrator.projects.create(name).then(async (project) => {
+              void window.orchestrator.projects.create(name, creationProviders).then(async (project) => {
                 setName("");
                 await refresh();
                 await openProject(project.id);
@@ -353,6 +395,26 @@ function App(): React.JSX.Element {
             }}
           >
             <input aria-label="Название проекта" value={name} onChange={(event) => setName(event.target.value)} placeholder="Название проекта" />
+            <details className="creation-providers-details">
+              <summary>Выбрать ИИ ({creationProviders.length})</summary>
+              <div className="creation-providers-list">
+                {(["chatgpt", "gemini", "deepseek", "claude", "copilot", "perplexity", "huggingchat", "groq", "duckduckgo", "mistral"] as const).map((prov) => (
+                  <label key={prov}>
+                    <input
+                      type="checkbox"
+                      checked={creationProviders.includes(prov)}
+                      onChange={() =>
+                        setCreationProviders((currentList) =>
+                          currentList.includes(prov)
+                            ? currentList.filter((item) => item !== prov)
+                            : [...currentList, prov],
+                        )
+                      }
+                    /> {prov}
+                  </label>
+                ))}
+              </div>
+            </details>
             <button>Создать</button>
           </form>
           <nav>
@@ -367,7 +429,7 @@ function App(): React.JSX.Element {
             ))}
           </nav>
           <h2>Сессии</h2>
-          {(["chatgpt", "gemini"] as const).map((provider) => (
+          {(["chatgpt", "gemini", "deepseek", "claude", "copilot", "perplexity", "huggingchat", "groq", "duckduckgo", "mistral"] as const).map((provider) => (
             <div className="session-row" key={provider}>
               <button onClick={() => void login(provider)}>
                 Войти · {provider}
@@ -412,7 +474,7 @@ function App(): React.JSX.Element {
                     aria-label="Первым отвечает"
                     value={starter}
                     onChange={(event) =>
-                      setStarter(event.target.value as "chatgpt" | "gemini")}
+                      setStarter(event.target.value as any)}
                   >
                     {providers.map((provider) => (
                       <option key={provider} value={provider}>{provider}</option>
@@ -420,7 +482,10 @@ function App(): React.JSX.Element {
                   </select>
                 </label>
               ) : null}
-              {["chatgpt", "gemini"].map((provider) => (
+              {(current?.project.providers && current.project.providers.length > 0
+                ? current.project.providers
+                : ["chatgpt", "gemini", "deepseek"]
+              ).map((provider) => (
                 <label key={provider}>
                   <input
                     type="checkbox"
@@ -437,7 +502,7 @@ function App(): React.JSX.Element {
                           setMode("MANUAL");
                         }
                         if (!next.includes(starter) && next[0]) {
-                          setStarter(next[0] as "chatgpt" | "gemini");
+                          setStarter(next[0] as any);
                         }
                         return next;
                       })
@@ -458,41 +523,79 @@ function App(): React.JSX.Element {
             </div>
           </div>
           <article className="panel output" ref={outputRef}>
-            {current?.transcript.length ? (
-              current.transcript.map((entry) => (
-                <section
-                  className={`message ${entry.role.toLowerCase()} ${entry.providerId ?? ""}`}
-                  key={entry.id}
-                >
-                  <header>
-                    <strong>{entry.role === "USER" ? "Вы" : entry.providerId ?? entry.role}</strong>
-                    {entry.round ? <small>ход {entry.round}</small> : null}
-                  </header>
-                  <ReactMarkdown
-                    remarkPlugins={[remarkGfm]}
-                    skipHtml
-                    components={{
-                      a: ({ href, children }) => {
-                        if (!href || !/^https?:\/\//i.test(href)) {
-                          return <span>{children}</span>;
-                        }
-                        return (
-                          <a href={href} target="_blank" rel="noreferrer noopener">
-                            {children}
-                          </a>
-                        );
-                      },
-                    }}
+            {current?.transcript.length || Object.values(streaming).some(t => t.trim()) ? (
+              <>
+                {(current?.transcript || []).map((entry) => (
+                  <section
+                    className={`message ${entry.role.toLowerCase()} ${entry.providerId ?? ""}`}
+                    key={entry.id}
                   >
-                    {entry.content}
-                  </ReactMarkdown>
-                  {entry.role === "ASSISTANT" ? (
-                    <button className="relay" onClick={() => relay(entry)}>
-                      Передать дальше
-                    </button>
-                  ) : null}
-                </section>
-              ))
+                    <header>
+                      <strong>{entry.role === "USER" ? "Вы" : entry.providerId ?? entry.role}</strong>
+                      {entry.round ? <small>ход {entry.round}</small> : null}
+                    </header>
+                    <ReactMarkdown
+                      remarkPlugins={[remarkGfm]}
+                      skipHtml
+                      components={{
+                        a: ({ href, children }) => {
+                          if (!href || !/^https?:\/\//i.test(href)) {
+                            return <span>{children}</span>;
+                          }
+                          return (
+                            <a href={href} target="_blank" rel="noreferrer noopener">
+                              {children}
+                            </a>
+                          );
+                        },
+                      }}
+                    >
+                      {entry.content}
+                    </ReactMarkdown>
+                    {entry.role === "ASSISTANT" ? (
+                      <button className="relay" onClick={() => relay(entry)}>
+                        Передать дальше
+                      </button>
+                    ) : null}
+                  </section>
+                ))}
+                {Object.entries(streaming).map(([providerId, text]) => {
+                  if (!text.trim()) return null;
+                  const alreadyPersisted = current?.transcript.some(
+                    t => t.role === "ASSISTANT" && t.providerId === providerId && t.content.slice(-20) === text.slice(-20)
+                  );
+                  if (alreadyPersisted) return null;
+                  return (
+                    <section
+                      className={`message assistant ${providerId}`}
+                      key={`streaming-${providerId}`}
+                    >
+                      <header>
+                        <strong>{providerId}</strong>
+                        <small>печатает...</small>
+                      </header>
+                      <ReactMarkdown
+                        remarkPlugins={[remarkGfm]}
+                        skipHtml
+                        components={{
+                          a: ({ href, children }) => {
+                            if (!href || !/^https?:\/\//i.test(href)) {
+                              return <span>{children}</span>;
+                            }
+                            return (
+                              <a href={href} target="_blank" rel="noreferrer noopener">
+                                {children}
+                              </a>
+                            );
+                          },
+                        }}
+                      >
+                        {text}
+                      </ReactMarkdown>
+                    </section>
+                  );
+                })}
+              </>
             ) : (
               <p className="empty">Здесь сохранится весь разговор ChatGPT, Gemini и ваш.</p>
             )}
@@ -512,10 +615,10 @@ function App(): React.JSX.Element {
               {Object.values(projectState).flat().filter((item) => item.text.trim()).length} пунктов
             </span>
           </div>
-          <div className="state-builder">
+          <div className="state-builder tree-view">
             {stateSections.map((section) => (
               <details
-                className="state-section"
+                className="state-section tree-branch"
                 key={section.key}
                 open={openStateSections.has(section.key)}
                 onToggle={(event) => {
@@ -530,12 +633,20 @@ function App(): React.JSX.Element {
                 }}
               >
                 <summary>
-                  <span>{section.title}</span>
+                  <span>
+                    {section.key === "requirements" && "📋 "}
+                    {section.key === "constraints" && "🛑 "}
+                    {section.key === "decisions" && "✅ "}
+                    {section.key === "rejectedOptions" && "❌ "}
+                    {section.key === "openQuestions" && "❓ "}
+                    {section.key === "acceptanceCriteria" && "🎯 "}
+                    {section.title}
+                  </span>
                   <small>{projectState[section.key].length}</small>
                 </summary>
-                <div className="state-items">
+                <div className="state-items tree-items">
                   {projectState[section.key].map((item, index) => (
-                    <article className="state-card" key={item.id}>
+                    <article className="state-card tree-leaf" key={item.id}>
                       <header>
                         <strong>{index + 1}</strong>
                         <button
@@ -668,177 +779,342 @@ function App(): React.JSX.Element {
               </div>
               <button aria-label="Закрыть настройки" onClick={() => setSettingsOpen(false)}>×</button>
             </header>
-            <div className="settings-content">
-              <fieldset>
-                <legend>Профиль</legend>
-                <label>Отображаемое имя
-                  <input
-                    maxLength={80}
-                    value={settings.profile.displayName}
-                    onChange={(event) => setSettings((value) => ({
-                      ...value,
-                      profile: { displayName: event.target.value },
-                    }))}
-                    placeholder="Как к вам обращаться"
-                  />
-                </label>
-              </fieldset>
-              <fieldset>
-                <legend>Новый запуск по умолчанию</legend>
-                <label>Режим
-                  <select
-                    value={settings.defaults.mode}
-                    onChange={(event) => setSettings((value) => ({
-                      ...value,
-                      defaults: {
-                        ...value.defaults,
-                        mode: event.target.value as AppSettingsView["defaults"]["mode"],
-                      },
-                    }))}
-                  >
-                    <option value="DEBATE">Обсуждение</option>
-                    <option value="SEQUENTIAL">Рецензирование</option>
-                    <option value="PARALLEL">Независимые ответы</option>
-                    <option value="MANUAL">Один ответ</option>
-                  </select>
-                </label>
-                <div className="settings-checks">
-                  {(["chatgpt", "gemini"] as const).map((provider) => (
-                    <label key={provider}>
+            <div className="settings-layout">
+              <aside className="settings-sidebar">
+                <button
+                  className={`settings-sidebar-btn ${settingsTab === "profile" ? "active" : ""}`}
+                  onClick={() => setSettingsTab("profile")}
+                >
+                  👤 Профиль
+                </button>
+                <button
+                  className={`settings-sidebar-btn ${settingsTab === "behavior" ? "active" : ""}`}
+                  onClick={() => setSettingsTab("behavior")}
+                >
+                  ⚙️ Поведение и лимиты
+                </button>
+                <button
+                  className={`settings-sidebar-btn ${settingsTab === "appearance" ? "active" : ""}`}
+                  onClick={() => setSettingsTab("appearance")}
+                >
+                  🎨 Внешний вид
+                </button>
+                <button
+                  className={`settings-sidebar-btn ${settingsTab === "quality" ? "active" : ""}`}
+                  onClick={() => setSettingsTab("quality")}
+                >
+                  📊 Центр качества
+                </button>
+                <button
+                  className={`settings-sidebar-btn ${settingsTab === "diagnostics" ? "active" : ""}`}
+                  onClick={() => setSettingsTab("diagnostics")}
+                >
+                  🛠️ Диагностика и данные
+                </button>
+              </aside>
+              <div className="settings-content settings-pane">
+                {settingsTab === "profile" && (
+                  <fieldset>
+                    <legend>Профиль</legend>
+                    <label>Никнейм
                       <input
-                        type="checkbox"
-                        checked={settings.defaults.providers.includes(provider)}
-                        onChange={() => setSettings((value) => ({
+                        maxLength={80}
+                        value={settings.profile.displayName}
+                        onChange={(event) => setSettings((value) => ({
                           ...value,
-                          defaults: {
-                            ...value.defaults,
-                            providers: value.defaults.providers.includes(provider)
-                              ? value.defaults.providers.filter((item) => item !== provider)
-                              : [...value.defaults.providers, provider],
+                          profile: { ...value.profile, displayName: event.target.value },
+                        }))}
+                        placeholder="Отображаемое имя"
+                      />
+                    </label>
+                    <label>Настоящее имя
+                      <input
+                        maxLength={80}
+                        value={settings.profile.realName ?? ""}
+                        onChange={(event) => setSettings((value) => ({
+                          ...value,
+                          profile: { ...value.profile, realName: event.target.value },
+                        }))}
+                        placeholder="Имя Фамилия"
+                      />
+                    </label>
+                    <label>Приветствие на старте
+                      <select
+                        value={settings.profile.greetingStyle ?? "generic"}
+                        onChange={(event) => setSettings((value) => ({
+                          ...value,
+                          profile: {
+                            ...value.profile,
+                            greetingStyle: event.target.value as any,
                           },
                         }))}
-                      /> {provider}
+                      >
+                        <option value="display">Использовать никнейм</option>
+                        <option value="real">Использовать настоящее имя</option>
+                        <option value="generic">Стандартное приветствие</option>
+                      </select>
                     </label>
-                  ))}
-                </div>
-              </fieldset>
-              <fieldset>
-                <legend>Ограничения оркестрации</legend>
-                <div className="settings-grid">
-                  <label>Максимум ходов<input type="number" min={1} max={50} value={settings.defaults.limits.maxTurns} onChange={(event) => updateLimit("maxTurns", event.target.value)} /></label>
-                  <label>Повторных попыток<input type="number" min={1} max={10} value={settings.defaults.limits.maxRetries} onChange={(event) => updateLimit("maxRetries", event.target.value)} /></label>
-                  <label>Таймаут хода, сек.<input type="number" min={1} max={1800} value={settings.defaults.limits.maxTurnMs / 1000} onChange={(event) => updateLimit("maxTurnMs", String(Number(event.target.value) * 1000))} /></label>
-                  <label>Таймаут сессии, мин.<input type="number" min={1} max={240} value={settings.defaults.limits.maxSessionMs / 60000} onChange={(event) => updateLimit("maxSessionMs", String(Number(event.target.value) * 60000))} /></label>
-                  <label>Подтверждение каждые N ходов<input type="number" min={1} max={50} value={settings.defaults.limits.confirmationEvery} onChange={(event) => updateLimit("confirmationEvery", event.target.value)} /></label>
-                </div>
-              </fieldset>
-              <fieldset>
-                <legend>Внешний вид</legend>
-                <div className="settings-grid">
-                  <label>Тема<select value={settings.appearance.theme} onChange={(event) => setSettings((value) => ({ ...value, appearance: { ...value.appearance, theme: event.target.value as AppSettingsView["appearance"]["theme"] } }))}><option value="dark">Тёмная</option><option value="light">Светлая</option><option value="system">Как в системе</option></select></label>
-                  <label>Плотность<select value={settings.appearance.density} onChange={(event) => setSettings((value) => ({ ...value, appearance: { ...value.appearance, density: event.target.value as AppSettingsView["appearance"]["density"] } }))}><option value="comfortable">Обычная</option><option value="compact">Компактная</option></select></label>
-                  <label>Масштаб текста, %<input type="number" min={80} max={140} step={5} value={settings.appearance.fontScale} onChange={(event) => setSettings((value) => ({ ...value, appearance: { ...value.appearance, fontScale: Number(event.target.value) } }))} /></label>
-                </div>
-              </fieldset>
-              <fieldset>
-                <legend>Центр качества · последние 30 дней</legend>
-                <div className="quality-heading">
-                  <p className="settings-note">
-                    Локальная статистика помогает отличить сбой провайдера от ошибки
-                    приложения. Тексты сообщений в метрики не попадают.
-                  </p>
-                  <button onClick={() => void loadQualityDashboard()}>Обновить</button>
-                </div>
-                {qualityDashboard?.totalSamples ? (
-                  <>
-                    <div className="quality-providers">
-                      {Object.entries(qualityDashboard.providers).map(([provider, metrics]) => {
-                        const success = metrics.find((metric) =>
-                          metric.name === "provider.turn.success");
-                        const elapsed = metrics.find((metric) =>
-                          metric.name === "provider.turn.elapsed_ms");
-                        const retries = metrics.find((metric) =>
-                          metric.name === "provider.turn.retry_count");
-                        return (
-                          <article className="provider-score" key={provider}>
-                            <header>
-                              <strong>{provider}</strong>
-                              <span data-score={
-                                !success ? "unknown" : success.average >= .98 ? "good"
-                                  : success.average >= .85 ? "warn" : "bad"
-                              }>
-                                {success ? metricValue(success) : "нет данных"}
-                              </span>
-                            </header>
-                            <dl>
-                              <div><dt>Ходов</dt><dd>{success?.count ?? 0}</dd></div>
-                              <div><dt>Средний ответ</dt><dd>{elapsed ? metricValue(elapsed) : "—"}</dd></div>
-                              <div><dt>Повторы</dt><dd>{retries ? metricValue(retries) : "—"}</dd></div>
-                            </dl>
-                          </article>
-                        );
-                      })}
-                    </div>
-                    <div className="metric-grid">
-                      {qualityDashboard.overall.map((metric) => (
-                        <article className="metric-card" key={metric.name}>
-                          <span>{metricLabels[metric.name] ?? metric.name}</span>
-                          <strong>{metricValue(metric)}</strong>
-                          <small>{metric.count} измерений · min {Math.round(metric.minimum)} · max {Math.round(metric.maximum)}</small>
-                        </article>
-                      ))}
-                    </div>
-                  </>
-                ) : (
-                  <div className="quality-empty">
-                    <strong>Пока недостаточно данных</strong>
-                    <span>Метрики появятся после первых запусков моделей.</span>
-                  </div>
+                  </fieldset>
                 )}
-              </fieldset>
-              <fieldset>
-                <legend>Диагностика и данные</legend>
-                <p className="settings-note">
-                  Проверка выполняется локально. Резервная копия содержит базу проектов и
-                  обезличенные настройки, но не браузерные профили, cookies и пароли.
-                </p>
-                <div className="maintenance-actions">
-                  <button disabled={maintenanceBusy} onClick={() => void refreshDiagnostics()}>
-                    Проверить окружение
-                  </button>
-                  <button disabled={maintenanceBusy} onClick={() => void createBackup()}>
-                    Создать резервную копию
-                  </button>
-                  <button disabled={maintenanceBusy} onClick={() => void openDataFolder()}>
-                    Открыть папку данных
-                  </button>
-                </div>
-                {releaseInfo ? (
-                  <dl className="release-info">
-                    <div><dt>Версия</dt><dd>{releaseInfo.appVersion}</dd></div>
-                    <div><dt>Commit</dt><dd>{releaseInfo.commit}</dd></div>
-                    <div><dt>Данные</dt><dd>{releaseInfo.dataPath}</dd></div>
-                  </dl>
-                ) : null}
-                {preflight.length > 0 ? (
-                  <ul className="preflight-list" aria-label="Результаты диагностики">
-                    {preflight.map((check) => (
-                      <li key={check.name} data-status={check.status}>
-                        <strong>{check.status.toUpperCase()} · {check.name}</strong>
-                        <span>{check.detail}</span>
-                      </li>
-                    ))}
-                  </ul>
-                ) : null}
-                <div className="danger-zone">
-                  <strong>Сброс авторизации</strong>
-                  <span>Удаляет только локальную сессию выбранного сервиса.</span>
-                  <div className="maintenance-actions">
-                    <button disabled={maintenanceBusy} onClick={() => void resetSession("chatgpt")}>Сбросить ChatGPT</button>
-                    <button disabled={maintenanceBusy} onClick={() => void resetSession("gemini")}>Сбросить Gemini</button>
-                  </div>
-                </div>
-              </fieldset>
+
+                {settingsTab === "behavior" && (
+                  <>
+                    <fieldset>
+                      <legend>Новый запуск по умолчанию</legend>
+                      <label>Режим
+                        <select
+                          value={settings.defaults.mode}
+                          onChange={(event) => setSettings((value) => ({
+                            ...value,
+                            defaults: {
+                              ...value.defaults,
+                              mode: event.target.value as AppSettingsView["defaults"]["mode"],
+                            },
+                          }))}
+                        >
+                          <option value="DEBATE">Обсуждение</option>
+                          <option value="SEQUENTIAL">Рецензирование</option>
+                          <option value="PARALLEL">Независимые ответы</option>
+                          <option value="MANUAL">Один ответ</option>
+                        </select>
+                      </label>
+                      <div className="settings-checks">
+                        {(["chatgpt", "gemini", "deepseek", "claude", "copilot", "perplexity", "huggingchat", "groq", "duckduckgo", "mistral"] as const).map((provider) => (
+                          <label key={provider}>
+                            <input
+                              type="checkbox"
+                              checked={settings.defaults.providers.includes(provider)}
+                              onChange={() => setSettings((value) => ({
+                                ...value,
+                                defaults: {
+                                  ...value.defaults,
+                                  providers: (value.defaults.providers.includes(provider)
+                                    ? value.defaults.providers.filter((item) => item !== provider)
+                                    : [...value.defaults.providers, provider]) as any,
+                                },
+                              }))}
+                            /> {provider}
+                          </label>
+                        ))}
+                      </div>
+                    </fieldset>
+                    <fieldset>
+                      <legend>Ограничения оркестрации</legend>
+                      <div className="settings-grid">
+                        <label>Максимум ходов
+                          <select
+                            value={settings.defaults.limits.maxTurns}
+                            onChange={(event) => updateLimit("maxTurns", event.target.value)}
+                          >
+                            {[2, 4, 6, 8, 10, 12, 16, 20, 30].map(n => (
+                              <option key={n} value={n}>{n}</option>
+                            ))}
+                          </select>
+                        </label>
+                        <label>Повторных попыток
+                          <select
+                            value={settings.defaults.limits.maxRetries}
+                            onChange={(event) => updateLimit("maxRetries", event.target.value)}
+                          >
+                            {[0, 1, 2, 3, 4, 5].map(n => (
+                              <option key={n} value={n}>{n}</option>
+                            ))}
+                          </select>
+                        </label>
+                        <label>Таймаут хода
+                          <select
+                            value={settings.defaults.limits.maxTurnMs}
+                            onChange={(event) => updateLimit("maxTurnMs", event.target.value)}
+                          >
+                            <option value={30000}>30 секунд</option>
+                            <option value={60000}>1 минута</option>
+                            <option value={120000}>2 минуты</option>
+                            <option value={180000}>3 минуты</option>
+                            <option value={300000}>5 минут</option>
+                            <option value={600000}>10 минут</option>
+                          </select>
+                        </label>
+                        <label>Таймаут сессии
+                          <select
+                            value={settings.defaults.limits.maxSessionMs}
+                            onChange={(event) => updateLimit("maxSessionMs", event.target.value)}
+                          >
+                            <option value={300000}>5 минут</option>
+                            <option value={600000}>10 минут</option>
+                            <option value={900000}>15 минут</option>
+                            <option value={1800000}>30 минут</option>
+                            <option value={3600000}>1 час</option>
+                            <option value={7200000}>2 часа</option>
+                            <option value={14400000}>4 часа</option>
+                          </select>
+                        </label>
+                        <label>Подтверждение каждые N ходов
+                          <select
+                            value={settings.defaults.limits.confirmationEvery}
+                            onChange={(event) => updateLimit("confirmationEvery", event.target.value)}
+                          >
+                            {[1, 2, 3, 5, 10, 15, 20].map(n => (
+                              <option key={n} value={n}>{n}</option>
+                            ))}
+                          </select>
+                        </label>
+                      </div>
+                    </fieldset>
+                  </>
+                )}
+
+                {settingsTab === "appearance" && (
+                  <fieldset>
+                    <legend>Внешний вид</legend>
+                    <div className="settings-grid">
+                      <label>Тема
+                        <select
+                          value={settings.appearance.theme}
+                          onChange={(event) => setSettings((value) => ({
+                            ...value,
+                            appearance: { ...value.appearance, theme: event.target.value as AppSettingsView["appearance"]["theme"] },
+                          }))}
+                        >
+                          <option value="dark">Тёмная</option>
+                          <option value="light">Светлая</option>
+                          <option value="system">Как в системе</option>
+                        </select>
+                      </label>
+                      <label>Плотность
+                        <select
+                          value={settings.appearance.density}
+                          onChange={(event) => setSettings((value) => ({
+                            ...value,
+                            appearance: { ...value.appearance, density: event.target.value as AppSettingsView["appearance"]["density"] },
+                          }))}
+                        >
+                          <option value="comfortable">Обычная</option>
+                          <option value="compact">Компактная</option>
+                        </select>
+                      </label>
+                      <label>Масштаб текста, %
+                        <select
+                          value={settings.appearance.fontScale}
+                          onChange={(event) => setSettings((value) => ({
+                            ...value,
+                            appearance: { ...value.appearance, fontScale: Number(event.target.value) },
+                          }))}
+                        >
+                          {[80, 90, 100, 110, 120, 130, 140].map(scale => (
+                            <option key={scale} value={scale}>{scale}%</option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
+                  </fieldset>
+                )}
+
+                {settingsTab === "quality" && (
+                  <fieldset>
+                    <legend>Центр качества · последние 30 дней</legend>
+                    <div className="quality-heading">
+                      <p className="settings-note">
+                        Локальная статистика помогает отличить сбой провайдера от ошибки
+                        приложения. Тексты сообщений в метрики не попадают.
+                      </p>
+                      <button onClick={() => void loadQualityDashboard()}>Обновить</button>
+                    </div>
+                    {qualityDashboard?.totalSamples ? (
+                      <>
+                        <div className="quality-providers">
+                          {Object.entries(qualityDashboard.providers).map(([provider, metrics]) => {
+                            const success = metrics.find((metric) =>
+                              metric.name === "provider.turn.success");
+                            const elapsed = metrics.find((metric) =>
+                              metric.name === "provider.turn.elapsed_ms");
+                            const retries = metrics.find((metric) =>
+                              metric.name === "provider.turn.retry_count");
+                            return (
+                              <article className="provider-score" key={provider}>
+                                <header>
+                                  <strong>{provider}</strong>
+                                  <span data-score={
+                                    !success ? "unknown" : success.average >= .98 ? "good"
+                                      : success.average >= .85 ? "warn" : "bad"
+                                  }>
+                                    {success ? metricValue(success) : "нет данных"}
+                                  </span>
+                                </header>
+                                <dl>
+                                  <div><dt>Ходов</dt><dd>{success?.count ?? 0}</dd></div>
+                                  <div><dt>Средний ответ</dt><dd>{elapsed ? metricValue(elapsed) : "—"}</dd></div>
+                                  <div><dt>Повторы</dt><dd>{retries ? metricValue(retries) : "—"}</dd></div>
+                                </dl>
+                              </article>
+                            );
+                          })}
+                        </div>
+                        <div className="metric-grid">
+                          {qualityDashboard.overall.map((metric) => (
+                            <article className="metric-card" key={metric.name}>
+                              <span>{metricLabels[metric.name] ?? metric.name}</span>
+                              <strong>{metricValue(metric)}</strong>
+                              <small>{metric.count} измерений · min {Math.round(metric.minimum)} · max {Math.round(metric.maximum)}</small>
+                            </article>
+                          ))}
+                        </div>
+                      </>
+                    ) : (
+                      <div className="quality-empty">
+                        <strong>Пока недостаточно данных</strong>
+                        <span>Метрики появятся после первых запусков моделей.</span>
+                      </div>
+                    )}
+                  </fieldset>
+                )}
+
+                {settingsTab === "diagnostics" && (
+                  <fieldset>
+                    <legend>Диагностика и данные</legend>
+                    <p className="settings-note">
+                      Проверка выполняется локально. Резервная копия содержит базу проектов и
+                      обезличенные настройки, но не браузерные профили, cookies и пароли.
+                    </p>
+                    <div className="maintenance-actions">
+                      <button disabled={maintenanceBusy} onClick={() => void refreshDiagnostics()}>
+                        Проверить окружение
+                      </button>
+                      <button disabled={maintenanceBusy} onClick={() => void createBackup()}>
+                        Создать резервную копию
+                      </button>
+                      <button disabled={maintenanceBusy} onClick={() => void openDataFolder()}>
+                        Открыть папку данных
+                      </button>
+                    </div>
+                    {releaseInfo ? (
+                      <dl className="release-info">
+                        <div><dt>Версия</dt><dd>{releaseInfo.appVersion}</dd></div>
+                        <div><dt>Commit</dt><dd>{releaseInfo.commit}</dd></div>
+                        <div><dt>Данные</dt><dd>{releaseInfo.dataPath}</dd></div>
+                      </dl>
+                    ) : null}
+                    {preflight.length > 0 ? (
+                      <ul className="preflight-list" aria-label="Результаты диагностики">
+                        {preflight.map((check) => (
+                          <li key={check.name} data-status={check.status}>
+                            <strong>{check.status.toUpperCase()} · {check.name}</strong>
+                            <span>{check.detail}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
+                    <div className="danger-zone">
+                      <strong>Сброс авторизации</strong>
+                      <span>Удаляет только локальную сессию выбранного сервиса.</span>
+                      <div className="maintenance-actions">
+                        <button disabled={maintenanceBusy} onClick={() => void resetSession("chatgpt")}>Сбросить ChatGPT</button>
+                        <button disabled={maintenanceBusy} onClick={() => void resetSession("gemini")}>Сбросить Gemini</button>
+                        <button disabled={maintenanceBusy} onClick={() => void resetSession("deepseek")}>Сбросить DeepSeek</button>
+                      </div>
+                    </div>
+                  </fieldset>
+                )}
+              </div>
             </div>
             <footer>
               <button onClick={() => setSettings(fallbackSettings)}>Сбросить</button>

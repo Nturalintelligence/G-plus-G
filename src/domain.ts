@@ -17,6 +17,7 @@ export interface Project {
   status: ProjectStatus;
   createdAt: string;
   updatedAt: string;
+  providers?: string[];
 }
 
 export interface Conversation {

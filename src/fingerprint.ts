@@ -19,9 +19,15 @@ export function selectNewResponse(
 
   const candidates = after.filter((item) => {
     if (item.domId && knownIds.has(item.domId)) return false;
-    if (item.ordinal < baselineLength) return false;
-    return !knownFingerprints.has(item.fingerprint) || item.ordinal >= baselineLength;
+    if (knownFingerprints.has(item.fingerprint)) return false;
+    // A new stable DOM id is authoritative even when a virtualized list reused
+    // an old ordinal and kept the same total number of rendered messages.
+    if (item.domId) return true;
+    // Without an id, ordinal growth is the only safe evidence that this is not
+    // an edited old block.
+    return item.ordinal >= baselineLength;
   });
 
-  return candidates.length === 1 ? candidates[0]! : null;
+  // The newest assistant response is rendered last in conversation order.
+  return candidates.length >= 1 ? candidates[candidates.length - 1]! : null;
 }

@@ -14,7 +14,6 @@ import { ProfileLock } from "./browser/profile-lock.js";
 import { bundledChromiumExecutable } from "./browser/runtime.js";
 import { dataPath } from "./paths.js";
 import { inferSessionState } from "./adapters/session-inference.js";
-import { inferChallengePage } from "./adapters/challenge-inference.js";
 import { newId } from "./ids.js";
 import {
   AmbiguousElementError,
@@ -29,88 +28,149 @@ import type {
   SessionState,
   TurnResult,
 } from "./types.js";
+import { type ProviderId, PROVIDER_METADATA } from "./settings/settings.js";
 import { logEvent } from "./observability/logger.js";
 
-const CHATGPT_URL = "https://chatgpt.com/";
-const RESPONSE_SELECTORS = [
-  '[data-message-author-role="assistant"]',
-  'article:has([data-message-author-role="assistant"])',
-];
-const COMPOSER_SELECTORS = [
-  '#prompt-textarea',
-  '[data-testid="composer-input"]',
-  'div.ProseMirror[contenteditable="true"]',
-  '[contenteditable="true"][data-lexical-editor="true"]',
-  'textarea[placeholder*="Message"]',
-  'textarea[placeholder*="сообщ"]',
-  'div[contenteditable="true"][role="textbox"]',
-  'form textarea',
-  'form [contenteditable="true"]',
-];
-const SEND_BUTTON_SELECTORS = [
-  '[data-testid="send-button"]',
-  'button[aria-label*="Send" i]',
-  'button[aria-label*="Отправ" i]',
-  'form button[type="submit"]',
-];
-export interface AdapterOptions {
-  profileDir?: string;
-  timeoutMs?: number;
-  settleMs?: number;
-}
+const SELECTORS: Record<
+  string,
+  {
+    composers: string[];
+    sendButtons: string[];
+    responses: string[];
+    userMessages: string[];
+    noise: string[];
+  }
+> = {
+  claude: {
+    composers: ['[contenteditable="true"]', "div.ProseMirror", "textarea"],
+    sendButtons: ['button[aria-label*="Send" i]', "button.styles-module__send___", "button"],
+    responses: ["div.font-claude-message", ".claude-message", "div.prose"],
+    userMessages: [".user-message", ".chat-message-user"],
+    noise: ["button", "svg", ".message-actions"],
+  },
+  copilot: {
+    composers: ["textarea", "#searchbar"],
+    sendButtons: ['button[aria-label*="Submit" i]', "button.send-button", "button"],
+    responses: ["div.message-content", ".markdown"],
+    userMessages: [".user-message", ".chat-message-user"],
+    noise: ["button", "svg"],
+  },
+  perplexity: {
+    composers: ['textarea[placeholder*="ask" i]', "textarea"],
+    sendButtons: ['button[aria-label*="Submit" i]', "button"],
+    responses: ["div.prose", ".markdown"],
+    userMessages: [".user-message", ".chat-message-user"],
+    noise: ["button", "svg"],
+  },
+  huggingchat: {
+    composers: ['textarea[placeholder*="Ask" i]', "textarea"],
+    sendButtons: ['button[type="submit"]', "button"],
+    responses: [".prose", ".markdown"],
+    userMessages: [".user-message", ".chat-message-user"],
+    noise: ["button", "svg"],
+  },
+  groq: {
+    composers: ["textarea"],
+    sendButtons: ['button[type="submit"]', "button"],
+    responses: [".markdown", "div.prose"],
+    userMessages: [".user-message", ".chat-message-user"],
+    noise: ["button", "svg"],
+  },
+  duckduckgo: {
+    composers: ["textarea"],
+    sendButtons: ['button[type="submit"]', "button"],
+    responses: [".markdown", "div.prose"],
+    userMessages: [".user-message", ".chat-message-user"],
+    noise: ["button", "svg"],
+  },
+  mistral: {
+    composers: ["textarea"],
+    sendButtons: ['button[aria-label*="send" i]', "button"],
+    responses: [".prose", ".markdown"],
+    userMessages: [".user-message", ".chat-message-user"],
+    noise: ["button", "svg"],
+  },
+};
 
-interface ActiveTurn {
-  channel: TurnChannel;
-  result: Promise<TurnResult>;
-  resolveManual: (response: string) => void;
-  rejectCancellation: (error: Error) => void;
-}
+const CHALLENGE_PATTERNS = [
+  /captcha/i,
+  /verify you are human/i,
+  /checking your browser/i,
+  /cloudflare/i,
+  /unusual activity/i,
+  /один момент/i,
+];
 
-export class ChatGptAdapter implements ModelAdapter {
-  readonly providerId = "chatgpt";
+export class GenericWebAdapter implements ModelAdapter {
   private context: BrowserContext | null = null;
   private page: Page | null = null;
-  private readonly turns = new Map<string, ActiveTurn>();
+  private readonly turns = new Map<string, {
+    channel: TurnChannel;
+    result: Promise<TurnResult>;
+    resolveManual: (response: string) => void;
+    rejectCancellation: (error: Error) => void;
+  }>();
   private readonly profileDir: string;
   private readonly profileLock: ProfileLock;
   private readonly timeoutMs: number;
   private readonly settleMs: number;
+  private readonly targetUrl: string;
+  private readonly config: typeof SELECTORS[string];
 
-  constructor(options: AdapterOptions = {}) {
-    this.profileDir = resolve(options.profileDir ?? dataPath("profiles", "chatgpt"));
+  private log(action: string, details: Record<string, unknown> = {}): void {
+    const payload = { providerId: this.providerId, action, ...details };
+    logEvent("INFO", `generic_web_adapter.${this.providerId}.${action}`, payload);
+    console.log(`[${this.providerId}] ${action}`, JSON.stringify(details));
+  }
+
+  constructor(
+    readonly providerId: ProviderId,
+    options: { profileDir?: string; timeoutMs?: number; settleMs?: number } = {},
+  ) {
+    this.profileDir = resolve(options.profileDir ?? dataPath("profiles", providerId));
     this.profileLock = new ProfileLock(this.profileDir);
     this.timeoutMs = options.timeoutMs ?? 180_000;
     this.settleMs = options.settleMs ?? 2_500;
+    
+    const meta = PROVIDER_METADATA[providerId];
+    this.targetUrl = meta ? meta.url : "https://google.com/";
+    this.config = SELECTORS[providerId] || {
+      composers: ["textarea"],
+      sendButtons: ["button"],
+      responses: [".markdown", "div.prose"],
+      userMessages: [".user-message"],
+      noise: ["button", "svg"],
+    };
   }
 
   async launch(): Promise<void> {
+    this.log("launch.start", { profileDir: this.profileDir });
     await mkdir(this.profileDir, { recursive: true });
     await this.profileLock.acquire();
     try {
       const executablePath = bundledChromiumExecutable();
+      this.log("launch.launching_chromium", { executablePath });
       this.context = await chromium.launchPersistentContext(this.profileDir, {
         headless: false,
         viewport: { width: 1440, height: 1000 },
         args: ["--disable-blink-features=AutomationControlled"],
         ...(executablePath ? { executablePath } : {}),
       });
+      await this.ensurePage();
+      this.log("launch.success");
     } catch (error) {
+      this.log("launch.error", { error });
       await this.profileLock.release();
       throw error;
     }
-    this.page =
-      this.context.pages().find((candidate) => candidate.url().includes("chatgpt.com")) ??
-      this.context.pages()[0] ??
-      (await this.context.newPage());
-    await this.page.goto(CHATGPT_URL, { waitUntil: "domcontentloaded" });
   }
 
   async close(): Promise<void> {
     try {
       await this.context?.close();
+    } finally {
       this.context = null;
       this.page = null;
-    } finally {
       await this.profileLock.release();
     }
   }
@@ -121,23 +181,21 @@ export class ChatGptAdapter implements ModelAdapter {
 
   async createConversation(): Promise<ConversationRef> {
     const page = await this.ensurePage();
-    await page.goto(CHATGPT_URL, { waitUntil: "domcontentloaded" });
+    if (page.url() !== this.targetUrl) {
+      await page.goto(this.targetUrl, { waitUntil: "domcontentloaded" });
+    }
     return { id: newId("webchat"), url: page.url() };
   }
 
   async openConversation(ref: ConversationRef): Promise<void> {
-    if (!ref.url.startsWith("https://chatgpt.com/")) {
-      throw new Error("Conversation URL must belong to chatgpt.com");
+    if (!ref.url.startsWith(this.targetUrl)) {
+      throw new Error(`Conversation URL must belong to ${this.targetUrl}`);
     }
     await (await this.ensurePage()).goto(ref.url, { waitUntil: "domcontentloaded" });
   }
 
   async getCurrentConversation(): Promise<ConversationRef> {
     const page = await this.ensurePage();
-    await page.waitForURL(
-      (url) => url.hostname === "chatgpt.com" && url.pathname.includes("/c/"),
-      { timeout: 5_000 },
-    );
     return { id: newId("webchat"), url: page.url() };
   }
 
@@ -145,19 +203,20 @@ export class ChatGptAdapter implements ModelAdapter {
   async sendMessage(input: string): Promise<TurnResult>;
   async sendMessage(input: MessageInput | string): Promise<TurnRef | TurnResult> {
     if (typeof input === "string") return this.sendAndWait(input);
-    const ref: TurnRef = { id: newId("webturn") };
+
+    const ref = { id: newId("webturn") };
     const channel = new TurnChannel();
-    let manualResolver: (response: string) => void = () => undefined;
+    let resolveManual: (response: string) => void = () => undefined;
     let rejectCancellation: (error: Error) => void = () => undefined;
-    const manual = new Promise<string>((resolve) => {
-      manualResolver = resolve;
+    const manual = new Promise<string>((resolveManualPromise) => {
+      resolveManual = resolveManualPromise;
     });
     const cancellation = new Promise<never>((_resolve, reject) => {
       rejectCancellation = reject;
     });
-    const automated = this.sendAndWait(input.content, channel);
+
     const result = Promise.race([
-      automated,
+      this.sendAndWait(input.content, channel),
       cancellation,
       manual.then((response) => ({
         response,
@@ -165,12 +224,8 @@ export class ChatGptAdapter implements ModelAdapter {
         elapsedMs: 0,
       })),
     ]).finally(() => channel.finish());
-    this.turns.set(ref.id, {
-      channel,
-      result,
-      resolveManual: manualResolver,
-      rejectCancellation,
-    });
+
+    this.turns.set(ref.id, { channel, result, resolveManual, rejectCancellation });
     return ref;
   }
 
@@ -191,13 +246,11 @@ export class ChatGptAdapter implements ModelAdapter {
     const active = this.requireTurn(turn);
     const page = this.page;
     if (page && !page.isClosed()) {
-      const stop = page.getByRole("button", {
-        name: /stop generating|остановить создание/i,
-      });
+      const stop = page.locator("button:has-text(\"Stop\"), button:has-text(\"Остановить\")");
       if (await stop.isVisible().catch(() => false)) await stop.click().catch(() => undefined);
     }
     active.channel.publish({ type: "CANCELLED", at: new Date().toISOString() });
-    active.rejectCancellation(new Error(`ChatGPT turn cancelled: ${turn.id}`));
+    active.rejectCancellation(new Error(`${this.providerId} turn cancelled: ${turn.id}`));
     active.channel.finish();
   }
 
@@ -209,6 +262,12 @@ export class ChatGptAdapter implements ModelAdapter {
       at: new Date().toISOString(),
       text: response,
     });
+  }
+
+  private requireTurn(turn: TurnRef) {
+    const active = this.turns.get(turn.id);
+    if (!active) throw new Error(`Unknown turn: ${turn.id}`);
+    return active;
   }
 
   async recover(): Promise<RecoveryResult> {
@@ -225,22 +284,27 @@ export class ChatGptAdapter implements ModelAdapter {
 
   async checkSession(): Promise<SessionState> {
     const page = this.requirePage();
-    if (await this.hasChallenge()) return "CHALLENGE_REQUIRED";
+    const challenge = await this.hasChallenge();
+    this.log("checkSession.challenge_check", { challenge });
+    if (challenge) return "CHALLENGE_REQUIRED";
     const body = await page.locator("body").innerText().catch(() => "");
     const loginControls = await this.visibleLoginControlCount();
-    return inferSessionState(
-      "chatgpt",
+    const composersCount = (await this.findVisibleComposers()).length;
+    const state = inferSessionState(
+      this.providerId,
       body,
-      (await this.findVisibleComposers()).length,
+      composersCount,
       loginControls,
     );
+    this.log("checkSession.result", { state, composersCount, loginControls });
+    return state;
   }
 
   private async visibleLoginControlCount(): Promise<number> {
     const page = this.requirePage();
     const candidates = [
-      page.getByRole("button", { name: /^(log in|sign up|войти|регистрация)$/i }),
-      page.getByRole("link", { name: /^(log in|sign up|войти|регистрация)$/i }),
+      page.getByRole("button", { name: /^(log in|sign up|sign in|войти|регистрация)$/i }),
+      page.getByRole("link", { name: /^(log in|sign up|sign in|войти|регистрация)$/i }),
     ];
     let count = 0;
     for (const locator of candidates) {
@@ -252,7 +316,7 @@ export class ChatGptAdapter implements ModelAdapter {
   }
 
   async waitForManualLogin(): Promise<void> {
-    console.log("Войдите в ChatGPT в открытом окне. CLI продолжит работу после появления поля ввода.");
+    console.log(`Войдите в ${this.providerId} в открытом окне. CLI продолжит работу после появления поля ввода.`);
     const deadline = Date.now() + 10 * 60_000;
     while (Date.now() < deadline) {
       const state = await this.checkSession();
@@ -285,24 +349,41 @@ export class ChatGptAdapter implements ModelAdapter {
     if (state === "CHALLENGE_REQUIRED") throw new ChallengeRequiredError();
     const composers = await this.findVisibleComposers();
     if (composers.length === 1) return; // Usable
-    if (state !== "AUTHENTICATED") throw new LoginRequiredError(`ChatGPT state: ${state}`);
+    if (state !== "AUTHENTICATED") throw new LoginRequiredError(`${this.providerId} state: ${state}`);
   }
 
   private async sendAndWait(message: string, channel?: TurnChannel): Promise<TurnResult> {
+    this.log("sendAndWait.start", { messageLength: message.length });
     const page = await this.ensurePage();
     await this.waitUntilReady();
     await this.installMutationObserver();
     const before = await this.captureResponses();
-    const userMessagesBefore = await this.captureUserMessageSignatures();
+    this.log("sendAndWait.before_snapshots", { count: before.length });
+    
+    let userMessageCountBefore = 0;
+    for (const selector of this.config.userMessages) {
+      const cnt = await page.locator(selector).count().catch(() => 0);
+      if (cnt > 0) {
+        userMessageCountBefore = cnt;
+        break;
+      }
+    }
+    this.log("sendAndWait.user_messages_before", { userMessageCountBefore });
+
     const composer = await this.getUniqueComposer();
     const startedAt = Date.now();
 
+    this.log("sendAndWait.filling_composer");
     await composer.fill(message);
+    this.log("sendAndWait.submit_composer");
     await this.submitComposer(composer, message);
-    await this.waitUntilSubmitted(userMessagesBefore);
+    this.log("sendAndWait.wait_until_submitted");
+    await this.waitUntilSubmitted(message, userMessageCountBefore);
     channel?.publish({ type: "MESSAGE_SUBMITTED", at: new Date().toISOString() });
 
+    this.log("sendAndWait.wait_for_bound_response");
     const response = await this.waitForBoundResponse(before, channel);
+    this.log("sendAndWait.success", { elapsedMs: Date.now() - startedAt, responseLength: response.text.length });
     return {
       response: response.text,
       responseFingerprint: response.fingerprint,
@@ -311,6 +392,7 @@ export class ChatGptAdapter implements ModelAdapter {
   }
 
   private async waitUntilReady(): Promise<void> {
+    this.log("waitUntilReady.start");
     const page = this.requirePage();
     const deadline = Date.now() + 30_000;
     let state: SessionState = "UNKNOWN";
@@ -318,13 +400,15 @@ export class ChatGptAdapter implements ModelAdapter {
     while (Date.now() < deadline) {
       state = await this.checkSession();
       const composers = await this.findVisibleComposers();
+      this.log("waitUntilReady.loop", { state, composersFound: composers.length });
       if (state === "AUTHENTICATED" || composers.length === 1) {
         await this.waitUntilStableResponses();
+        this.log("waitUntilReady.stable_ready");
         return;
       }
       if (state === "CHALLENGE_REQUIRED") throw new ChallengeRequiredError();
       if (state === "LOGIN_REQUIRED" && composers.length === 0) {
-        throw new LoginRequiredError(`ChatGPT state: ${state}`);
+        throw new LoginRequiredError(`${this.providerId} state: ${state}`);
       }
       await page.waitForTimeout(500);
     }
@@ -350,20 +434,21 @@ export class ChatGptAdapter implements ModelAdapter {
   }
 
   private async findVisibleComposers(): Promise<Locator[]> {
+    return this.findVisibleBySelectors(this.config.composers);
+  }
+
+  private async findVisibleBySelectors(selectors: readonly string[]): Promise<Locator[]> {
     const page = this.requirePage();
-    const matches: Locator[] = [];
-    for (const selector of COMPOSER_SELECTORS) {
+    for (const selector of selectors) {
       const locator = page.locator(selector);
-      for (let index = 0; index < (await locator.count()); index += 1) {
-        const item = locator.nth(index);
-        const usable =
-          (await item.isVisible().catch(() => false)) &&
-          (await item.isEditable().catch(() => false));
-        if (usable) matches.push(item);
+      const visible: Locator[] = [];
+      for (let index = 0; index < (await locator.count().catch(() => 0)); index += 1) {
+        const candidate = locator.nth(index);
+        if (await candidate.isVisible().catch(() => false)) visible.push(candidate);
       }
-      if (matches.length > 0) break;
+      if (visible.length > 0) return visible;
     }
-    return matches;
+    return [];
   }
 
   private async getUniqueComposer(): Promise<Locator> {
@@ -378,7 +463,7 @@ export class ChatGptAdapter implements ModelAdapter {
 
   private async captureResponses(): Promise<ResponseSnapshot[]> {
     const page = this.requirePage();
-    for (const selector of RESPONSE_SELECTORS) {
+    for (const selector of this.config.responses) {
       const locator = page.locator(selector);
       const count = await locator.count().catch(() => 0);
       if (count === 0) continue;
@@ -387,18 +472,9 @@ export class ChatGptAdapter implements ModelAdapter {
         const node = locator.nth(ordinal);
         const text = normalizeText(
           await node
-            .evaluate((el) => {
-              const noiseSelectors = [
-                "button",
-                "svg",
-                ".action-area",
-                ".message-actions",
-                "mat-icon",
-                ".ql-clipboard",
-                "pre > div",
-              ];
+            .evaluate((el, noiseSels) => {
               const hidden: Array<{ element: any; display: string }> = [];
-              noiseSelectors.forEach((sel) => {
+              noiseSels.forEach((sel) => {
                 el.querySelectorAll(sel).forEach((noise) => {
                   const htmlNoise = noise as any;
                   if (htmlNoise && htmlNoise.style) {
@@ -417,7 +493,7 @@ export class ChatGptAdapter implements ModelAdapter {
                 }
               });
               return textVal;
-            })
+            }, this.config.noise)
             .catch(() => ""),
         );
         if (!text) continue;
@@ -435,114 +511,55 @@ export class ChatGptAdapter implements ModelAdapter {
     return [];
   }
 
-  private async captureUserMessageSignatures(): Promise<Set<string>> {
-    const nodes = this.requirePage().locator('[data-message-author-role="user"]');
-    const signatures = new Set<string>();
-    for (let index = 0; index < (await nodes.count().catch(() => 0)); index += 1) {
-      const node = nodes.nth(index);
-      const id =
-        (await node.getAttribute("data-message-id").catch(() => null)) ??
-        (await node.getAttribute("id").catch(() => null));
-      const text = normalizeText(await node.innerText().catch(() => ""));
-      if (id || text) signatures.add(id ? `id:${id}` : `text:${fingerprint(text)}`);
-    }
-    return signatures;
-  }
-
   private async waitUntilSubmitted(
-    userMessagesBefore: ReadonlySet<string>,
+    message: string,
+    userMessageCountBefore: number,
   ): Promise<void> {
     const page = this.requirePage();
+    const normalized = normalizeText(message);
+    const expectedPrefix = normalized.slice(0, 100);
+    const expectedSuffix = normalized.slice(-100);
     const deadline = Date.now() + 30_000;
 
     while (Date.now() < deadline) {
       if (await this.hasChallenge()) throw new ChallengeRequiredError();
 
-      const current = await this.captureUserMessageSignatures();
-      if ([...current].some((signature) => !userMessagesBefore.has(signature))) return;
+      for (const selector of this.config.userMessages) {
+        const currentCount = await page.locator(selector).count().catch(() => 0);
+        if (currentCount > userMessageCountBefore) return;
+
+        const userNodes = page.locator(selector);
+        const count = await userNodes.count().catch(() => 0);
+        for (let i = 0; i < count; i++) {
+          const text = normalizeText(await userNodes.nth(i).innerText().catch(() => ""));
+          if (normalized.length > 200) {
+            if (text.includes(expectedPrefix) || text.includes(expectedSuffix)) {
+              return;
+            }
+          } else {
+            if (text.includes(normalized)) {
+              return;
+            }
+          }
+        }
+      }
 
       await page.waitForTimeout(250);
     }
 
-    throw new TurnTimeoutError("ChatGPT did not confirm that the user message was submitted");
+    const responses = await this.captureResponses();
+    if (responses.length > 0) return;
+
+    throw new TurnTimeoutError(`${this.providerId} did not confirm that the user message was submitted`);
   }
 
   private async submitComposer(composer: Locator, message: string): Promise<void> {
-    // ChatGPT may treat Enter as a newline after a reactive composer update.
-    // Prefer the explicit enabled submit control and use Enter only when the
-    // control is genuinely absent. waitUntilSubmitted() remains the authority
-    // that proves the message reached the conversation.
-    const deadline = Date.now() + 5_000;
-    let buttons: Locator[] = [];
-    while (Date.now() < deadline) {
-      buttons = await this.findVisibleEnabledBySelectors(SEND_BUTTON_SELECTORS);
-      if (buttons.length > 0) break;
-      await this.requirePage().waitForTimeout(150);
-    }
+    const buttons = await this.findVisibleBySelectors(this.config.sendButtons);
     if (buttons.length === 1) {
       await buttons[0]!.click();
-      return;
+    } else {
+      await composer.press("Enter");
     }
-    if (buttons.length > 1) {
-      throw new AmbiguousElementError(
-        `Expected one enabled ChatGPT send button, found ${buttons.length}`,
-      );
-    }
-    await composer.focus();
-    await composer.press("Enter");
-  }
-
-  private async composerWasCleared(composer: Locator): Promise<boolean> {
-    const deadline = Date.now() + 3_000;
-    while (Date.now() < deadline) {
-      const text = normalizeText(
-        await composer
-          .evaluate((element) =>
-            element instanceof HTMLTextAreaElement
-              ? element.value
-              : (element.textContent ?? ""),
-          )
-          .catch(() => ""),
-      );
-      if (!text) return true;
-      await this.requirePage().waitForTimeout(150);
-    }
-    return false;
-  }
-
-  private async findVisibleBySelectors(selectors: readonly string[]): Promise<Locator[]> {
-    const page = this.requirePage();
-    for (const selector of selectors) {
-      const locator = page.locator(selector);
-      const visible: Locator[] = [];
-      for (let index = 0; index < (await locator.count()); index += 1) {
-        const candidate = locator.nth(index);
-        if (await candidate.isVisible().catch(() => false)) visible.push(candidate);
-      }
-      if (visible.length > 0) return visible;
-    }
-    return [];
-  }
-
-  private async findVisibleEnabledBySelectors(
-    selectors: readonly string[],
-  ): Promise<Locator[]> {
-    const page = this.requirePage();
-    for (const selector of selectors) {
-      const locator = page.locator(selector);
-      const usable: Locator[] = [];
-      for (let index = 0; index < (await locator.count()); index += 1) {
-        const candidate = locator.nth(index);
-        if (
-          (await candidate.isVisible().catch(() => false)) &&
-          (await candidate.isEnabled().catch(() => false))
-        ) {
-          usable.push(candidate);
-        }
-      }
-      if (usable.length > 0) return usable;
-    }
-    return [];
   }
 
   private async waitForBoundResponse(
@@ -554,59 +571,31 @@ export class ChatGptAdapter implements ModelAdapter {
     let candidate: ResponseSnapshot | null = null;
     let stableText = "";
     let stableSince = 0;
-    const startedAt = Date.now();
-    let nextUiTraceAt = startedAt + 10_000;
-    let lastRecoveryAt = 0;
-    let recoveryAttempts = 0;
+
+    this.log("waitForBoundResponse.start", { timeoutMs: this.timeoutMs });
 
     while (Date.now() < deadline) {
       if (await this.hasChallenge()) throw new ChallengeRequiredError();
       const after = await this.captureResponses();
       const selected = selectNewResponse(before, after);
 
-      if (Date.now() >= nextUiTraceAt) {
-        await this.logResponseUiState(before.length, after.length, Date.now() - startedAt);
-        nextUiTraceAt = Date.now() + 10_000;
-      }
-
-      if (
-        !selected &&
-        Date.now() - startedAt >= 15_000 &&
-        Date.now() - lastRecoveryAt >= 30_000 &&
-        recoveryAttempts < 3
-      ) {
-        const retry = page.getByRole("button", {
-          name: /^(try again|retry|regenerate|continue generating|попробовать снова|повторить|продолжить генерацию)$/i,
-        });
-        const candidates: Locator[] = [];
-        for (let index = 0; index < (await retry.count().catch(() => 0)); index += 1) {
-          const candidateButton = retry.nth(index);
-          if (
-            (await candidateButton.isVisible().catch(() => false)) &&
-            (await candidateButton.isEnabled().catch(() => false))
-          ) {
-            candidates.push(candidateButton);
-          }
-        }
-        if (candidates.length === 1) {
-          recoveryAttempts += 1;
-          lastRecoveryAt = Date.now();
-          logEvent("WARN", "chatgpt.response.recovery_clicked", {
-            recoveryAttempts,
-            elapsedMs: Date.now() - startedAt,
-          });
-          await candidates[0]!.click();
-        }
-      }
+      this.log("waitForBoundResponse.poll", {
+        afterCount: after.length,
+        selectedFound: !!selected,
+        selectedTextLength: selected?.text.length ?? 0,
+      });
 
       if (selected) {
         if (!candidate) {
+          this.log("waitForBoundResponse.started");
           channel?.publish({ type: "RESPONSE_STARTED", at: new Date().toISOString() });
         }
         candidate = selected;
         if (selected.text !== stableText) {
+          const prevLength = stableText.length;
           stableText = selected.text;
           stableSince = Date.now();
+          this.log("waitForBoundResponse.updated", { prevLength, newLength: stableText.length });
           channel?.publish({
             type: "RESPONSE_UPDATED",
             at: new Date().toISOString(),
@@ -614,16 +603,28 @@ export class ChatGptAdapter implements ModelAdapter {
           });
         }
         const stopVisible = await page
-          .getByRole("button", { name: /stop generating|остановить создание/i })
+          .locator("button:has-text(\"Stop\"), button:has-text(\"Остановить\")")
           .isVisible()
           .catch(() => false);
-        const composerReady = (await this.findVisibleComposers()).length === 1;
+        const composers = await this.findVisibleComposers();
+        const composerReady = composers.length === 1;
+        const stableDuration = Date.now() - stableSince;
+
+        this.log("waitForBoundResponse.settle_check", {
+          stopVisible,
+          composerReady,
+          composersFound: composers.length,
+          stableDuration,
+          settleMs: this.settleMs,
+        });
+
         if (
           !stopVisible &&
           composerReady &&
           stableText &&
-          Date.now() - stableSince >= this.settleMs
+          stableDuration >= this.settleMs
         ) {
+          this.log("waitForBoundResponse.completed", { finalLength: candidate.text.length });
           channel?.publish({
             type: "RESPONSE_COMPLETED",
             at: new Date().toISOString(),
@@ -642,49 +643,9 @@ export class ChatGptAdapter implements ModelAdapter {
   private async hasChallenge(): Promise<boolean> {
     const page = this.requirePage();
     const title = await page.title().catch(() => "");
-    const structuralSignals = await page
-      .locator(
-        'iframe[src*="challenges.cloudflare.com"], iframe[src*="recaptcha"], input[name="cf-turnstile-response"], .cf-challenge-running, #challenge-form',
-      )
-      .count()
-      .catch(() => 0);
-    return inferChallengePage({
-      url: page.url(),
-      title,
-      structuralSignals,
-    });
-  }
-
-  private async logResponseUiState(
-    beforeCount: number,
-    afterCount: number,
-    elapsedMs: number,
-  ): Promise<void> {
-    const page = this.requirePage();
-    const buttons = await page
-      .locator("button:visible")
-      .evaluateAll((nodes) =>
-        nodes.slice(-20).map((node) => ({
-          ariaLabel: node.getAttribute("aria-label"),
-          testId: node.getAttribute("data-testid"),
-          title: node.getAttribute("title"),
-          disabled: (node as HTMLButtonElement).disabled,
-        })),
-      )
-      .catch(() => []);
-    const notices = await page
-      .locator('[role="alert"]:visible, [role="status"]:visible')
-      .allInnerTexts()
-      .then((values) => values.slice(-5).map((value) => value.slice(0, 240)))
-      .catch(() => []);
-    logEvent("INFO", "chatgpt.response.ui_state", {
-      elapsedMs,
-      beforeCount,
-      afterCount,
-      composerCount: (await this.findVisibleComposers()).length,
-      buttons,
-      notices,
-    });
+    const body = await page.locator("body").innerText({ timeout: 2_000 }).catch(() => "");
+    const sample = `${title}\n${body.slice(0, 5_000)}`;
+    return CHALLENGE_PATTERNS.some((pattern) => pattern.test(sample));
   }
 
   private requirePage(): Page {
@@ -698,8 +659,8 @@ export class ChatGptAdapter implements ModelAdapter {
     this.page =
       this.context.pages().find((candidate) => !candidate.isClosed()) ??
       (await this.context.newPage());
-    if (!this.page.url().includes("chatgpt.com")) {
-      await this.page.goto(CHATGPT_URL, { waitUntil: "domcontentloaded" });
+    if (!this.page.url().includes(this.targetUrl)) {
+      await this.page.goto(this.targetUrl, { waitUntil: "domcontentloaded" });
     }
     return this.page;
   }
@@ -723,11 +684,5 @@ export class ChatGptAdapter implements ModelAdapter {
         characterData: true,
       });
     });
-  }
-
-  private requireTurn(turn: TurnRef): ActiveTurn {
-    const active = this.turns.get(turn.id);
-    if (!active) throw new Error(`Unknown turn: ${turn.id}`);
-    return active;
   }
 }
