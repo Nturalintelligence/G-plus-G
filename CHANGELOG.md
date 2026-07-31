@@ -6,6 +6,12 @@ All notable project checkpoints are recorded here.
 
 ### Added
 
+- A shared G+G multi-AI protocol now tells sequential and debate participants
+  that they are collaborating through an orchestration environment, distinguishes
+  the user from the peer model, and enforces zero-fluff, independent critique,
+  delta-only contributions, evidence, minimal changes, and honest consensus.
+- The first discussion turn is now an explicit independent proposal for peer
+  review instead of a context-free answer addressed only to the user.
 - Live incremental response rendering from provider DOM updates through the
   orchestrator, Electron IPC, and React conversation view.
 - Content-free phase tracing for provider launch, session checks, conversation

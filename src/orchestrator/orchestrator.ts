@@ -10,6 +10,7 @@ import { ProjectRepository } from "../storage/repository.js";
 import {
   buildPeerReviewPrompt,
   buildIncrementalPrompt,
+  buildInitialCollaborationPrompt,
 } from "./prompt-builder.js";
 import {
   defaultLimits,
@@ -191,7 +192,10 @@ export class Orchestrator {
           content: response.text,
         });
       } else {
-        let message = initialMessage;
+        let message = buildInitialCollaborationPrompt(
+          initialMessage,
+          effectiveMode === "DEBATE",
+        );
         const seen = new Set<string>();
         const consensusToken = `[[G_PLUS_G_DONE:${runId}]]`;
         const agreedProviders = new Set<string>();
