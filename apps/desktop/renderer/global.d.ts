@@ -36,6 +36,9 @@ interface Window {
       stop(): Promise<void>;
       onProgress(callback: (value: { providerId: string; text: string }) => void): () => void;
     };
+    events: {
+      onEvent(callback: (event: any) => void): () => void;
+    };
     state: {
       latest(projectId: string): Promise<StateVersion | null>;
       save(projectId: string, state: unknown): Promise<StateVersion>;

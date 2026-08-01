@@ -35,6 +35,13 @@ const api = {
       return () => ipcRenderer.off("orchestration:progress", subscription);
     },
   },
+  events: {
+    onEvent: (callback) => {
+      const subscription = (_event, value) => callback(value);
+      ipcRenderer.on("bus:event", subscription);
+      return () => ipcRenderer.off("bus:event", subscription);
+    },
+  },
   state: {
     latest: (projectId) => ipcRenderer.invoke("state:latest", projectId),
     save: (projectId, state) =>

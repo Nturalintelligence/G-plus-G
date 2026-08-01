@@ -34,6 +34,7 @@ import {
 } from "../../src/release/release-tools.js";
 import { resetProviderSession } from "../../src/maintenance.js";
 import { QualityMetrics } from "../../src/observability/metrics.js";
+import { globalEventBus } from "../../src/events/event-bus.js";
 
 let mainWindow: BrowserWindow | null = null;
 let database: AppDatabase | null = null;
@@ -109,6 +110,12 @@ function createWindow(): void {
     .loadURL("app://bundle/index.html")
     .catch((error) => console.error("Failed to load desktop renderer", error));
 }
+
+globalEventBus.on("*", (event) => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send("bus:event", event);
+  }
+});
 
 function assertTrustedRenderer(event: IpcMainInvokeEvent): void {
   const url = event.senderFrame?.url ?? "";

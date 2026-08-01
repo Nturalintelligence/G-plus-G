@@ -108,6 +108,16 @@ function App(): React.JSX.Element {
     });
   }, []);
 
+  useEffect(() => {
+    if (typeof window.orchestrator.events?.onEvent !== "function") return;
+    return window.orchestrator.events.onEvent((event) => {
+      if (event?.event_type === "phase:changed" && event.payload) {
+        const details = event.payload.details || event.payload.phase;
+        if (details) setStatus(details);
+      }
+    });
+  }, []);
+
   const refresh = async (): Promise<void> => setProjects(await window.orchestrator.projects.list());
   useEffect(() => {
     void refresh();

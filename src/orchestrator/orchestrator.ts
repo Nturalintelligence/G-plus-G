@@ -19,6 +19,7 @@ import {
 } from "./limits.js";
 import { QualityMetrics } from "../observability/metrics.js";
 import { logEvent } from "../observability/logger.js";
+import { globalEventBus } from "../events/event-bus.js";
 
 export type RunMode = "MANUAL" | "SEQUENTIAL" | "PARALLEL" | "DEBATE";
 export type RunStatus =
@@ -590,6 +591,16 @@ export class Orchestrator {
            VALUES (?, 'OrchestrationRun', ?, 'RUN_STATUS_CHANGED', ?, ?)`,
         )
         .run(newId("evt"), id, JSON.stringify({ status }), now);
+    });
+
+    globalEventBus.emit({
+      event_type: "phase:changed",
+      run_id: id,
+      payload: {
+        target: "orchestrator",
+        phase: status === "RUNNING" ? "RUNNING" : status === "COMPLETED" ? "COMPLETED" : status === "FAILED" ? "FAILED" : "IDLE",
+        details: `Orchestrator status: ${status}`,
+      },
     });
   }
 }
