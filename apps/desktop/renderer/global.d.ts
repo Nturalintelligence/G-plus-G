@@ -88,6 +88,7 @@ interface AppSettingsView {
       requireConfirmation?: boolean;
     };
   };
+  models?: Record<string, { role: string; customPrompt: string }>;
   appearance: {
     theme: "dark" | "light" | "system";
     density: "comfortable" | "compact";

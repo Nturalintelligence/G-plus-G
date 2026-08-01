@@ -38,6 +38,11 @@ export const PROVIDER_METADATA: Record<
   mistral: { name: "Mistral", url: "https://chat.mistral.ai/", requiresAuth: true },
 };
 
+export interface ModelCustomization {
+  role: string;
+  customPrompt: string;
+}
+
 export interface AppSettings {
   schemaVersion: 1;
   profile: {
@@ -50,6 +55,7 @@ export interface AppSettings {
     providers: ProviderId[];
     limits: OrchestrationLimits;
   };
+  models?: Record<string, ModelCustomization>;
   appearance: {
     theme: Theme;
     density: Density;

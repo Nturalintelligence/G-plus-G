@@ -95,7 +95,7 @@ function App(): React.JSX.Element {
   const [running, setRunning] = useState(false);
   const [settings, setSettings] = useState<AppSettingsView>(fallbackSettings);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settingsTab, setSettingsTab] = useState<"profile" | "behavior" | "appearance" | "quality" | "diagnostics">("profile");
+  const [settingsTab, setSettingsTab] = useState<"profile" | "models" | "behavior" | "appearance" | "quality" | "diagnostics">("profile");
   const [releaseInfo, setReleaseInfo] = useState<ReleaseInfoView | null>(null);
   const [preflight, setPreflight] = useState<Array<{
     name: string;
@@ -1006,6 +1006,12 @@ function App(): React.JSX.Element {
                   👤 Профиль
                 </button>
                 <button
+                  className={`settings-sidebar-btn ${settingsTab === "models" ? "active" : ""}`}
+                  onClick={() => setSettingsTab("models")}
+                >
+                  🤖 Центр ИИ и Промпты
+                </button>
+                <button
                   className={`settings-sidebar-btn ${settingsTab === "behavior" ? "active" : ""}`}
                   onClick={() => setSettingsTab("behavior")}
                 >
@@ -1031,6 +1037,72 @@ function App(): React.JSX.Element {
                 </button>
               </aside>
               <div className="settings-content settings-pane">
+                {settingsTab === "models" && (
+                  <fieldset>
+                    <legend>🤖 Персональное меню ИИ (Роли и Промпты)</legend>
+                    <p style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "14px" }}>
+                      Настройте индивидуальные роли, кастомные инструкции, войдите в аккаунты или очистите историю конкретных ИИ-моделей.
+                    </p>
+                    {(["chatgpt", "gemini", "deepseek", "claude"] as const).map((provider) => {
+                      const currentCustom = settings.models?.[provider] || { role: "Автоматически", customPrompt: "" };
+                      return (
+                        <div key={provider} className="model-customization-card panel" style={{ marginBottom: "12px", padding: "12px", borderRadius: "10px", background: "var(--bg-input)", border: "1px solid var(--border-color-card)" }}>
+                          <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "10px" }}>
+                            <strong style={{ textTransform: "uppercase", color: "var(--accent)" }}>{provider}</strong>
+                            <div style={{ display: "flex", gap: "8px" }}>
+                              <button className="session-login-btn" onClick={() => void login(provider)} style={{ padding: "4px 8px", fontSize: "12px" }}>
+                                🔑 Войти
+                              </button>
+                              <button className="logout" onClick={() => void resetSession(provider)} title="Очистить историю / выйти" style={{ padding: "4px 8px", fontSize: "12px", color: "#ef4444" }}>
+                                🗑️ Сбросить сессию
+                              </button>
+                            </div>
+                          </header>
+                          <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                            <label style={{ fontSize: "12px", display: "flex", flexDirection: "column", gap: "4px" }}>Назначенная роль
+                              <select
+                                value={currentCustom.role}
+                                onChange={(e) => {
+                                  const role = e.target.value;
+                                  setSettings((val) => ({
+                                    ...val,
+                                    models: {
+                                      ...val.models,
+                                      [provider]: { ...(val.models?.[provider] || { customPrompt: "" }), role },
+                                    },
+                                  }));
+                                }}
+                              >
+                                <option value="Автоматически">🤖 Автоматическая (по умолчанию)</option>
+                                <option value="Архитектор / Планнер">🏗️ Архитектор / Планнер</option>
+                                <option value="Исполнитель / Кодер">💻 Исполнитель / Кодер</option>
+                                <option value="Критик / Валидатор">🔍 Критик / Валидатор</option>
+                                <option value="Эксперт по безопасности">🛡️ Эксперт по безопасности</option>
+                              </select>
+                            </label>
+                            <label style={{ fontSize: "12px", display: "flex", flexDirection: "column", gap: "4px" }}>Индивидуальная инструкция (доп. промпт)
+                              <textarea
+                                rows={2}
+                                value={currentCustom.customPrompt}
+                                onChange={(e) => {
+                                  const customPrompt = e.target.value;
+                                  setSettings((val) => ({
+                                    ...val,
+                                    models: {
+                                      ...val.models,
+                                      [provider]: { ...(val.models?.[provider] || { role: "Автоматически" }), customPrompt },
+                                    },
+                                  }));
+                                }}
+                                placeholder={`Индивидуальные инструкции только для ${provider}…`}
+                              />
+                            </label>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </fieldset>
+                )}
                 {settingsTab === "profile" && (
                   <fieldset>
                     <legend>Профиль</legend>
