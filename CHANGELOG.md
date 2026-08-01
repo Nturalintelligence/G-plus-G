@@ -2,6 +2,14 @@
 
 All notable project checkpoints are recorded here.
 
+## [0.1.0-pre.12] - 2026-08-01
+
+### Added
+
+- Added Exponential Backoff Retry Policy module (`src/orchestrator/retry-policy.ts`) with `calculateRetryDelay` and `isRetryableError`.
+- Integrated strict FSM transition validator `isValidFsmTransition` into `Orchestrator`.
+- Enhanced turn and run crash recovery for hibernation and restart.
+
 ## [0.1.0-pre.11] - 2026-08-01
 
 ### Added
