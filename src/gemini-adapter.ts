@@ -79,7 +79,7 @@ export class GeminiAdapter implements ModelAdapter {
     this.profileDir = resolve(options.profileDir ?? dataPath("profiles", "gemini"));
     this.lock = new ProfileLock(this.profileDir);
     this.timeoutMs = options.timeoutMs ?? 180_000;
-    this.headless = options.headless ?? (process.env.G_PLUS_G_HEADLESS !== "false" && process.env.NODE_ENV !== "test");
+    this.headless = options.headless ?? false;
   }
 
   async launch(): Promise<void> {
