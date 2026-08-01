@@ -2,6 +2,15 @@
 
 All notable project checkpoints are recorded here.
 
+## [0.1.0-pre.11] - 2026-08-01
+
+### Added
+
+- Added project deletion with option to purge both local SQLite records and remote web chats.
+- Implemented `deleteConversation` DOM automation in `ChatGPTAdapter`, `GeminiAdapter`, and `DeepSeekAdapter`.
+- Added transactional `deleteProject` in `ProjectRepository` clearing all associated project entities.
+- Added trash icon and confirmation modal UI with option choices: "Удалить везде" and "Удалить только в G+G".
+
 ## [0.1.0-pre.10] - 2026-08-01
 
 ### Added
