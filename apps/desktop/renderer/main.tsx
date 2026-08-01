@@ -50,6 +50,14 @@ function metricValue(metric: MetricSummaryView): string {
   return metric.average.toFixed(metric.average % 1 === 0 ? 0 : 1);
 }
 
+export interface AttachedFileItem {
+  id: string;
+  name: string;
+  size: number;
+  type: string;
+  dataUrl?: string;
+}
+
 const fallbackSettings: AppSettingsView = {
   schemaVersion: 1,
   profile: { displayName: "", realName: "", greetingStyle: "generic" },
@@ -105,27 +113,100 @@ function App(): React.JSX.Element {
   const [activeSpecSection, setActiveSpecSection] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [inspectorOpen, setInspectorOpen] = useState(false);
-  const [attachedFiles, setAttachedFiles] = useState<Array<{ name: string; size: number }>>([]);
+  const [attachedFiles, setAttachedFiles] = useState<AttachedFileItem[]>([]);
   const [viewMode, setViewMode] = useState<"SYNTHESIZED" | "LIVE">("SYNTHESIZED");
   const [showTurnsSpoiler, setShowTurnsSpoiler] = useState(false);
+  const [terminalOutput, setTerminalOutput] = useState<{ command: string; stdout: string; stderr: string; exitCode: number } | null>(null);
+  const [terminalBusy, setTerminalBusy] = useState(false);
   const outputRef = useRef<HTMLElement>(null);
+
+  async function runTerminal(command: string) {
+    if (terminalBusy) return;
+    setTerminalBusy(true);
+    setStatus(`Исполнение терминальной команды: ${command}…`);
+    try {
+      const res = await window.orchestrator.terminal.execute(command);
+      setTerminalOutput({ command, stdout: res.stdout, stderr: res.stderr, exitCode: res.exitCode });
+      setStatus(`Команда завершена с кодом: ${res.exitCode}`);
+    } catch (err: any) {
+      setStatus(`Ошибка терминала: ${err.message}`);
+    } finally {
+      setTerminalBusy(false);
+    }
+  }
 
   function handleFileAttach(e: React.ChangeEvent<HTMLInputElement>) {
     const files = Array.from(e.target.files || []);
     if (files.length === 0) return;
+    const newItems: AttachedFileItem[] = [];
     for (const file of files) {
       const check = validateFileForProviders(file.name, providers);
       if (!check.valid) {
         setStatus(`Файл '${file.name}' (${check.extension}) не поддерживается ИИ: ${check.unsupportedProviders.join(", ")}`);
         return;
       }
+      newItems.push({
+        id: `file-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        name: file.name,
+        size: file.size,
+        type: file.type,
+      });
     }
-    setAttachedFiles((prev) => [...prev, ...files.map((f) => ({ name: f.name, size: f.size }))]);
+    setAttachedFiles((prev) => [...prev, ...newItems]);
     setStatus(`Прикреплено файлов: ${files.length}`);
   }
 
-  function removeFile(index: number) {
-    setAttachedFiles((prev) => prev.filter((_, i) => i !== index));
+  function removeFile(target: string | number) {
+    setAttachedFiles((prev) =>
+      prev.filter((item, index) => (typeof target === "number" ? index !== target : item.id !== target)),
+    );
+  }
+
+  function handlePaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
+    const items = Array.from(e.clipboardData.items || []);
+    const fileItems = items.filter((item) => item.kind === "file");
+    if (fileItems.length === 0) return;
+
+    for (const item of fileItems) {
+      const file = item.getAsFile();
+      if (!file) continue;
+
+      const filename = file.name || `screenshot_${Date.now()}.${file.type.split("/")[1] || "png"}`;
+      const check = validateFileForProviders(filename, providers);
+      if (!check.valid) {
+        setStatus(`Файл из буфера '${filename}' не поддерживается ИИ: ${check.unsupportedProviders.join(", ")}`);
+        continue;
+      }
+
+      if (file.type.startsWith("image/")) {
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          const dataUrl = event.target?.result as string;
+          setAttachedFiles((prev) => [
+            ...prev,
+            {
+              id: `file-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+              name: filename,
+              size: file.size,
+              type: file.type,
+              dataUrl,
+            },
+          ]);
+        };
+        reader.readAsDataURL(file);
+      } else {
+        setAttachedFiles((prev) => [
+          ...prev,
+          {
+            id: `file-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            name: filename,
+            size: file.size,
+            type: file.type,
+          },
+        ]);
+      }
+    }
+    setStatus(`Вставлено из буфера обмена (Ctrl+V)`);
   }
 
   async function confirmDeleteProject(deleteRemote: boolean): Promise<void> {
@@ -655,6 +736,20 @@ function App(): React.JSX.Element {
               <p className="empty">Здесь сохранится весь разговор ChatGPT, Gemini и ваш.</p>
             )}
           </article>
+          {terminalOutput ? (
+            <div className="terminal-card panel">
+              <header className="terminal-card-header">
+                <strong>🖥️ Терминал: <code>{terminalOutput.command}</code></strong>
+                <span className={`terminal-status-badge ${terminalOutput.exitCode === 0 ? "success" : "error"}`}>
+                  Exit code: {terminalOutput.exitCode}
+                </span>
+                <button onClick={() => setTerminalOutput(null)}>×</button>
+              </header>
+              <pre className="terminal-console-output">
+                {terminalOutput.stdout || terminalOutput.stderr || "[Вывод пуст]"}
+              </pre>
+            </div>
+          ) : null}
           <div className="composer panel composer-bottom">
             <div className="composer-input-row">
               <label className="file-attach-btn" title="Прикрепить файл или картинку">
@@ -665,20 +760,27 @@ function App(): React.JSX.Element {
                 aria-label="Сообщение для моделей"
                 value={task}
                 onChange={(event) => setTask(event.target.value)}
+                onPaste={handlePaste}
                 onKeyDown={(event) => {
                   if (event.key === "Enter" && !event.shiftKey) {
                     event.preventDefault();
                     void run();
                   }
                 }}
-                placeholder="Напишите сообщение… Enter — отправить, Shift+Enter — новая строка"
+                placeholder="Напишите сообщение или вставьте скриншот (Ctrl+V)… Enter — отправить, Shift+Enter — новая строка"
               />
             </div>
             {attachedFiles.length > 0 ? (
               <div className="attached-files-row">
-                {attachedFiles.map((f, i) => (
-                  <span key={i} className="attached-file-tag">
-                    📄 {f.name} <button onClick={() => removeFile(i)}>×</button>
+                {attachedFiles.map((f) => (
+                  <span key={f.id} className="attached-file-tag">
+                    {f.dataUrl ? (
+                      <img src={f.dataUrl} alt={f.name} className="attached-file-preview" />
+                    ) : (
+                      "📄"
+                    )}{" "}
+                    <span className="attached-file-name">{f.name}</span>
+                    <button onClick={() => removeFile(f.id)}>×</button>
                   </span>
                 ))}
               </div>

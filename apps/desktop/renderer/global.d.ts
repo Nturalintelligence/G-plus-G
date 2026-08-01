@@ -48,6 +48,9 @@ interface Window {
     exports: {
       spec(projectId: string): Promise<{ directory: string; manifestHash: string }>;
     };
+    terminal: {
+      execute(command: string, cwd?: string): Promise<{ exitCode: number; stdout: string; stderr: string; elapsedMs: number }>;
+    };
     settings: {
       get(): Promise<AppSettingsView>;
       save(value: AppSettingsView): Promise<AppSettingsView>;

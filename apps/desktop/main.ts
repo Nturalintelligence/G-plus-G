@@ -35,6 +35,7 @@ import {
 import { resetProviderSession } from "../../src/maintenance.js";
 import { QualityMetrics } from "../../src/observability/metrics.js";
 import { globalEventBus } from "../../src/events/event-bus.js";
+import { executeTerminalCommand } from "../../src/terminal/terminal-engine.js";
 
 let mainWindow: BrowserWindow | null = null;
 let database: AppDatabase | null = null;
@@ -532,6 +533,11 @@ function registerIpc(): void {
     const state = new ProjectStateService(db()).latest(projectId);
     if (!state) throw new Error("Create Project State before export");
     return new SpecExporter(db()).export(projectId, state);
+  });
+  handle("terminal:execute", async (_event, input: unknown) => {
+    const data = input as { command?: string; cwd?: string };
+    const command = requireString(data?.command, "command", 4000);
+    return executeTerminalCommand({ command, cwd: data?.cwd });
   });
 }
 

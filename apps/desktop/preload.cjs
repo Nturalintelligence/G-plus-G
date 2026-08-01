@@ -52,6 +52,9 @@ const api = {
   exports: {
     spec: (projectId) => ipcRenderer.invoke("export:spec", projectId),
   },
+  terminal: {
+    execute: (command, cwd) => ipcRenderer.invoke("terminal:execute", { command, cwd }),
+  },
   settings: {
     get: () => ipcRenderer.invoke("settings:get"),
     save: (value) => ipcRenderer.invoke("settings:save", value),
