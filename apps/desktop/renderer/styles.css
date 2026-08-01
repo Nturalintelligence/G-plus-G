@@ -292,6 +292,34 @@ h2 { font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: u
   display: flex;
   flex-direction: column;
 }
+
+/* Turns Spoiler for Synthesized Mode */
+.turns-spoiler {
+  margin-bottom: 14px;
+  background: var(--bg-panel);
+  border: 1px dashed var(--border-color-card);
+  border-radius: 12px;
+  overflow: hidden;
+}
+.turns-spoiler-summary {
+  padding: 10px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent);
+  cursor: pointer;
+  background: var(--bg-input);
+  user-select: none;
+}
+.turns-spoiler-summary:hover {
+  background: var(--bg-selected);
+}
+.turns-spoiler-content {
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
 .composer-bottom {
   flex-shrink: 0;
   display: flex;

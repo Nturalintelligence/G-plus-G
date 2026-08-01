@@ -106,6 +106,8 @@ function App(): React.JSX.Element {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [attachedFiles, setAttachedFiles] = useState<Array<{ name: string; size: number }>>([]);
+  const [viewMode, setViewMode] = useState<"SYNTHESIZED" | "LIVE">("SYNTHESIZED");
+  const [showTurnsSpoiler, setShowTurnsSpoiler] = useState(false);
   const outputRef = useRef<HTMLElement>(null);
 
   function handleFileAttach(e: React.ChangeEvent<HTMLInputElement>) {
@@ -682,6 +684,14 @@ function App(): React.JSX.Element {
               </div>
             ) : null}
             <div className="controls">
+              <select
+                aria-label="Формат вывода"
+                value={viewMode}
+                onChange={(event) => setViewMode(event.target.value as any)}
+              >
+                <option value="SYNTHESIZED">🎯 Готовый ответ (синтез)</option>
+                <option value="LIVE">💬 Живой диалог (все ходы)</option>
+              </select>
               <select aria-label="Режим оркестрации" value={mode} onChange={(event) => setMode(event.target.value)}>
                 <option value="DEBATE">Рассуждение — до согласия или лимита</option>
                 <option value="SEQUENTIAL">Очередь — по одному ответу каждой модели</option>

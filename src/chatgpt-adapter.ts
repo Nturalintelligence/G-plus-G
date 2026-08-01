@@ -58,6 +58,7 @@ export interface AdapterOptions {
   profileDir?: string;
   timeoutMs?: number;
   settleMs?: number;
+  headless?: boolean;
 }
 
 interface ActiveTurn {
@@ -76,12 +77,14 @@ export class ChatGptAdapter implements ModelAdapter {
   private readonly profileLock: ProfileLock;
   private readonly timeoutMs: number;
   private readonly settleMs: number;
+  private readonly headless: boolean;
 
   constructor(options: AdapterOptions = {}) {
     this.profileDir = resolve(options.profileDir ?? dataPath("profiles", "chatgpt"));
     this.profileLock = new ProfileLock(this.profileDir);
     this.timeoutMs = options.timeoutMs ?? 180_000;
     this.settleMs = options.settleMs ?? 2_500;
+    this.headless = options.headless ?? (process.env.G_PLUS_G_HEADLESS !== "false" && process.env.NODE_ENV !== "test");
   }
 
   async launch(): Promise<void> {
@@ -90,7 +93,7 @@ export class ChatGptAdapter implements ModelAdapter {
     try {
       const executablePath = bundledChromiumExecutable();
       this.context = await chromium.launchPersistentContext(this.profileDir, {
-        headless: false,
+        headless: this.headless,
         viewport: { width: 1440, height: 1000 },
         args: ["--disable-blink-features=AutomationControlled"],
         ...(executablePath ? { executablePath } : {}),

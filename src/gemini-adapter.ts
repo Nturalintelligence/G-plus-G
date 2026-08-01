@@ -73,10 +73,13 @@ export class GeminiAdapter implements ModelAdapter {
   private readonly turns = new Map<string, GeminiTurn>();
   private readonly timeoutMs: number;
 
-  constructor(options: { profileDir?: string; timeoutMs?: number } = {}) {
+  private readonly headless: boolean;
+
+  constructor(options: { profileDir?: string; timeoutMs?: number; headless?: boolean } = {}) {
     this.profileDir = resolve(options.profileDir ?? dataPath("profiles", "gemini"));
     this.lock = new ProfileLock(this.profileDir);
     this.timeoutMs = options.timeoutMs ?? 180_000;
+    this.headless = options.headless ?? (process.env.G_PLUS_G_HEADLESS !== "false" && process.env.NODE_ENV !== "test");
   }
 
   async launch(): Promise<void> {
@@ -532,7 +535,7 @@ export class GeminiAdapter implements ModelAdapter {
   private async launchAutomatedBrowser(): Promise<void> {
     const executablePath = bundledChromiumExecutable();
     this.context = await chromium.launchPersistentContext(this.profileDir, {
-      headless: false,
+      headless: this.headless,
       viewport: { width: 1440, height: 1000 },
       ...(executablePath ? { executablePath } : {}),
     });
