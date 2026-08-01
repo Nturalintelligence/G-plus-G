@@ -99,6 +99,7 @@ function App(): React.JSX.Element {
   const [optimisticUserTask, setOptimisticUserTask] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<ProjectView | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
+  const [activeSpecSection, setActiveSpecSection] = useState<string | null>(null);
   const outputRef = useRef<HTMLElement>(null);
 
   async function confirmDeleteProject(deleteRemote: boolean): Promise<void> {
@@ -580,15 +581,34 @@ function App(): React.JSX.Element {
                 </label>
               ))}
               <button
-                className="primary"
+                className="action-btn send primary"
                 disabled={!current || !task.trim() || running || providers.length === 0}
                 onClick={() => void run()}
+                title="Отправить сообщение"
               >
-                {running ? "Идёт обсуждение…" : "Отправить"}
+                📤 {running ? "Обсуждение…" : "Отправить"}
               </button>
-              <button onClick={() => void window.orchestrator.orchestration.pause()}>Пауза</button>
-              <button onClick={() => void window.orchestrator.orchestration.resume()}>Продолжить</button>
-              <button onClick={() => void window.orchestrator.orchestration.stop()}>Стоп</button>
+              <button
+                className="action-btn pause"
+                onClick={() => void window.orchestrator.orchestration.pause()}
+                title="Приостановить обсуждение"
+              >
+                ⏸️ Пауза
+              </button>
+              <button
+                className="action-btn resume"
+                onClick={() => void window.orchestrator.orchestration.resume()}
+                title="Продолжить обсуждение"
+              >
+                ▶️ Продолжить
+              </button>
+              <button
+                className="action-btn stop"
+                onClick={() => void window.orchestrator.orchestration.stop()}
+                title="Остановить процесс"
+              >
+                ⏹️ Стоп
+              </button>
             </div>
           </div>
           <article className="panel output" ref={outputRef}>
@@ -723,111 +743,31 @@ function App(): React.JSX.Element {
               {Object.values(projectState).flat().filter((item) => item.text.trim()).length} пунктов
             </span>
           </div>
-          <div className="state-builder tree-view">
-            {stateSections.map((section) => (
-              <details
-                className="state-section tree-branch"
-                key={section.key}
-                open={openStateSections.has(section.key)}
-                onToggle={(event) => {
-                  const isOpen = event.currentTarget.open;
-                  setOpenStateSections((currentSections) => {
-                    if (currentSections.has(section.key) === isOpen) return currentSections;
-                    const next = new Set(currentSections);
-                    if (isOpen) next.add(section.key);
-                    else next.delete(section.key);
-                    return next;
-                  });
-                }}
-              >
-                <summary>
-                  <span>
-                    {section.key === "requirements" && "📋 "}
-                    {section.key === "constraints" && "🛑 "}
-                    {section.key === "decisions" && "✅ "}
-                    {section.key === "rejectedOptions" && "❌ "}
-                    {section.key === "openQuestions" && "❓ "}
-                    {section.key === "acceptanceCriteria" && "🎯 "}
-                    {section.title}
-                  </span>
-                  <small>{projectState[section.key].length}</small>
-                </summary>
-                <div className="state-items tree-items">
-                  {projectState[section.key].map((item, index) => (
-                    <article className="state-card tree-leaf" key={item.id}>
-                      <header>
-                        <strong>{index + 1}</strong>
-                        <button
-                          aria-label={`Удалить пункт ${index + 1} из раздела ${section.title}`}
-                          onClick={() => removeStateItem(section.key, item.id)}
-                        >×</button>
-                      </header>
-                      <textarea
-                        aria-label={`${section.title}, пункт ${index + 1}`}
-                        placeholder={section.empty}
-                        value={item.text}
-                        onChange={(event) =>
-                          updateStateItem(section.key, item.id, { text: event.target.value })}
-                      />
-                      {section.rationale ? (
-                        <textarea
-                          className="rationale-input"
-                          aria-label={`Обоснование пункта ${index + 1}`}
-                          placeholder="Почему принято такое решение?"
-                          value={item.rationale ?? ""}
-                          onChange={(event) =>
-                            updateStateItem(section.key, item.id, {
-                              rationale: event.target.value,
-                            })}
-                        />
-                      ) : null}
-                      <div className="source-picker">
-                        <select
-                          aria-label={`Источник пункта ${index + 1}`}
-                          value=""
-                          onChange={(event) => {
-                            const source = event.target.value;
-                            if (source && !item.sourceTurnIds.includes(source)) {
-                              updateStateItem(section.key, item.id, {
-                                sourceTurnIds: [...item.sourceTurnIds, source],
-                              });
-                            }
-                          }}
-                        >
-                          <option value="">Привязать к ответу…</option>
-                          {current?.transcript
-                            .filter((entry) => entry.role === "ASSISTANT")
-                            .map((entry) => (
-                              <option value={entry.id} key={entry.id}>
-                                {entry.providerId ?? "модель"} · {entry.content.slice(0, 55)}
-                              </option>
-                            ))}
-                        </select>
-                        <div className="source-tags">
-                          {item.sourceTurnIds.map((sourceId) => {
-                            const source = current?.transcript.find((entry) => entry.id === sourceId);
-                            return (
-                              <button
-                                key={sourceId}
-                                title="Убрать источник"
-                                onClick={() => updateStateItem(section.key, item.id, {
-                                  sourceTurnIds: item.sourceTurnIds.filter((id) => id !== sourceId),
-                                })}
-                              >
-                                {source?.providerId ?? "источник"} ×
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    </article>
-                  ))}
-                  <button className="add-state-item" onClick={() => addStateItem(section.key)}>
-                    + Добавить
-                  </button>
-                </div>
-              </details>
-            ))}
+          <div className="spec-cards-grid">
+            {stateSections.map((section) => {
+              const count = projectState[section.key].length;
+              return (
+                <button
+                  className="spec-category-chip"
+                  key={section.key}
+                  onClick={() => setActiveSpecSection(section.key)}
+                >
+                  <div className="spec-chip-header">
+                    <strong>
+                      {section.key === "requirements" && "📋 "}
+                      {section.key === "constraints" && "🛑 "}
+                      {section.key === "decisions" && "✅ "}
+                      {section.key === "rejectedOptions" && "❌ "}
+                      {section.key === "openQuestions" && "❓ "}
+                      {section.key === "acceptanceCriteria" && "🎯 "}
+                      {section.title}
+                    </strong>
+                    <span className="spec-chip-badge">{count}</span>
+                  </div>
+                  <small className="spec-chip-desc">{count > 0 ? `${count} пунктов заполнено` : "Нажмите для добавления"}</small>
+                </button>
+              );
+            })}
           </div>
           <details className="advanced-state" open={advancedStateOpen} onToggle={(event) =>
             setAdvancedStateOpen((event.currentTarget as HTMLDetailsElement).open)}>
@@ -1286,6 +1226,104 @@ function App(): React.JSX.Element {
             </div>
             <footer>
               <button disabled={deleteBusy} onClick={() => setDeleteTarget(null)}>Отмена</button>
+            </footer>
+          </section>
+        </div>
+      ) : null}
+      {activeSpecSection ? (
+        <div className="modal-backdrop" role="presentation" onMouseDown={() => setActiveSpecSection(null)}>
+          <section className="settings-modal spec-modal" role="dialog" onMouseDown={(event) => event.stopPropagation()}>
+            <header>
+              <h2>
+                {activeSpecSection === "requirements" && "📋 Требования"}
+                {activeSpecSection === "constraints" && "🛑 Ограничения"}
+                {activeSpecSection === "decisions" && "✅ Принятые решения"}
+                {activeSpecSection === "rejectedOptions" && "❌ Отклонения"}
+                {activeSpecSection === "openQuestions" && "❓ Открытые вопросы"}
+                {activeSpecSection === "acceptanceCriteria" && "🎯 Критерии приёмки"}
+              </h2>
+              <button onClick={() => setActiveSpecSection(null)}>×</button>
+            </header>
+            <div className="settings-pane spec-modal-body">
+              {projectState[activeSpecSection as keyof typeof projectState].map((item, index) => (
+                <article className="state-card tree-leaf" key={item.id}>
+                  <header>
+                    <strong>Пункт {index + 1}</strong>
+                    <button
+                      aria-label={`Удалить пункт ${index + 1}`}
+                      onClick={() => removeStateItem(activeSpecSection as any, item.id)}
+                    >×</button>
+                  </header>
+                  <textarea
+                    aria-label={`Пункт ${index + 1}`}
+                    placeholder="Описание пункта..."
+                    value={item.text}
+                    onChange={(event) =>
+                      updateStateItem(activeSpecSection as any, item.id, { text: event.target.value })}
+                  />
+                  {activeSpecSection === "decisions" || activeSpecSection === "rejectedOptions" ? (
+                    <textarea
+                      className="rationale-input"
+                      aria-label={`Обоснование пункта ${index + 1}`}
+                      placeholder="Почему принято такое решение?"
+                      value={(item as any).rationale ?? ""}
+                      onChange={(event) =>
+                        updateStateItem(activeSpecSection as any, item.id, {
+                          rationale: event.target.value,
+                        })}
+                    />
+                  ) : null}
+                  <div className="source-picker">
+                    <select
+                      aria-label={`Источник пункта ${index + 1}`}
+                      value=""
+                      onChange={(event) => {
+                        const source = event.target.value;
+                        if (source && !item.sourceTurnIds.includes(source)) {
+                          updateStateItem(activeSpecSection as any, item.id, {
+                            sourceTurnIds: [...item.sourceTurnIds, source],
+                          });
+                        }
+                      }}
+                    >
+                      <option value="">Привязать к ответу…</option>
+                      {current?.transcript
+                        .filter((entry) => entry.role === "ASSISTANT")
+                        .map((entry) => (
+                          <option value={entry.id} key={entry.id}>
+                            {entry.providerId ?? "модель"} · {entry.content.slice(0, 55)}
+                          </option>
+                        ))}
+                    </select>
+                    <div className="source-tags">
+                      {item.sourceTurnIds.map((sourceId) => {
+                        const source = current?.transcript.find((entry) => entry.id === sourceId);
+                        return (
+                          <button
+                            key={sourceId}
+                            title="Убрать источник"
+                            onClick={() => updateStateItem(activeSpecSection as any, item.id, {
+                              sourceTurnIds: item.sourceTurnIds.filter((id) => id !== sourceId),
+                            })}
+                          >
+                            {source?.providerId ?? "источник"} ×
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </article>
+              ))}
+              <button
+                className="add-state-item primary"
+                style={{ width: "100%", marginTop: "10px" }}
+                onClick={() => addStateItem(activeSpecSection as any)}
+              >
+                + Добавить пункт
+              </button>
+            </div>
+            <footer>
+              <button className="primary" onClick={() => setActiveSpecSection(null)}>Готово</button>
             </footer>
           </section>
         </div>
