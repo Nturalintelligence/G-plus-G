@@ -22,6 +22,7 @@ import {
   TurnTimeoutError,
 } from "./errors.js";
 import { fingerprint, normalizeText, selectNewResponse } from "./fingerprint.js";
+import { fillComposerSafely } from "./adapters/dom-utils.js";
 import type {
   DiagnosticReport,
   ResponseSnapshot,
@@ -374,7 +375,7 @@ export class GenericWebAdapter implements ModelAdapter {
     const startedAt = Date.now();
 
     this.log("sendAndWait.filling_composer");
-    await composer.fill(message);
+    await fillComposerSafely(composer, message);
     this.log("sendAndWait.submit_composer");
     await this.submitComposer(composer, message);
     this.log("sendAndWait.wait_until_submitted");

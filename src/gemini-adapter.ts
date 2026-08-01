@@ -20,6 +20,7 @@ import {
   TurnTimeoutError,
 } from "./errors.js";
 import { fingerprint, normalizeText, selectNewResponse } from "./fingerprint.js";
+import { fillComposerSafely } from "./adapters/dom-utils.js";
 import { newId } from "./ids.js";
 import { dataPath } from "./paths.js";
 import { inferSessionState } from "./adapters/session-inference.js";
@@ -249,7 +250,7 @@ export class GeminiAdapter implements ModelAdapter {
     if (candidates.length !== 1) {
       throw new AmbiguousElementError(`Expected one Gemini composer, found ${candidates.length}`);
     }
-    await candidates[0]!.fill(message);
+    await fillComposerSafely(candidates[0]!, message);
     await this.submitComposer(candidates[0]!, message);
     await this.waitUntilUserMessage(userMessagesBefore);
     channel?.publish({ type: "MESSAGE_SUBMITTED", at: new Date().toISOString() });

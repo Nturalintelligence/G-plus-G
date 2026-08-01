@@ -96,6 +96,7 @@ function App(): React.JSX.Element {
   const [showSplash, setShowSplash] = useState(true);
   const [creationProviders, setCreationProviders] = useState<string[]>(["chatgpt", "gemini"]);
   const [streaming, setStreaming] = useState<Record<string, string>>({});
+  const [optimisticUserTask, setOptimisticUserTask] = useState<string | null>(null);
   const outputRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
@@ -132,7 +133,7 @@ function App(): React.JSX.Element {
   }, [settings.appearance]);
   useEffect(() => {
     outputRef.current?.scrollTo({ top: outputRef.current.scrollHeight, behavior: "smooth" });
-  }, [current?.transcript.length]);
+  }, [current?.transcript.length, optimisticUserTask, Object.values(streaming).join("").length, running]);
   useEffect(() => {
     if (!running || !current) return;
     const projectId = current.project.id;
@@ -157,6 +158,7 @@ function App(): React.JSX.Element {
     const submittedTask = task.trim();
     if (!current || !submittedTask || running || providers.length === 0) return;
     const projectId = current.project.id;
+    setOptimisticUserTask(submittedTask);
     setTask("");
     setStreaming({});
     setRunning(true);
@@ -186,6 +188,7 @@ function App(): React.JSX.Element {
     } finally {
       setRunning(false);
       setStreaming({});
+      setOptimisticUserTask(null);
     }
   }
 
@@ -546,7 +549,7 @@ function App(): React.JSX.Element {
             </div>
           </div>
           <article className="panel output" ref={outputRef}>
-            {current?.transcript.length || Object.values(streaming).some(t => t.trim()) ? (
+            {current?.transcript.length || optimisticUserTask || Object.values(streaming).some(t => t.trim()) ? (
               <>
                 {(current?.transcript || []).map((entry) => (
                   <section
@@ -582,6 +585,45 @@ function App(): React.JSX.Element {
                     ) : null}
                   </section>
                 ))}
+                {optimisticUserTask && !(current?.transcript || []).some(t => t.role === "USER" && t.content === optimisticUserTask) ? (
+                  <section className="message user optimistic" key="optimistic-user-task">
+                    <header>
+                      <strong>Вы</strong>
+                      <small>отправка…</small>
+                    </header>
+                    <ReactMarkdown
+                      remarkPlugins={[remarkGfm]}
+                      skipHtml
+                      components={{
+                        a: ({ href, children }) => {
+                          if (!href || !/^https?:\/\//i.test(href)) {
+                            return <span>{children}</span>;
+                          }
+                          return (
+                            <a href={href} target="_blank" rel="noreferrer noopener">
+                              {children}
+                            </a>
+                          );
+                        },
+                      }}
+                    >
+                      {optimisticUserTask}
+                    </ReactMarkdown>
+                  </section>
+                ) : null}
+                {running ? (
+                  <div className="discussion-status-card" key="discussion-status">
+                    <div className="discussion-pulse-loader">
+                      <span className="dot"></span>
+                      <span className="dot"></span>
+                      <span className="dot"></span>
+                    </div>
+                    <div className="discussion-status-text">
+                      <strong>Обсуждение в процессе…</strong>
+                      <small>{status}</small>
+                    </div>
+                  </div>
+                ) : null}
                 {Object.entries(streaming).map(([providerId, text]) => {
                   if (!text.trim()) return null;
                   const alreadyPersisted = current?.transcript.some(

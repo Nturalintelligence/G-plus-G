@@ -23,6 +23,7 @@ import {
   TurnTimeoutError,
 } from "./errors.js";
 import { fingerprint, normalizeText, selectNewResponse } from "./fingerprint.js";
+import { fillComposerSafely } from "./adapters/dom-utils.js";
 import type {
   DiagnosticReport,
   ResponseSnapshot,
@@ -297,7 +298,7 @@ export class ChatGptAdapter implements ModelAdapter {
     const composer = await this.getUniqueComposer();
     const startedAt = Date.now();
 
-    await composer.fill(message);
+    await fillComposerSafely(composer, message);
     await this.submitComposer(composer, message);
     await this.waitUntilSubmitted(userMessagesBefore);
     channel?.publish({ type: "MESSAGE_SUBMITTED", at: new Date().toISOString() });
