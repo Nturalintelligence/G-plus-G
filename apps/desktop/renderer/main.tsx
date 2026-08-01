@@ -4,6 +4,8 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import "./styles.css";
 
+import { validateFileForProviders } from "../../../src/files/file-manager.js";
+
 const initialState: ProjectStateView = {
   requirements: [],
   constraints: [],
@@ -71,9 +73,10 @@ function App(): React.JSX.Element {
   const [current, setCurrent] = useState<ProjectDetails | null>(null);
   const [name, setName] = useState("");
   const [task, setTask] = useState("");
-  const [mode, setMode] = useState("DEBATE");
-  const [providers, setProviders] = useState(["chatgpt", "gemini"]);
+  const [mode, setMode] = useState<string>("DEBATE");
+  const [continuationPolicy, setContinuationPolicy] = useState<"autonomous" | "approval">("autonomous");
   const [starter, setStarter] = useState<string>("chatgpt");
+  const [providers, setProviders] = useState<string[]>(["chatgpt", "gemini"]);
   const [stateText, setStateText] = useState(JSON.stringify(initialState, null, 2));
   const [projectState, setProjectState] = useState<ProjectStateView>(initialState);
   const [advancedStateOpen, setAdvancedStateOpen] = useState(false);
@@ -100,7 +103,28 @@ function App(): React.JSX.Element {
   const [deleteTarget, setDeleteTarget] = useState<ProjectView | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [activeSpecSection, setActiveSpecSection] = useState<string | null>(null);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [attachedFiles, setAttachedFiles] = useState<Array<{ name: string; size: number }>>([]);
   const outputRef = useRef<HTMLElement>(null);
+
+  function handleFileAttach(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
+    for (const file of files) {
+      const check = validateFileForProviders(file.name, providers);
+      if (!check.valid) {
+        setStatus(`Файл '${file.name}' (${check.extension}) не поддерживается ИИ: ${check.unsupportedProviders.join(", ")}`);
+        return;
+      }
+    }
+    setAttachedFiles((prev) => [...prev, ...files.map((f) => ({ name: f.name, size: f.size }))]);
+    setStatus(`Прикреплено файлов: ${files.length}`);
+  }
+
+  function removeFile(index: number) {
+    setAttachedFiles((prev) => prev.filter((_, i) => i !== index));
+  }
 
   async function confirmDeleteProject(deleteRemote: boolean): Promise<void> {
     if (!deleteTarget || deleteBusy) return;
@@ -395,13 +419,11 @@ function App(): React.JSX.Element {
       ? `Привет, ${nameToUse}!`
       : "С возвращением!";
     return (
-      <div className="splash-screen">
-        <div className="splash-content">
-          <img src="./logo.png" className="splash-logo" alt="G+G Logo" />
-          <h1 className="splash-greeting">{greetingText}</h1>
-          <p className="splash-subtitle">Multi-model orchestrator workspace</p>
-          <div className="splash-loader"></div>
-        </div>
+      <div className="splash-overlay">
+        <img src="app://bundle/logo.png" className="splash-logo" alt="G+G Logo" />
+        <h1 className="splash-greeting">{greetingText}</h1>
+        <p className="splash-subtitle">Multi-model orchestrator workspace</p>
+        <div className="splash-loader" />
       </div>
     );
   }
@@ -409,208 +431,111 @@ function App(): React.JSX.Element {
   return (
     <main>
       <header>
-        <div><img src="./logo.png" className="header-logo" alt="G+G Logo" /><h1>Multi-model workspace</h1></div>
+        <div className="header-left">
+          <button
+            className="icon-header-btn"
+            title="Переключить сайдбар"
+            onClick={() => setSidebarOpen(!sidebarOpen)}
+          >
+            📑
+          </button>
+          <img src="app://bundle/logo.png" className="header-logo" alt="G+G Logo" />
+          <h1>Multi-model workspace</h1>
+        </div>
         <div className="header-actions">
           <span className="status" role="status" aria-live="polite">{status}</span>
-          <button onClick={() => setSettingsOpen(true)}>
-            {settings.profile.displayName || "Профиль"} · Настройки
+          <button
+            className={`icon-header-btn ${inspectorOpen ? "active" : ""}`}
+            title="Конструктор спецификации"
+            onClick={() => setInspectorOpen(!inspectorOpen)}
+          >
+            🎯 Спецификация
           </button>
         </div>
       </header>
-      <div className="layout">
-        <aside>
-          <h2>Проекты</h2>
-          <form
-            onSubmit={(event) => {
-              event.preventDefault();
-              void window.orchestrator.projects.create(name, creationProviders).then(async (project) => {
-                setName("");
-                await refresh();
-                await openProject(project.id);
-              });
-            }}
-          >
-            <input aria-label="Название проекта" value={name} onChange={(event) => setName(event.target.value)} placeholder="Название проекта" />
-            <details className="creation-providers-details">
-              <summary>Выбрать ИИ ({creationProviders.length})</summary>
-              <div className="creation-providers-list">
-                {(["chatgpt", "gemini", "deepseek", "claude", "copilot", "perplexity", "huggingchat", "groq", "duckduckgo", "mistral"] as const).map((prov) => (
-                  <label key={prov}>
-                    <input
-                      type="checkbox"
-                      checked={creationProviders.includes(prov)}
-                      onChange={() =>
-                        setCreationProviders((currentList) =>
-                          currentList.includes(prov)
-                            ? currentList.filter((item) => item !== prov)
-                            : [...currentList, prov],
-                        )
-                      }
-                    /> {prov}
-                  </label>
-                ))}
-              </div>
-            </details>
-            <button>Создать</button>
-          </form>
-          <nav>
-            {projects.map((project) => (
-              <div className="project-row" key={project.id}>
-                <button
-                  className={`project-btn ${current?.project.id === project.id ? "selected" : ""}`}
-                  onClick={() => void openProject(project.id)}
-                >
-                  <strong>{project.name}</strong><small>{project.status}</small>
-                </button>
-                <button
-                  className="delete-project-btn"
-                  title="Удалить проект"
-                  aria-label={`Удалить проект ${project.name}`}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    setDeleteTarget(project);
-                  }}
-                >
-                  🗑️
-                </button>
-              </div>
-            ))}
-          </nav>
-          <h2>Сессии</h2>
-          {(["chatgpt", "gemini", "deepseek", "claude", "copilot", "perplexity", "huggingchat", "groq", "duckduckgo", "mistral"] as const).map((provider) => (
-            <div className="session-row" key={provider}>
-              <button onClick={() => void login(provider)}>
-                Войти · {provider}
-              </button>
+      <div className={`layout ${!sidebarOpen ? "collapsed-sidebar" : ""} ${inspectorOpen ? "has-inspector" : ""}`}>
+        {sidebarOpen ? (
+          <aside className="sidebar-pane">
+            <div className="sidebar-header">
+              <h2>Проекты</h2>
               <button
-                className="logout"
-                aria-label={`Выйти из ${provider}`}
-                title={`Удалить локальную сессию ${provider}`}
-                onClick={() => void resetSession(provider)}
+                className="new-project-btn"
+                title="Новый проект"
+                onClick={() => {
+                  const nameInput = document.querySelector('input[placeholder="Название проекта"]') as HTMLInputElement;
+                  if (nameInput) nameInput.focus();
+                }}
               >
-                Выйти
+                ➕ Новый
               </button>
             </div>
-          ))}
-        </aside>
-        <section className="workspace">
-          <div className="composer panel">
-            <h2>{current?.project.name ?? "Выберите проект"}</h2>
-            <textarea
-              aria-label="Сообщение для моделей"
-              value={task}
-              onChange={(event) => setTask(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && !event.shiftKey) {
-                  event.preventDefault();
-                  void run();
-                }
+            <form
+              onSubmit={(event) => {
+                event.preventDefault();
+                void window.orchestrator.projects.create(name, creationProviders).then(async (project) => {
+                  setName("");
+                  await refresh();
+                  await openProject(project.id);
+                });
               }}
-              placeholder="Напишите сообщение… Enter — отправить, Shift+Enter — новая строка"
-            />
-            <div className="controls">
-              <select aria-label="Режим оркестрации" value={mode} onChange={(event) => setMode(event.target.value)}>
-                <option value="DEBATE">Рассуждение — до согласия или лимита</option>
-                <option value="SEQUENTIAL">Очередь — по одному ответу каждой модели</option>
-                <option value="PARALLEL">Независимые ответы</option>
-                <option value="MANUAL">Один ответ</option>
-              </select>
-              {mode === "DEBATE" ? (
-                <label className="starter-control">
-                  Продолжение обсуждения
-                  <select
-                    aria-label="Продолжение обсуждения"
-                    value={settings.defaults.limits.requireConfirmation ? "approval" : "auto"}
-                    onChange={(event) => setSettings((value) => ({
-                      ...value,
-                      defaults: {
-                        ...value.defaults,
-                        limits: {
-                          ...value.defaults.limits,
-                          requireConfirmation: event.target.value === "approval",
-                        },
-                      },
-                    }))}
-                  >
-                    <option value="auto">Автономно — до консенсуса</option>
-                    <option value="approval">С подтверждением пользователя</option>
-                  </select>
-                </label>
-              ) : null}
-              {providers.length > 1 && mode !== "PARALLEL" ? (
-                <label className="starter-control">
-                  Первым отвечает
-                  <select
-                    aria-label="Первым отвечает"
-                    value={starter}
-                    onChange={(event) =>
-                      setStarter(event.target.value as any)}
-                  >
-                    {providers.map((provider) => (
-                      <option key={provider} value={provider}>{provider}</option>
-                    ))}
-                  </select>
-                </label>
-              ) : null}
-              {(current?.project.providers && current.project.providers.length > 0
-                ? current.project.providers
-                : ["chatgpt", "gemini", "deepseek"]
-              ).map((provider) => (
-                <label key={provider}>
-                  <input
-                    type="checkbox"
-                    checked={providers.includes(provider)}
-                    onChange={() =>
-                      setProviders((value) => {
-                        const next = value.includes(provider)
-                          ? value.filter((item) => item !== provider)
-                          : [...value, provider];
-                        if (
-                          next.length < 2 &&
-                          (mode === "DEBATE" || mode === "SEQUENTIAL")
-                        ) {
-                          setMode("MANUAL");
+            >
+              <input aria-label="Название проекта" value={name} onChange={(event) => setName(event.target.value)} placeholder="Название проекта" />
+              <details className="creation-providers-details">
+                <summary>Выбрать ИИ ({creationProviders.length})</summary>
+                <div className="creation-providers-list">
+                  {(["chatgpt", "gemini", "deepseek", "claude", "copilot", "perplexity", "huggingchat", "groq", "duckduckgo", "mistral"] as const).map((prov) => (
+                    <label key={prov}>
+                      <input
+                        type="checkbox"
+                        checked={creationProviders.includes(prov)}
+                        onChange={() =>
+                          setCreationProviders((currentList) =>
+                            currentList.includes(prov)
+                              ? currentList.filter((item) => item !== prov)
+                              : [...currentList, prov],
+                          )
                         }
-                        if (!next.includes(starter) && next[0]) {
-                          setStarter(next[0] as any);
-                        }
-                        return next;
-                      })
-                    }
-                  /> {provider}
-                </label>
+                      /> {prov}
+                    </label>
+                  ))}
+                </div>
+              </details>
+              <button className="primary">Создать проект</button>
+            </form>
+            <nav className="projects-list-nav">
+              {projects.map((project) => (
+                <div className="project-row" key={project.id}>
+                  <button
+                    className={`project-btn ${current?.project.id === project.id ? "selected" : ""}`}
+                    onClick={() => void openProject(project.id)}
+                  >
+                    <strong>{project.name}</strong><small>{project.status}</small>
+                  </button>
+                  <button
+                    className="delete-project-btn"
+                    title="Удалить проект"
+                    aria-label={`Удалить проект ${project.name}`}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setDeleteTarget(project);
+                    }}
+                  >
+                    🗑️
+                  </button>
+                </div>
               ))}
-              <button
-                className="action-btn send primary"
-                disabled={!current || !task.trim() || running || providers.length === 0}
-                onClick={() => void run()}
-                title="Отправить сообщение"
-              >
-                📤 {running ? "Обсуждение…" : "Отправить"}
+            </nav>
+            <footer className="sidebar-footer">
+              <div className="profile-chip">
+                👤 {settings.profile.displayName || "Пользователь"}
+              </div>
+              <button className="settings-trigger-btn" onClick={() => setSettingsOpen(true)} title="Настройки">
+                ⚙️ Настройки
               </button>
-              <button
-                className="action-btn pause"
-                onClick={() => void window.orchestrator.orchestration.pause()}
-                title="Приостановить обсуждение"
-              >
-                ⏸️ Пауза
-              </button>
-              <button
-                className="action-btn resume"
-                onClick={() => void window.orchestrator.orchestration.resume()}
-                title="Продолжить обсуждение"
-              >
-                ▶️ Продолжить
-              </button>
-              <button
-                className="action-btn stop"
-                onClick={() => void window.orchestrator.orchestration.stop()}
-                title="Остановить процесс"
-              >
-                ⏹️ Стоп
-              </button>
-            </div>
-          </div>
+            </footer>
+          </aside>
+        ) : null}
+        <section className="workspace">
           <article className="panel output" ref={outputRef}>
             {current?.transcript.length || optimisticUserTask || Object.values(streaming).some(t => t.trim()) ? (
               <>
@@ -728,8 +653,140 @@ function App(): React.JSX.Element {
               <p className="empty">Здесь сохранится весь разговор ChatGPT, Gemini и ваш.</p>
             )}
           </article>
+          <div className="composer panel composer-bottom">
+            <div className="composer-input-row">
+              <label className="file-attach-btn" title="Прикрепить файл или картинку">
+                📎
+                <input type="file" onChange={handleFileAttach} hidden multiple />
+              </label>
+              <textarea
+                aria-label="Сообщение для моделей"
+                value={task}
+                onChange={(event) => setTask(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && !event.shiftKey) {
+                    event.preventDefault();
+                    void run();
+                  }
+                }}
+                placeholder="Напишите сообщение… Enter — отправить, Shift+Enter — новая строка"
+              />
+            </div>
+            {attachedFiles.length > 0 ? (
+              <div className="attached-files-row">
+                {attachedFiles.map((f, i) => (
+                  <span key={i} className="attached-file-tag">
+                    📄 {f.name} <button onClick={() => removeFile(i)}>×</button>
+                  </span>
+                ))}
+              </div>
+            ) : null}
+            <div className="controls">
+              <select aria-label="Режим оркестрации" value={mode} onChange={(event) => setMode(event.target.value)}>
+                <option value="DEBATE">Рассуждение — до согласия или лимита</option>
+                <option value="SEQUENTIAL">Очередь — по одному ответу каждой модели</option>
+                <option value="PARALLEL">Независимые ответы</option>
+                <option value="MANUAL">Один ответ</option>
+              </select>
+              {mode === "DEBATE" ? (
+                <label className="starter-control">
+                  Продолжение обсуждения
+                  <select
+                    aria-label="Продолжение обсуждения"
+                    value={settings.defaults.limits.requireConfirmation ? "approval" : "auto"}
+                    onChange={(event) => setSettings((value) => ({
+                      ...value,
+                      defaults: {
+                        ...value.defaults,
+                        limits: {
+                          ...value.defaults.limits,
+                          requireConfirmation: event.target.value === "approval",
+                        },
+                      },
+                    }))}
+                  >
+                    <option value="auto">Автономно — до консенсуса</option>
+                    <option value="approval">С подтверждением пользователя</option>
+                  </select>
+                </label>
+              ) : null}
+              {providers.length > 1 && mode !== "PARALLEL" ? (
+                <label className="starter-control">
+                  Первым отвечает
+                  <select
+                    aria-label="Первым отвечает"
+                    value={starter}
+                    onChange={(event) =>
+                      setStarter(event.target.value as any)}
+                  >
+                    {providers.map((provider) => (
+                      <option key={provider} value={provider}>{provider}</option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
+              {(current?.project.providers && current.project.providers.length > 0
+                ? current.project.providers
+                : ["chatgpt", "gemini", "deepseek"]
+              ).map((provider) => (
+                <label key={provider}>
+                  <input
+                    type="checkbox"
+                    checked={providers.includes(provider)}
+                    onChange={() =>
+                      setProviders((value) => {
+                        const next = value.includes(provider)
+                          ? value.filter((item) => item !== provider)
+                          : [...value, provider];
+                        if (
+                          next.length < 2 &&
+                          (mode === "DEBATE" || mode === "SEQUENTIAL")
+                        ) {
+                          setMode("MANUAL");
+                        }
+                        if (!next.includes(starter) && next[0]) {
+                          setStarter(next[0] as any);
+                        }
+                        return next;
+                      })
+                    }
+                  /> {provider}
+                </label>
+              ))}
+              <button
+                className="action-btn send primary"
+                disabled={!current || !task.trim() || running || providers.length === 0}
+                onClick={() => void run()}
+                title="Отправить сообщение"
+              >
+                📤 {running ? "Обсуждение…" : "Отправить"}
+              </button>
+              <button
+                className="action-btn pause"
+                onClick={() => void window.orchestrator.orchestration.pause()}
+                title="Приостановить обсуждение"
+              >
+                ⏸️ Пауза
+              </button>
+              <button
+                className="action-btn resume"
+                onClick={() => void window.orchestrator.orchestration.resume()}
+                title="Продолжить обсуждение"
+              >
+                ▶️ Продолжить
+              </button>
+              <button
+                className="action-btn stop"
+                onClick={() => void window.orchestrator.orchestration.stop()}
+                title="Остановить процесс"
+              >
+                ⏹️ Стоп
+              </button>
+            </div>
+          </div>
         </section>
-        <aside className="inspector">
+        {inspectorOpen ? (
+          <aside className="inspector">
           <div className="state-heading">
             <div>
               <h2>Конструктор спецификации</h2>
@@ -810,6 +867,7 @@ function App(): React.JSX.Element {
             ))}
           </ol>
         </aside>
+        ) : null}
       </div>
       {settingsOpen ? (
         <div className="modal-backdrop" role="presentation" onMouseDown={() => setSettingsOpen(false)}>
