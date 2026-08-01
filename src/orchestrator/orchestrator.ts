@@ -20,6 +20,7 @@ import {
 import { QualityMetrics } from "../observability/metrics.js";
 import { logEvent } from "../observability/logger.js";
 import { globalEventBus } from "../events/event-bus.js";
+import { calculateRetryDelay, isRetryableError } from "./retry-policy.js";
 
 export type RunMode = "MANUAL" | "SEQUENTIAL" | "PARALLEL" | "DEBATE";
 export type RunStatus =
@@ -30,6 +31,22 @@ export type RunStatus =
   | "COMPLETED"
   | "STOPPED"
   | "FAILED";
+
+const VALID_FSM_TRANSITIONS: Record<RunStatus, readonly RunStatus[]> = {
+  CREATED: ["RUNNING", "FAILED", "STOPPED"],
+  RUNNING: ["PAUSED", "AWAITING_CONFIRMATION", "COMPLETED", "STOPPED", "FAILED"],
+  PAUSED: ["RUNNING", "STOPPED", "FAILED"],
+  AWAITING_CONFIRMATION: ["RUNNING", "STOPPED", "FAILED"],
+  COMPLETED: [],
+  STOPPED: [],
+  FAILED: [],
+};
+
+export function isValidFsmTransition(from: RunStatus, to: RunStatus): boolean {
+  if (from === to) return true;
+  const allowed = VALID_FSM_TRANSITIONS[from];
+  return allowed ? allowed.includes(to) : false;
+}
 
 export interface RunOutput {
   runId: string;
