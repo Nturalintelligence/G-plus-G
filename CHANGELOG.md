@@ -2,6 +2,15 @@
 
 All notable project checkpoints are recorded here.
 
+## [0.1.0-beta.1] - 2026-08-01
+
+### Added
+
+- **Context Manager**: Integrated `ContextBudgeter`, `DecisionLedger`, `CanonicalSummary`, and thread rollover protection.
+- **Dynamic Roles & Judge**: Added `assignRoles` and `evaluateDiscrepancy` for arbiter evaluation of peer reviews.
+- **File Sandbox Security**: Implemented extension allowlist, file size limits, and path traversal protection in `FileSandbox`.
+- Reached full pre-release feature readiness for 0.1.0-beta.1.
+
 ## [0.1.0-pre.12] - 2026-08-01
 
 ### Added
