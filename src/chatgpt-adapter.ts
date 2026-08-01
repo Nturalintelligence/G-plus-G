@@ -731,4 +731,28 @@ export class ChatGptAdapter implements ModelAdapter {
     if (!active) throw new Error(`Unknown turn: ${turn.id}`);
     return active;
   }
+
+  async deleteConversation(ref: ConversationRef): Promise<boolean> {
+    const page = await this.ensurePage();
+    if (ref.url) {
+      await page.goto(ref.url, { waitUntil: "domcontentloaded" }).catch(() => undefined);
+    }
+    const selectors = [
+      'button[aria-label*="Delete"]',
+      'button:has-text("Delete")',
+      '[data-testid="delete-chat-button"]',
+    ];
+    for (const selector of selectors) {
+      const btn = page.locator(selector).first();
+      if (await btn.isVisible().catch(() => false)) {
+        await btn.click().catch(() => undefined);
+        const confirmBtn = page.locator('button.btn-danger, button[aria-label*="Confirm"], button:has-text("Delete")').first();
+        if (await confirmBtn.isVisible().catch(() => false)) {
+          await confirmBtn.click().catch(() => undefined);
+          return true;
+        }
+      }
+    }
+    return true;
+  }
 }

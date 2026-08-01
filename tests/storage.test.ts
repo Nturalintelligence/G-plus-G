@@ -128,4 +128,25 @@ describe("SQLite project state", () => {
       "RUN_RECOVERED_AS_FAILED",
     );
   });
+
+  it("deletes projects and their associated data cleanly", () => {
+    const database = createDatabase();
+    const repository = new ProjectRepository(database);
+    const project = repository.createProject("Project to Delete");
+    const conversation = repository.createConversation(project.id, "chatgpt");
+    repository.appendConversationEntry({
+      projectId: project.id,
+      role: "USER",
+      content: "Hello",
+    });
+
+    expect(repository.listProjects().length).toBe(1);
+    expect(repository.getConversationsForProject(project.id).length).toBe(1);
+
+    repository.deleteProject(project.id);
+
+    expect(repository.listProjects().length).toBe(0);
+    expect(repository.getConversationsForProject(project.id).length).toBe(0);
+    expect(repository.conversationEntries(project.id).length).toBe(0);
+  });
 });

@@ -97,7 +97,28 @@ function App(): React.JSX.Element {
   const [creationProviders, setCreationProviders] = useState<string[]>(["chatgpt", "gemini"]);
   const [streaming, setStreaming] = useState<Record<string, string>>({});
   const [optimisticUserTask, setOptimisticUserTask] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<ProjectView | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
   const outputRef = useRef<HTMLElement>(null);
+
+  async function confirmDeleteProject(deleteRemote: boolean): Promise<void> {
+    if (!deleteTarget || deleteBusy) return;
+    setDeleteBusy(true);
+    setStatus(deleteRemote ? "Удаление проекта и чатов в веб-сервисах ИИ…" : "Удаление проекта из G+G…");
+    try {
+      await window.orchestrator.projects.delete(deleteTarget.id, deleteRemote);
+      if (current?.project.id === deleteTarget.id) {
+        setCurrent(null);
+      }
+      setDeleteTarget(null);
+      await refresh();
+      setStatus("Проект успешно удалён");
+    } catch (err) {
+      setStatus(`Ошибка удаления: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setDeleteBusy(false);
+    }
+  }
 
   useEffect(() => {
     return window.orchestrator.orchestration.onProgress((data) => {
@@ -433,13 +454,25 @@ function App(): React.JSX.Element {
           </form>
           <nav>
             {projects.map((project) => (
-              <button
-                className={current?.project.id === project.id ? "selected" : ""}
-                key={project.id}
-                onClick={() => void openProject(project.id)}
-              >
-                <strong>{project.name}</strong><small>{project.status}</small>
-              </button>
+              <div className="project-row" key={project.id}>
+                <button
+                  className={`project-btn ${current?.project.id === project.id ? "selected" : ""}`}
+                  onClick={() => void openProject(project.id)}
+                >
+                  <strong>{project.name}</strong><small>{project.status}</small>
+                </button>
+                <button
+                  className="delete-project-btn"
+                  title="Удалить проект"
+                  aria-label={`Удалить проект ${project.name}`}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setDeleteTarget(project);
+                  }}
+                >
+                  🗑️
+                </button>
+              </div>
             ))}
           </nav>
           <h2>Сессии</h2>
@@ -1217,6 +1250,42 @@ function App(): React.JSX.Element {
               <button onClick={() => setSettings(fallbackSettings)}>Сбросить</button>
               <button onClick={() => setSettingsOpen(false)}>Отмена</button>
               <button className="primary" onClick={() => void saveSettings()}>Сохранить</button>
+            </footer>
+          </section>
+        </div>
+      ) : null}
+      {deleteTarget ? (
+        <div className="modal-backdrop" role="presentation" onMouseDown={() => setDeleteTarget(null)}>
+          <section className="settings-modal delete-modal" role="dialog" onMouseDown={(event) => event.stopPropagation()}>
+            <header>
+              <h2>Удаление проекта «{deleteTarget.name}»</h2>
+              <button onClick={() => setDeleteTarget(null)}>×</button>
+            </header>
+            <div className="settings-pane">
+              <p style={{ margin: "0 0 12px 0", color: "var(--text-secondary)" }}>
+                Выберите, как вы хотите удалить этот проект:
+              </p>
+              <div className="delete-options">
+                <button
+                  className="delete-option-btn remote"
+                  disabled={deleteBusy}
+                  onClick={() => void confirmDeleteProject(true)}
+                >
+                  <strong>🔴 Удалить везде (в G+G и сервисах ИИ)</strong>
+                  <small>Очистит историю в G+G и автоматически удалит чаты на веб-сайтах ChatGPT, Gemini и DeepSeek.</small>
+                </button>
+                <button
+                  className="delete-option-btn local"
+                  disabled={deleteBusy}
+                  onClick={() => void confirmDeleteProject(false)}
+                >
+                  <strong>🟡 Удалить только в G+G (сохранить веб-чаты)</strong>
+                  <small>Сохранит веб-чаты в ваших аккаунтах ИИ, но полностью удалит локальный проект из базы G+G.</small>
+                </button>
+              </div>
+            </div>
+            <footer>
+              <button disabled={deleteBusy} onClick={() => setDeleteTarget(null)}>Отмена</button>
             </footer>
           </section>
         </div>

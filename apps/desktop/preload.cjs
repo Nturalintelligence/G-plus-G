@@ -18,6 +18,7 @@ const api = {
     list: () => ipcRenderer.invoke("projects:list"),
     create: (name) => ipcRenderer.invoke("projects:create", name),
     open: (id) => ipcRenderer.invoke("projects:open", id),
+    delete: (id, deleteRemote) => ipcRenderer.invoke("projects:delete", { projectId: id, deleteRemote }),
   },
   provider: {
     login: (provider) => ipcRenderer.invoke("provider:login", provider),

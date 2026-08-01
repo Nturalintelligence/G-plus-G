@@ -556,4 +556,23 @@ export class GeminiAdapter implements ModelAdapter {
     if (!active) throw new Error(`Unknown Gemini turn: ${turn.id}`);
     return active;
   }
+
+  async deleteConversation(ref: ConversationRef): Promise<boolean> {
+    const page = await this.ensurePage();
+    if (ref.url) {
+      await page.goto(ref.url, { waitUntil: "domcontentloaded" }).catch(() => undefined);
+    }
+    const selectors = [
+      'button[aria-label*="Delete"]',
+      'button[aria-label*="Удалить"]',
+    ];
+    for (const selector of selectors) {
+      const btn = page.locator(selector).first();
+      if (await btn.isVisible().catch(() => false)) {
+        await btn.click().catch(() => undefined);
+        return true;
+      }
+    }
+    return true;
+  }
 }

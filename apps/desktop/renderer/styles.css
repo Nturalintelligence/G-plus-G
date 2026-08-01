@@ -426,3 +426,68 @@ nav small, .timeline small { color: var(--text-muted); display: block; }
   40% { transform: scale(1); opacity: 1; }
 }
 
+/* Project delete styles */
+.project-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.project-btn {
+  flex: 1;
+  min-width: 0;
+}
+.delete-project-btn {
+  padding: 6px 8px;
+  background: transparent;
+  border: 0;
+  opacity: 0.6;
+  font-size: 14px;
+}
+.delete-project-btn:hover {
+  opacity: 1;
+  background: rgba(255, 100, 100, 0.15);
+  border-radius: 6px;
+}
+
+.delete-modal {
+  height: auto !important;
+  max-width: 520px;
+}
+.delete-options {
+  display: grid;
+  gap: 12px;
+  margin-top: 10px;
+}
+.delete-option-btn {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px;
+  border-radius: 10px;
+  text-align: left;
+}
+.delete-option-btn.remote {
+  border-color: #7a2b30;
+  background: rgba(122, 43, 48, 0.15);
+}
+.delete-option-btn.remote:hover {
+  background: rgba(122, 43, 48, 0.3);
+  border-color: #ff7b72;
+}
+.delete-option-btn.local {
+  border-color: #5c4a22;
+  background: rgba(92, 74, 34, 0.15);
+}
+.delete-option-btn.local:hover {
+  background: rgba(92, 74, 34, 0.3);
+  border-color: #f0c36b;
+}
+.delete-option-btn strong {
+  font-size: 14px;
+}
+.delete-option-btn small {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.35;
+}
+

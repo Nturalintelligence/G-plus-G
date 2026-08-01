@@ -24,6 +24,7 @@ interface Window {
       list(): Promise<ProjectView[]>;
       create(name: string, providers: string[]): Promise<ProjectView>;
       open(id: string): Promise<ProjectDetails>;
+      delete(id: string, deleteRemote?: boolean): Promise<{ success: boolean }>;
     };
     provider: {
       login(provider: string): Promise<string>;

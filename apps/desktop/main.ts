@@ -283,6 +283,43 @@ function registerIpc(): void {
       state: new ProjectStateService(db()).latest(projectId),
     };
   });
+  handle("projects:delete", async (_event, input: unknown) => {
+    const obj = (typeof input === "object" && input !== null ? input : {}) as Record<string, unknown>;
+    const projectId = requireString(obj.projectId, "Project ID", 200);
+    const deleteRemote = Boolean(obj.deleteRemote);
+
+    logEvent("INFO", "project.delete.started", { projectId, deleteRemote });
+
+    if (deleteRemote && activeAdapters) {
+      const repository = new ProjectRepository(db());
+      const conversations = repository.getConversationsForProject(projectId);
+
+      for (const conv of conversations) {
+        if (!conv.externalRef) continue;
+        const adapter = activeAdapters.get(conv.providerId);
+        if (adapter && typeof adapter.deleteConversation === "function") {
+          try {
+            logEvent("INFO", "provider.conversation.deleting_remote", {
+              providerId: conv.providerId,
+              url: conv.externalRef,
+            });
+            await adapter.deleteConversation({ id: conv.id, url: conv.externalRef });
+          } catch (err) {
+            logEvent("WARN", "provider.conversation.delete_remote_failed", {
+              providerId: conv.providerId,
+              error: err,
+            });
+          }
+        }
+      }
+    }
+
+    const repository = new ProjectRepository(db());
+    repository.deleteProject(projectId);
+
+    logEvent("INFO", "project.delete.completed", { projectId, deleteRemote });
+    return { success: true, projectId };
+  });
   handle("provider:login", async (_event, providerValue: unknown) => {
     if (providerOperationActive || activeOrchestrator || activeAdapters) {
       throw new Error("Another provider operation is already active");

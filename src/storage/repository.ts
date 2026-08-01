@@ -152,6 +152,38 @@ export class ProjectRepository {
       }));
   }
 
+  getConversationsForProject(projectId: string): Conversation[] {
+    const rows = this.database.raw
+      .prepare(
+        `SELECT id, project_id, provider_id, external_ref, status, created_at, updated_at
+         FROM conversations WHERE project_id = ?`,
+      )
+      .all(projectId);
+    return rows.map((row) => mapConversation(row));
+  }
+
+  deleteProject(projectId: string): void {
+    this.database.transaction(() => {
+      const conversations = this.getConversationsForProject(projectId);
+      for (const conversation of conversations) {
+        const turns = this.database.raw
+          .prepare("SELECT id FROM turns WHERE conversation_id = ?")
+          .all(conversation.id) as Array<{ id: string }>;
+        for (const turn of turns) {
+          this.database.raw.prepare("DELETE FROM messages WHERE turn_id = ?").run(turn.id);
+          this.database.raw.prepare("DELETE FROM attempts WHERE turn_id = ?").run(turn.id);
+        }
+        this.database.raw.prepare("DELETE FROM turns WHERE conversation_id = ?").run(conversation.id);
+      }
+      this.database.raw.prepare("DELETE FROM conversation_entries WHERE project_id = ?").run(projectId);
+      this.database.raw.prepare("DELETE FROM conversations WHERE project_id = ?").run(projectId);
+      this.database.raw.prepare("DELETE FROM orchestration_runs WHERE project_id = ?").run(projectId);
+      this.database.raw.prepare("DELETE FROM project_state_versions WHERE project_id = ?").run(projectId);
+      this.database.raw.prepare("DELETE FROM projects WHERE id = ?").run(projectId);
+      this.appendEventInternal("Project", projectId, "PROJECT_DELETED", { projectId });
+    });
+  }
+
   createConversation(projectId: string, providerId: string): Conversation {
     const timestamp = new Date().toISOString();
     const conversation: Conversation = {
