@@ -2,6 +2,18 @@
 
 All notable project checkpoints are recorded here.
 
+## [0.1.0-pre.10] - 2026-08-01
+
+### Added
+
+- Introduced `TypedEventBus` in `src/events/` for validated domain event routing
+  with strict schema validation (`event_version: 1`), correlation IDs, and runtime type checks.
+- Protected Electron IPC bridge using strict allowlist for event broadcasting to the renderer.
+- Integrated UI phase diagnostics rendering `phase:changed` events dynamically in the chat console.
+- Added fast `fillComposerSafely` DOM utility across all web adapters to prevent Playwright `fill`
+  timeouts when sending large prompts.
+- Added optimistic rendering for user messages and animated status cards in transcript.
+
 ## [0.1.0-pre.9] - 2026-07-31
 
 ### Added
