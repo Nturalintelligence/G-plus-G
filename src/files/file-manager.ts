@@ -1,5 +1,3 @@
-import { extname } from "node:path";
-
 export const PROVIDER_FILE_SUPPORT: Record<string, ReadonlySet<string>> = {
   chatgpt: new Set([
     ".png",
@@ -41,11 +39,17 @@ export interface FileValidationResult {
   extension: string;
 }
 
+export function getExtension(filename: string): string {
+  const dotIndex = filename.lastIndexOf(".");
+  if (dotIndex <= 0) return "";
+  return filename.slice(dotIndex).toLowerCase();
+}
+
 export function validateFileForProviders(
   filename: string,
   providerIds: string[],
 ): FileValidationResult {
-  const ext = extname(filename).toLowerCase();
+  const ext = getExtension(filename);
   const unsupportedProviders: string[] = [];
 
   for (const providerId of providerIds) {
