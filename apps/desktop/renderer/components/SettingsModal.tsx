@@ -15,6 +15,7 @@ export interface SettingsModalProps {
   runPreflight: () => void;
   maintenanceBusy: boolean;
   createBackup: () => Promise<void>;
+  providerStatuses?: Record<string, { session: string; ready: boolean }>;
 }
 
 export function SettingsModal({
@@ -30,6 +31,7 @@ export function SettingsModal({
   runPreflight,
   maintenanceBusy,
   createBackup,
+  providerStatuses,
 }: SettingsModalProps) {
   const [activeTab, setActiveTab] = useState<
     "profile" | "models" | "behavior" | "appearance" | "quality" | "diagnostics"
@@ -192,8 +194,22 @@ export function SettingsModal({
                             <div className="model-identity">
                               <ProviderLogoIcon providerId={pId} size={22} />
                               <strong className="model-name-text">{meta.displayName}</strong>
-                              <span className={`status-badge ${meta.isSupported ? "supported" : "experimental"}`}>
-                                {meta.isSupported ? "Поддерживается" : "Эксперимент"}
+                              <span
+                                className={`status-badge ${
+                                  providerStatuses?.[pId]?.session === "AUTHENTICATED"
+                                    ? "supported"
+                                    : providerStatuses?.[pId]?.session === "CHALLENGE_REQUIRED"
+                                    ? "warning"
+                                    : "experimental"
+                                }`}
+                              >
+                                {providerStatuses?.[pId]?.session === "AUTHENTICATED"
+                                  ? "Авторизован"
+                                  : providerStatuses?.[pId]?.session === "CHALLENGE_REQUIRED"
+                                  ? "Проверка капчи"
+                                  : meta.isSupported
+                                  ? "Требуется вход"
+                                  : "Эксперимент"}
                               </span>
                             </div>
                             <div className="model-actions" onClick={(e) => e.stopPropagation()}>

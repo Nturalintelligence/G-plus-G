@@ -19,7 +19,9 @@ import { newId } from "./ids.js";
 import {
   AmbiguousElementError,
   ChallengeRequiredError,
+  LoginCancelledError,
   LoginRequiredError,
+  LoginTimeoutError,
   TurnTimeoutError,
 } from "./errors.js";
 import { fingerprint, normalizeText, selectNewResponse } from "./fingerprint.js";
@@ -120,7 +122,14 @@ export class ChatGptAdapter implements ModelAdapter {
   }
 
   async openLoginMode(): Promise<void> {
-    await this.waitForManualLogin();
+    const page = await this.ensurePage();
+    if (!page.url().includes("chatgpt.com")) {
+      await page.goto(CHATGPT_URL, { waitUntil: "domcontentloaded" });
+    }
+    const state = await this.waitForManualLogin();
+    if (state !== "AUTHENTICATED") {
+      throw new LoginRequiredError(`Авторизация ChatGPT не подтверждена. Статус: ${state}`);
+    }
   }
 
   async createConversation(): Promise<ConversationRef> {
@@ -232,12 +241,34 @@ export class ChatGptAdapter implements ModelAdapter {
     if (await this.hasChallenge()) return "CHALLENGE_REQUIRED";
     const body = await page.locator("body").innerText().catch(() => "");
     const loginControls = await this.visibleLoginControlCount();
+    const userMenu = await this.hasUserMenu();
     return inferSessionState(
       "chatgpt",
       body,
       (await this.findVisibleComposers()).length,
       loginControls,
+      {
+        hasUserMenu: userMenu,
+        url: page.url(),
+      },
     );
+  }
+
+  private async hasUserMenu(): Promise<boolean> {
+    const page = this.requirePage();
+    const selectors = [
+      '[data-testid="user-menu"]',
+      '[data-testid="profile-button"]',
+      'button[aria-label*="Profile"]',
+      'button[aria-label*="Профиль"]',
+      'button[aria-label*="User"]',
+    ];
+    for (const selector of selectors) {
+      if (await page.locator(selector).first().isVisible().catch(() => false)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private async visibleLoginControlCount(): Promise<number> {
@@ -255,22 +286,42 @@ export class ChatGptAdapter implements ModelAdapter {
     return count;
   }
 
-  async waitForManualLogin(): Promise<void> {
-    const page = this.requirePage();
+  async waitForManualLogin(): Promise<SessionState> {
     console.log("Войдите в ChatGPT в открытом окне.");
     const deadline = Date.now() + 10 * 60_000;
-    while (Date.now() < deadline && !page.isClosed()) {
-      const state = await this.checkSession().catch(() => "UNKNOWN");
-      if (state === "AUTHENTICATED") {
-        // Wait until user closes the window or 5 minutes pass
-        await page.waitForEvent("close", { timeout: 300_000 }).catch(() => undefined);
-        return;
+    let consecutiveAuthCount = 0;
+
+    while (Date.now() < deadline) {
+      const active = this.getActivePage();
+      if (!active || active.isClosed()) {
+        const remaining = this.context?.pages().filter((p) => !p.isClosed()) ?? [];
+        if (remaining.length === 0) {
+          throw new LoginCancelledError("Пользователь закрыл окно браузера до завершения входа");
+        }
       }
-      await page.waitForTimeout(1_000).catch(() => undefined);
+
+      const state = await this.checkSession().catch(() => "UNKNOWN" as SessionState);
+      if (state === "AUTHENTICATED") {
+        consecutiveAuthCount += 1;
+        if (consecutiveAuthCount >= 2) {
+          return "AUTHENTICATED";
+        }
+      } else {
+        consecutiveAuthCount = 0;
+      }
+
+      const current = this.getActivePage();
+      if (!current || current.isClosed()) {
+        const remaining = this.context?.pages().filter((p) => !p.isClosed()) ?? [];
+        if (remaining.length === 0) {
+          throw new LoginCancelledError("Пользователь закрыл окно браузера до завершения входа");
+        }
+      } else {
+        await current.waitForTimeout(500).catch(() => undefined);
+      }
     }
-    if (!page.isClosed()) {
-      throw new TurnTimeoutError("Поле ввода не появилось за 10 минут");
-    }
+
+    throw new LoginTimeoutError("Время ожидания входа истекло (10 минут)");
   }
 
   async diagnostics(): Promise<DiagnosticReport> {
@@ -695,17 +746,29 @@ export class ChatGptAdapter implements ModelAdapter {
     });
   }
 
+  private getActivePage(): Page | null {
+    if (!this.context) return null;
+    const pages = this.context.pages().filter((p) => !p.isClosed());
+    if (pages.length === 0) return null;
+    const chatgptPage = [...pages].reverse().find((p) => p.url().includes("chatgpt.com"));
+    return chatgptPage ?? pages[pages.length - 1] ?? null;
+  }
+
   private requirePage(): Page {
-    if (!this.page) throw new Error("Adapter is not launched");
-    return this.page;
+    const page = this.getActivePage() ?? this.page;
+    if (!page || page.isClosed()) throw new Error("Browser page is not initialized or has been closed");
+    this.page = page;
+    return page;
   }
 
   private async ensurePage(): Promise<Page> {
     if (!this.context) throw new Error("Adapter is not launched");
-    if (this.page && !this.page.isClosed()) return this.page;
-    this.page =
-      this.context.pages().find((candidate) => !candidate.isClosed()) ??
-      (await this.context.newPage());
+    const active = this.getActivePage();
+    if (active) {
+      this.page = active;
+      return active;
+    }
+    this.page = await this.context.newPage();
     if (!this.page.url().includes("chatgpt.com")) {
       await this.page.goto(CHATGPT_URL, { waitUntil: "domcontentloaded" });
     }

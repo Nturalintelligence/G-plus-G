@@ -16,7 +16,9 @@ import { loginInSystemChrome } from "./browser/system-browser-login.js";
 import {
   AmbiguousElementError,
   ChallengeRequiredError,
+  LoginCancelledError,
   LoginRequiredError,
+  LoginTimeoutError,
   TurnTimeoutError,
 } from "./errors.js";
 import { fingerprint, normalizeText, selectNewResponse } from "./fingerprint.js";
@@ -126,14 +128,21 @@ export class GeminiAdapter implements ModelAdapter {
     const page = await this.ensurePage();
     await page.goto(GEMINI_URL, { waitUntil: "domcontentloaded" });
     const deadline = Date.now() + 10 * 60_000;
-    while (Date.now() < deadline && !page.isClosed()) {
+    let consecutiveAuthCount = 0;
+    while (Date.now() < deadline) {
+      if (page.isClosed()) {
+        throw new LoginCancelledError("Пользователь закрыл окно Gemini до завершения входа");
+      }
       const state = await this.checkSession().catch(() => "UNKNOWN");
       if (state === "AUTHENTICATED") {
-        await page.waitForEvent("close", { timeout: 300_000 }).catch(() => undefined);
-        return;
+        consecutiveAuthCount += 1;
+        if (consecutiveAuthCount >= 2) return;
+      } else {
+        consecutiveAuthCount = 0;
       }
-      await page.waitForTimeout(1_000).catch(() => undefined);
+      await page.waitForTimeout(500).catch(() => undefined);
     }
+    throw new LoginTimeoutError("Время ожидания входа в Gemini истекло");
   }
 
   async createConversation(): Promise<ConversationRef> {

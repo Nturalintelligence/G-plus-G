@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { formatProviderList, getProviderDisplayName, getProviderMetadata } from "../apps/desktop/renderer/provider-metadata.js";
 import { formatDuration } from "../apps/desktop/renderer/utils/formatters.js";
 import { defaultSettings, parseSettings } from "../src/settings/settings.js";
+import { inferSessionState } from "../src/adapters/session-inference.js";
+import { LoginCancelledError, LoginTimeoutError } from "../src/errors.js";
 
 describe("G+G Corrective Pass Metadata & Utilities", () => {
   it("normalizes technical provider IDs to clean human-readable names", () => {
@@ -50,5 +52,22 @@ describe("G+G Corrective Pass Metadata & Utilities", () => {
     expect(parsed.models?.chatgpt?.role).toBe("Архитектор / Планнер");
     expect(parsed.models?.chatgpt?.customPrompt).toBe("Always respond in JSON");
     expect(parsed.models?.gemini?.role).toBe("Критик / Валидатор");
+  });
+
+  it("inferSessionState evaluates multi-signal probe with user menu and composer count", () => {
+    expect(inferSessionState("chatgpt", "", 1, 0, { hasUserMenu: true })).toBe("AUTHENTICATED");
+    expect(inferSessionState("chatgpt", "", 0, 0, { hasUserMenu: true })).toBe("AUTHENTICATED");
+    expect(inferSessionState("chatgpt", "", 0, 2, { hasUserMenu: false })).toBe("LOGIN_REQUIRED");
+    expect(inferSessionState("chatgpt", "", 0, 0, { hasChallenge: true })).toBe("CHALLENGE_REQUIRED");
+  });
+
+  it("instantiates typed LoginCancelledError and LoginTimeoutError correctly", () => {
+    const cancelErr = new LoginCancelledError();
+    expect(cancelErr.name).toBe("LoginCancelledError");
+    expect(cancelErr.message).toContain("закрыл окно");
+
+    const timeoutErr = new LoginTimeoutError();
+    expect(timeoutErr.name).toBe("LoginTimeoutError");
+    expect(timeoutErr.message).toContain("истекло");
   });
 });
