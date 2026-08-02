@@ -3,6 +3,7 @@ export interface ProviderMetadata {
   displayName: string;
   shortName: string;
   isSupported: boolean;
+  statusProbe: boolean;
   availabilityNote: string;
   color: string;
 }
@@ -13,6 +14,7 @@ export const PROVIDER_METADATA_MAP: Record<string, ProviderMetadata> = {
     displayName: "ChatGPT",
     shortName: "ChatGPT",
     isSupported: true,
+    statusProbe: true,
     availabilityNote: "Подключён через Playwright Web",
     color: "#10a37f",
   },
@@ -21,6 +23,7 @@ export const PROVIDER_METADATA_MAP: Record<string, ProviderMetadata> = {
     displayName: "Gemini",
     shortName: "Gemini",
     isSupported: true,
+    statusProbe: true,
     availabilityNote: "Подключён через Playwright Web",
     color: "#1a73e8",
   },
@@ -28,8 +31,9 @@ export const PROVIDER_METADATA_MAP: Record<string, ProviderMetadata> = {
     id: "deepseek",
     displayName: "DeepSeek",
     shortName: "DeepSeek",
-    isSupported: true,
-    availabilityNote: "Подключён через Playwright Web",
+    isSupported: false,
+    statusProbe: false,
+    availabilityNote: "Экспериментальный провайдер",
     color: "#4d6bfe",
   },
   claude: {
@@ -37,6 +41,7 @@ export const PROVIDER_METADATA_MAP: Record<string, ProviderMetadata> = {
     displayName: "Claude",
     shortName: "Claude",
     isSupported: false,
+    statusProbe: false,
     availabilityNote: "Экспериментальный провайдер",
     color: "#d97757",
   },
@@ -45,6 +50,7 @@ export const PROVIDER_METADATA_MAP: Record<string, ProviderMetadata> = {
     displayName: "GitHub Copilot",
     shortName: "Copilot",
     isSupported: false,
+    statusProbe: false,
     availabilityNote: "Экспериментальный провайдер",
     color: "#24292e",
   },
@@ -53,6 +59,7 @@ export const PROVIDER_METADATA_MAP: Record<string, ProviderMetadata> = {
     displayName: "Perplexity",
     shortName: "Perplexity",
     isSupported: false,
+    statusProbe: false,
     availabilityNote: "Экспериментальный провайдер",
     color: "#22b8cf",
   },
@@ -61,6 +68,7 @@ export const PROVIDER_METADATA_MAP: Record<string, ProviderMetadata> = {
     displayName: "HuggingChat",
     shortName: "HuggingChat",
     isSupported: false,
+    statusProbe: false,
     availabilityNote: "Экспериментальный провайдер",
     color: "#ffb703",
   },
@@ -69,6 +77,7 @@ export const PROVIDER_METADATA_MAP: Record<string, ProviderMetadata> = {
     displayName: "Groq",
     shortName: "Groq",
     isSupported: false,
+    statusProbe: false,
     availabilityNote: "Экспериментальный провайдер",
     color: "#f35b04",
   },
@@ -77,6 +86,7 @@ export const PROVIDER_METADATA_MAP: Record<string, ProviderMetadata> = {
     displayName: "DuckDuckGo AI Chat",
     shortName: "DuckDuckGo",
     isSupported: false,
+    statusProbe: false,
     availabilityNote: "Экспериментальный провайдер",
     color: "#de5833",
   },
@@ -85,6 +95,7 @@ export const PROVIDER_METADATA_MAP: Record<string, ProviderMetadata> = {
     displayName: "Mistral",
     shortName: "Mistral",
     isSupported: false,
+    statusProbe: false,
     availabilityNote: "Экспериментальный провайдер",
     color: "#ff70a6",
   },
@@ -101,6 +112,7 @@ export function getProviderMetadata(id: string): ProviderMetadata {
     displayName: formattedFallback,
     shortName: formattedFallback,
     isSupported: false,
+    statusProbe: false,
     availabilityNote: "Неизвестный адаптер",
     color: "#6b7280",
   };

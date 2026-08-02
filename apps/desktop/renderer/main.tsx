@@ -298,27 +298,31 @@ function App(): React.JSX.Element {
     });
   }, []);
 
-  const refreshProviderStatuses = useCallback(async () => {
-    const targets = ["chatgpt", "gemini", "deepseek"];
-    const results: Record<string, { session: string; ready: boolean }> = {};
-    for (const id of targets) {
-      try {
-        const res = await window.orchestrator.provider.status(id);
-        results[id] = { session: res.session, ready: res.ready };
-      } catch {
-        results[id] = { session: "UNKNOWN", ready: false };
-      }
+  const refreshProviderStatus = useCallback(async (providerId: string) => {
+    try {
+      const res = await window.orchestrator.provider.status(providerId);
+      setProviderStatuses((prev) => ({
+        ...prev,
+        [providerId]: { session: res.session, ready: res.ready },
+      }));
+    } catch {
+      setProviderStatuses((prev) => ({
+        ...prev,
+        [providerId]: { session: "UNKNOWN", ready: false },
+      }));
     }
-    setProviderStatuses(results);
   }, []);
 
+  const refreshAllSupportedStatuses = useCallback(async () => {
+    const targets = ["chatgpt", "gemini"];
+    for (const id of targets) {
+      await refreshProviderStatus(id);
+    }
+  }, [refreshProviderStatus]);
+
   useEffect(() => {
-    void refreshProviderStatuses();
-    const interval = setInterval(() => {
-      void refreshProviderStatuses();
-    }, 10_000);
-    return () => clearInterval(interval);
-  }, [refreshProviderStatuses]);
+    void refreshAllSupportedStatuses();
+  }, [refreshAllSupportedStatuses]);
 
   const refresh = async (): Promise<void> => setProjects(await window.orchestrator.projects.list());
   useEffect(() => {
@@ -432,17 +436,20 @@ function App(): React.JSX.Element {
   }
 
   async function login(provider: string): Promise<void> {
-    setStatus(`Войдите в ${provider} в открывшемся окне…`);
+    setStatus(`Войдите в ${getProviderDisplayName(provider)} в открывшемся окне…`);
     try {
       const session = await window.orchestrator.provider.login(provider);
-      await refreshProviderStatuses();
-      setStatus(`Сессия ${provider} активна: ${session}`);
-    } catch (error) {
+      setStatus(`Сессия ${getProviderDisplayName(provider)} активна: ${session}`);
+    } catch (error: any) {
+      if (error?.code === "LOGIN_ALREADY_ACTIVE" || String(error).includes("LOGIN_ALREADY_ACTIVE")) {
+        setStatus(error.message || "Уже выполняется вход в другой браузер.");
+        return;
+      }
       const userErr = toUserFacingError(error, `Авторизация ${provider}`);
       setActiveUserError(userErr);
       setStatus(userErr.message);
     } finally {
-      void refreshProviderStatuses();
+      void refreshProviderStatus(provider);
     }
   }
 
@@ -509,6 +516,7 @@ function App(): React.JSX.Element {
       setStatus(`Сессия не сброшена: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
       setMaintenanceBusy(false);
+      void refreshProviderStatus(provider);
     }
   }
 
