@@ -107,7 +107,6 @@ export class GeminiAdapter implements ModelAdapter {
 
   async checkSession(): Promise<SessionState> {
     const page = await this.ensurePage();
-    if (await this.hasChallenge()) return "CHALLENGE_REQUIRED";
     const body = await page.locator("body").innerText().catch(() => "");
     const loginControls = page.getByRole("button", { name: /^(sign in|войти)$/i });
     let visibleLoginControls = 0;
@@ -116,11 +115,17 @@ export class GeminiAdapter implements ModelAdapter {
         visibleLoginControls += 1;
       }
     }
+    const composers = (await this.visibleComposers()).length;
+    const challenge = composers >= 1 ? false : await this.hasChallenge();
     return inferSessionState(
       "gemini",
       body,
-      (await this.visibleComposers()).length,
+      composers,
       visibleLoginControls,
+      {
+        hasChallenge: challenge,
+        url: page.url(),
+      },
     );
   }
 
@@ -518,7 +523,7 @@ export class GeminiAdapter implements ModelAdapter {
     const title = await page.title().catch(() => "");
     const structuralSignals = await page
       .locator(
-        'iframe[src*="recaptcha"], iframe[src*="challenges.cloudflare.com"], textarea[name="g-recaptcha-response"], input[name="cf-turnstile-response"], #challenge-form',
+        'iframe[src*="recaptcha"]:visible, iframe[src*="challenges.cloudflare.com"]:visible, #challenge-form:visible',
       )
       .count()
       .catch(() => 0);
@@ -546,6 +551,9 @@ export class GeminiAdapter implements ModelAdapter {
     this.context = await chromium.launchPersistentContext(this.profileDir, {
       headless: this.headless,
       viewport: { width: 1440, height: 1000 },
+      userAgent:
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+      args: ["--disable-blink-features=AutomationControlled"],
       ...(executablePath ? { executablePath } : {}),
     });
     this.page = this.context.pages()[0] ?? (await this.context.newPage());

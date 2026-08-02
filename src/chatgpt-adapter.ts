@@ -97,6 +97,8 @@ export class ChatGptAdapter implements ModelAdapter {
       this.context = await chromium.launchPersistentContext(this.profileDir, {
         headless: this.headless,
         viewport: { width: 1440, height: 1000 },
+        userAgent:
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
         args: ["--disable-blink-features=AutomationControlled"],
         ...(executablePath ? { executablePath } : {}),
       });
@@ -238,17 +240,20 @@ export class ChatGptAdapter implements ModelAdapter {
 
   async checkSession(): Promise<SessionState> {
     const page = this.requirePage();
-    if (await this.hasChallenge()) return "CHALLENGE_REQUIRED";
     const body = await page.locator("body").innerText().catch(() => "");
     const loginControls = await this.visibleLoginControlCount();
     const userMenu = await this.hasUserMenu();
+    const composers = (await this.findVisibleComposers()).length;
+    const challenge = userMenu || composers >= 1 ? false : await this.hasChallenge();
+
     return inferSessionState(
       "chatgpt",
       body,
-      (await this.findVisibleComposers()).length,
+      composers,
       loginControls,
       {
         hasUserMenu: userMenu,
+        hasChallenge: challenge,
         url: page.url(),
       },
     );
@@ -703,7 +708,7 @@ export class ChatGptAdapter implements ModelAdapter {
     const title = await page.title().catch(() => "");
     const structuralSignals = await page
       .locator(
-        'iframe[src*="challenges.cloudflare.com"], iframe[src*="recaptcha"], input[name="cf-turnstile-response"], .cf-challenge-running, #challenge-form',
+        'iframe[src*="challenges.cloudflare.com"]:visible, iframe[src*="recaptcha"]:visible, .cf-challenge-running:visible, #challenge-form:visible',
       )
       .count()
       .catch(() => 0);
