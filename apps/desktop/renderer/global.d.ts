@@ -33,6 +33,7 @@ interface Window {
     };
     provider: {
       login(provider: string): Promise<string>;
+      status(provider: string): Promise<{ provider: string; session: string; ready: boolean }>;
       send(provider: string, message: string): Promise<{ response: string }>;
     };
     orchestration: {

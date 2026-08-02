@@ -366,6 +366,8 @@ function App(): React.JSX.Element {
         task: submittedTask,
         providers: orderedProviders,
         limits: settings.defaults.limits,
+        finalizerMode,
+        finalResponder,
       });
       setStatus(
         output.consensusReached

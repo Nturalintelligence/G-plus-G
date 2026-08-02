@@ -166,10 +166,21 @@ export function parseSettings(value: unknown): AppSettings {
   const fontScale = integer(appearance.fontScale, defaultSettings.appearance.fontScale);
   if (fontScale < 80 || fontScale > 140) throw new Error("Font scale must be between 80 and 140");
 
+  const rawModels = record(root.models);
+  const models: Record<string, ModelCustomization> = {};
+  for (const [key, val] of Object.entries(rawModels)) {
+    const obj = record(val);
+    models[key] = {
+      role: typeof obj.role === "string" ? obj.role.trim() : "Автоматически",
+      customPrompt: typeof obj.customPrompt === "string" ? obj.customPrompt.trim() : "",
+    };
+  }
+
   return {
     schemaVersion: 1,
     profile: { displayName, realName, greetingStyle },
     defaults: { mode, providers, limits: parsedLimits },
+    models,
     appearance: { theme, density, fontScale },
   };
 }

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { formatProviderList, getProviderDisplayName, getProviderMetadata } from "../apps/desktop/renderer/provider-metadata.js";
 import { formatDuration } from "../apps/desktop/renderer/utils/formatters.js";
+import { defaultSettings, parseSettings } from "../src/settings/settings.js";
 
 describe("G+G Corrective Pass Metadata & Utilities", () => {
   it("normalizes technical provider IDs to clean human-readable names", () => {
@@ -34,5 +35,20 @@ describe("G+G Corrective Pass Metadata & Utilities", () => {
     expect(formatDuration(144000)).toBe("2.4 мин");
     expect(formatDuration(0)).toBe("0 мс");
     expect(formatDuration(-10)).toBe("—");
+  });
+
+  it("parseSettings preserves models custom prompts and roles across save round-trip", () => {
+    const input = {
+      ...defaultSettings,
+      models: {
+        chatgpt: { role: "Архитектор / Планнер", customPrompt: "Always respond in JSON" },
+        gemini: { role: "Критик / Валидатор", customPrompt: "Check for security bugs" },
+      },
+    };
+    const parsed = parseSettings(input);
+    expect(parsed.models).toBeDefined();
+    expect(parsed.models?.chatgpt?.role).toBe("Архитектор / Планнер");
+    expect(parsed.models?.chatgpt?.customPrompt).toBe("Always respond in JSON");
+    expect(parsed.models?.gemini?.role).toBe("Критик / Валидатор");
   });
 });

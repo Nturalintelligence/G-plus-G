@@ -155,7 +155,9 @@ function validateRunInput(value: unknown): {
   mode: RunMode;
   task: string;
   providers: ProviderId[];
-  limits?: OrchestrationLimits;
+  limits?: OrchestrationLimits | undefined;
+  finalizerMode?: string | undefined;
+  finalResponder?: string | undefined;
 } {
   if (!value || typeof value !== "object") throw new Error("Invalid run input");
   const input = value as Record<string, unknown>;
@@ -185,12 +187,16 @@ function validateRunInput(value: unknown): {
       ? undefined
       : (input.limits as OrchestrationLimits);
   if (limits) validateLimits(limits);
+  const finalizerMode = typeof input.finalizerMode === "string" ? input.finalizerMode : undefined;
+  const finalResponder = typeof input.finalResponder === "string" ? input.finalResponder : undefined;
   return {
     projectId,
     mode: input.mode as RunMode,
     task,
     providers,
-    ...(limits ? { limits } : {}),
+    limits: input.limits as OrchestrationLimits | undefined,
+    finalizerMode,
+    finalResponder,
   };
 }
 
@@ -327,34 +333,68 @@ function registerIpc(): void {
     logEvent("INFO", "project.delete.completed", { projectId, deleteRemote });
     return { success: true, projectId };
   });
+  const activeProviderOperations = new Map<string, Promise<any>>();
+
   handle("provider:login", async (_event, providerValue: unknown) => {
-    if (providerOperationActive || activeOrchestrator || activeAdapters) {
-      throw new Error("Another provider operation is already active");
-    }
-    providerOperationActive = true;
     const provider = parseProvider(
       requireString(providerValue, "provider", 20),
     );
-    const adapter = createAdapter(provider, 180_000, false);
-    activeAdapters = new Map([[provider, adapter]]);
-    logEvent("INFO", "provider.login.started", { provider });
+    if (activeProviderOperations.has(provider)) {
+      return activeProviderOperations.get(provider)!;
+    }
+    if (activeOrchestrator) {
+      throw new Error("Orchestration is currently active. Please wait or pause first.");
+    }
+
+    const loginTask = (async () => {
+      const adapter = createAdapter(provider, 180_000, false);
+      activeAdapters = new Map([[provider, adapter]]);
+      logEvent("INFO", "provider.login.started", { provider });
+      try {
+        await adapter.launch();
+        await adapter.openLoginMode();
+        const session = await adapter.checkSession();
+        logEvent("INFO", "provider.login.completed", { provider, session });
+        return session;
+      } catch (error) {
+        const diagnosticPath = writeDiagnostic(error, {
+          operation: "provider:login",
+          provider,
+        });
+        throw new Error(
+          `${error instanceof Error ? error.message : String(error)} Диагностика: ${diagnosticPath}`,
+        );
+      } finally {
+        await closeActiveAdapters();
+      }
+    })();
+
+    activeProviderOperations.set(provider, loginTask);
+    try {
+      return await loginTask;
+    } finally {
+      activeProviderOperations.delete(provider);
+    }
+  });
+
+  handle("provider:status", async (_event, providerValue: unknown) => {
+    const provider = parseProvider(
+      requireString(providerValue, "provider", 20),
+    );
+    if (activeAdapters?.has(provider)) {
+      const adapter = activeAdapters.get(provider)!;
+      const session = await adapter.checkSession().catch(() => "UNKNOWN");
+      return { provider, session, ready: session === "AUTHENTICATED" };
+    }
+    const adapter = createAdapter(provider, 30_000, true);
     try {
       await adapter.launch();
-      await adapter.openLoginMode();
       const session = await adapter.checkSession();
-      logEvent("INFO", "provider.login.completed", { provider, session });
-      return session;
+      return { provider, session, ready: session === "AUTHENTICATED" };
     } catch (error) {
-      const diagnosticPath = writeDiagnostic(error, {
-        operation: "provider:login",
-        provider,
-      });
-      throw new Error(
-        `${error instanceof Error ? error.message : String(error)} Диагностика: ${diagnosticPath}`,
-      );
+      return { provider, session: "UNKNOWN", ready: false, error: String(error) };
     } finally {
-      await closeActiveAdapters();
-      providerOperationActive = false;
+      await adapter.close().catch(() => undefined);
     }
   });
   handle(

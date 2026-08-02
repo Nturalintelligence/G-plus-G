@@ -30,4 +30,15 @@ describe("CLI Executor Bridge", () => {
     expect(result.stdout).toContain("CLI Bridge Test");
     expect(result.tool).toBe("custom");
   });
+
+  it("sanitizes prompt against cmd shell injection metacharacters", () => {
+    const maliciousPrompt = 'Write code & calc.exe | dir ^ %PATH% " quote;';
+    const cmd = bridge.buildCliCommand("gemini", maliciousPrompt);
+    expect(cmd).not.toContain("&");
+    expect(cmd).not.toContain("|");
+    expect(cmd).not.toContain("^");
+    expect(cmd).not.toContain("%");
+    expect(cmd).not.toContain(";");
+    expect(cmd).toBe('gemini -y -p "Write code  calc.exe  dir  PATH  quote"');
+  });
 });

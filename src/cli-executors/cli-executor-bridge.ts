@@ -30,20 +30,26 @@ export class CliExecutorBridge {
   /**
    * Builds the shell command string for non-interactive execution based on the requested tool.
    */
+  public sanitizeShellArg(text: string): string {
+    return text
+      .replace(/\r?\n/g, " ")
+      .replace(/[\^&|<>%"`;$]/g, "")
+      .replace(/"/g, "'")
+      .trim();
+  }
+
   public buildCliCommand(tool: CliToolType, prompt: string, customCommand?: string): string {
-    const sanitizedPrompt = prompt.replace(/"/g, '\\"').replace(/\n/g, " ");
+    const sanitizedPrompt = this.sanitizeShellArg(prompt);
 
     if (tool === "custom") {
       return customCommand || `echo "${sanitizedPrompt}"`;
     }
 
     if (tool === "gemini") {
-      // Gemini CLI non-interactive mode: gemini -y -p "prompt"
       return `gemini -y -p "${sanitizedPrompt}"`;
     }
 
     if (tool === "codex") {
-      // Codex CLI non-interactive execution: codex exec -a never "prompt"
       return `codex exec -a never "${sanitizedPrompt}"`;
     }
 
