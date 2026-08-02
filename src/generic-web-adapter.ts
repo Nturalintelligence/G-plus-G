@@ -117,6 +117,7 @@ export class GenericWebAdapter implements ModelAdapter {
   private readonly settleMs: number;
   private readonly targetUrl: string;
   private readonly config: typeof SELECTORS[string];
+  readonly headless: boolean;
 
   private log(action: string, details: Record<string, unknown> = {}): void {
     const payload = { providerId: this.providerId, action, ...details };
@@ -126,12 +127,13 @@ export class GenericWebAdapter implements ModelAdapter {
 
   constructor(
     readonly providerId: ProviderId,
-    options: { profileDir?: string; timeoutMs?: number; settleMs?: number } = {},
+    options: { profileDir?: string; timeoutMs?: number; settleMs?: number; headless?: boolean } = {},
   ) {
     this.profileDir = resolve(options.profileDir ?? dataPath("profiles", providerId));
     this.profileLock = new ProfileLock(this.profileDir);
     this.timeoutMs = options.timeoutMs ?? 180_000;
     this.settleMs = options.settleMs ?? 2_500;
+    this.headless = options.headless ?? true;
     
     const meta = PROVIDER_METADATA[providerId];
     this.targetUrl = meta ? meta.url : "https://google.com/";
@@ -152,7 +154,7 @@ export class GenericWebAdapter implements ModelAdapter {
       const executablePath = bundledChromiumExecutable();
       this.log("launch.launching_chromium", { executablePath });
       this.context = await chromium.launchPersistentContext(this.profileDir, {
-        headless: false,
+        headless: this.headless,
         viewport: { width: 1440, height: 1000 },
         args: ["--disable-blink-features=AutomationControlled"],
         ...(executablePath ? { executablePath } : {}),

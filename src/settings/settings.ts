@@ -24,19 +24,24 @@ export type Density = "comfortable" | "compact";
 
 export const PROVIDER_METADATA: Record<
   ProviderId,
-  { name: string; url: string; requiresAuth: boolean }
+  { name: string; url: string; requiresAuth: boolean; statusProbe: boolean }
 > = {
-  chatgpt: { name: "ChatGPT", url: "https://chatgpt.com/", requiresAuth: false },
-  gemini: { name: "Gemini", url: "https://gemini.google.com/app", requiresAuth: false },
-  deepseek: { name: "DeepSeek", url: "https://chat.deepseek.com/", requiresAuth: false },
-  claude: { name: "Claude", url: "https://claude.ai/new", requiresAuth: true },
-  copilot: { name: "Copilot", url: "https://copilot.microsoft.com/", requiresAuth: false },
-  perplexity: { name: "Perplexity", url: "https://www.perplexity.ai/", requiresAuth: false },
-  huggingchat: { name: "HuggingChat", url: "https://huggingface.co/chat/", requiresAuth: false },
-  groq: { name: "Groq", url: "https://groq.com/", requiresAuth: true },
-  duckduckgo: { name: "DuckDuckGo", url: "https://duckduckgo.com/?q=DuckDuckGo+AI+Chat&ia=chat", requiresAuth: false },
-  mistral: { name: "Mistral", url: "https://chat.mistral.ai/", requiresAuth: true },
+  chatgpt: { name: "ChatGPT", url: "https://chatgpt.com/", requiresAuth: false, statusProbe: true },
+  gemini: { name: "Gemini", url: "https://gemini.google.com/app", requiresAuth: false, statusProbe: true },
+  deepseek: { name: "DeepSeek", url: "https://chat.deepseek.com/", requiresAuth: false, statusProbe: false },
+  claude: { name: "Claude", url: "https://claude.ai/new", requiresAuth: true, statusProbe: false },
+  copilot: { name: "Copilot", url: "https://copilot.microsoft.com/", requiresAuth: false, statusProbe: false },
+  perplexity: { name: "Perplexity", url: "https://www.perplexity.ai/", requiresAuth: false, statusProbe: false },
+  huggingchat: { name: "HuggingChat", url: "https://huggingface.co/chat/", requiresAuth: false, statusProbe: false },
+  groq: { name: "Groq", url: "https://groq.com/", requiresAuth: false, statusProbe: false },
+  duckduckgo: { name: "DuckDuckGo AI Chat", url: "https://duckduckgo.com/?q=DuckDuckGo+AI+Chat&ia=chat", requiresAuth: false, statusProbe: false },
+  mistral: { name: "Mistral", url: "https://chat.mistral.ai/chat", requiresAuth: false, statusProbe: false },
 };
+
+export interface ModelCustomization {
+  role: string;
+  customPrompt: string;
+}
 
 export interface AppSettings {
   schemaVersion: 1;
@@ -50,6 +55,7 @@ export interface AppSettings {
     providers: ProviderId[];
     limits: OrchestrationLimits;
   };
+  models?: Record<string, ModelCustomization>;
   appearance: {
     theme: Theme;
     density: Density;
@@ -160,10 +166,21 @@ export function parseSettings(value: unknown): AppSettings {
   const fontScale = integer(appearance.fontScale, defaultSettings.appearance.fontScale);
   if (fontScale < 80 || fontScale > 140) throw new Error("Font scale must be between 80 and 140");
 
+  const rawModels = record(root.models);
+  const models: Record<string, ModelCustomization> = {};
+  for (const [key, val] of Object.entries(rawModels)) {
+    const obj = record(val);
+    models[key] = {
+      role: typeof obj.role === "string" ? obj.role.trim() : "Автоматически",
+      customPrompt: typeof obj.customPrompt === "string" ? obj.customPrompt.trim() : "",
+    };
+  }
+
   return {
     schemaVersion: 1,
     profile: { displayName, realName, greetingStyle },
     defaults: { mode, providers, limits: parsedLimits },
+    models,
     appearance: { theme, density, fontScale },
   };
 }

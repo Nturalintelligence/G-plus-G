@@ -77,11 +77,14 @@ export class DeepSeekAdapter implements ModelAdapter {
   private readonly timeoutMs: number;
   private readonly settleMs: number;
 
-  constructor(options: { profileDir?: string; timeoutMs?: number; settleMs?: number } = {}) {
+  readonly headless: boolean;
+
+  constructor(options: { profileDir?: string; timeoutMs?: number; settleMs?: number; headless?: boolean } = {}) {
     this.profileDir = resolve(options.profileDir ?? dataPath("profiles", "deepseek"));
     this.profileLock = new ProfileLock(this.profileDir);
     this.timeoutMs = options.timeoutMs ?? 180_000;
     this.settleMs = options.settleMs ?? 2_500;
+    this.headless = options.headless ?? true;
   }
 
   async launch(): Promise<void> {
@@ -90,7 +93,7 @@ export class DeepSeekAdapter implements ModelAdapter {
     try {
       const executablePath = bundledChromiumExecutable();
       this.context = await chromium.launchPersistentContext(this.profileDir, {
-        headless: false,
+        headless: this.headless,
         viewport: { width: 1440, height: 1000 },
         args: ["--disable-blink-features=AutomationControlled"],
         ...(executablePath ? { executablePath } : {}),

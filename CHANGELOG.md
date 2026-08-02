@@ -2,6 +2,18 @@
 
 All notable project checkpoints are recorded here.
 
+## [0.1.0-pre.13] - 2026-08-02
+
+### Added & Fixed
+
+- **G+G UI Master Corrective Pass**: Complete implementation of all 11 sections of the UI corrective pass specification.
+- **RunSummaryBar**: Modularized summary bar with SVG icons, `flex-wrap` strategy, and clean human-readable labels (`Готовый ответ`, `Обсуждение: до согласия`, `Итог: Gemini`).
+- **ModelStatusRow**: Modularized model status row for sidebar with 20×20 SVG logo, flex:1 name, status-dot, and right-aligned status text.
+- **SettingsModal**: Refactored to 3-row CSS Grid layout (`auto minmax(0, 1fr) auto`) with fixed header and footer grid rows, scrollable right pane, and compact model accordion with search and filter toolbar (`Все`, `Подключены`, `Требуют входа`, `Экспериментальные`).
+- **User-Facing Error System**: Added `toUserFacingError` utility and `<ErrorModal>` replacing raw Electron IPC exceptions with clean Russian titles, recommendations, and collapsible details drawer.
+- **Project Toast**: Added `<ProjectRequiredToast>` prompting user to select a project before sending messages.
+- **Browser Login Fixes**: Fixed premature browser closure in `ChatGptAdapter.waitForManualLogin` and unified `GeminiAdapter.openLoginMode` to use single visible Playwright window without spawning duplicate system Chrome processes.
+
 ## [0.1.0-beta.1] - 2026-08-01
 
 ### Added

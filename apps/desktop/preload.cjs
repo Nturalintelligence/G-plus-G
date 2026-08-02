@@ -16,12 +16,13 @@ const api = {
   },
   projects: {
     list: () => ipcRenderer.invoke("projects:list"),
-    create: (name) => ipcRenderer.invoke("projects:create", name),
+    create: (name, providers) => ipcRenderer.invoke("projects:create", name, providers),
     open: (id) => ipcRenderer.invoke("projects:open", id),
     delete: (id, deleteRemote) => ipcRenderer.invoke("projects:delete", { projectId: id, deleteRemote }),
   },
   provider: {
     login: (provider) => ipcRenderer.invoke("provider:login", provider),
+    status: (provider) => ipcRenderer.invoke("provider:status", provider),
     send: (provider, message) =>
       ipcRenderer.invoke("provider:send", provider, message),
   },
@@ -54,6 +55,10 @@ const api = {
   },
   terminal: {
     execute: (command, cwd) => ipcRenderer.invoke("terminal:execute", { command, cwd }),
+  },
+  twoTier: {
+    executeStep: (userTask, simulatedResponse) =>
+      ipcRenderer.invoke("twoTier:executeStep", { userTask, simulatedResponse }),
   },
   settings: {
     get: () => ipcRenderer.invoke("settings:get"),
