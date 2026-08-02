@@ -1,8 +1,23 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import "./styles.css";
+
+import logoDark from "./assets/brand/gg-logo-dark.svg";
+import logoLight from "./assets/brand/gg-logo-light.svg";
+
+import { validateFileForProviders } from "../../../src/files/file-manager.js";
+import { DeleteProjectDialog } from "./components/DeleteProjectDialog.js";
+import { ErrorModal } from "./components/ErrorModal.js";
+import { AttachmentIcon, CloseIcon, ProfileIcon, SendIcon, SettingsIcon, StopIcon, TargetIcon, TrashIcon } from "./components/Icon.js";
+import { ModelStatusRow } from "./components/ModelStatusRow.js";
+import { ProjectRequiredToast } from "./components/ProjectRequiredToast.js";
+import { QualityCenterView } from "./components/QualityCenterView.js";
+import { RunSummaryBar } from "./components/RunSummaryBar.js";
+import { SettingsModal } from "./components/SettingsModal.js";
+import { formatProviderList, getProviderDisplayName, getProviderMetadata } from "./provider-metadata.js";
+import { toUserFacingError, UserFacingError } from "./user-errors.js";
 
 const initialState: ProjectStateView = {
   requirements: [],
@@ -48,6 +63,14 @@ function metricValue(metric: MetricSummaryView): string {
   return metric.average.toFixed(metric.average % 1 === 0 ? 0 : 1);
 }
 
+export interface AttachedFileItem {
+  id: string;
+  name: string;
+  size: number;
+  type: string;
+  dataUrl?: string;
+}
+
 const fallbackSettings: AppSettingsView = {
   schemaVersion: 1,
   profile: { displayName: "", realName: "", greetingStyle: "generic" },
@@ -66,14 +89,37 @@ const fallbackSettings: AppSettingsView = {
   appearance: { theme: "dark", density: "comfortable", fontScale: 100 },
 };
 
+function getSessionStatusDisplay(session?: string): { text: string; type: "online" | "warning" | "busy" | "offline" } {
+  switch (session) {
+    case "AUTHENTICATED":
+      return { text: "Авторизован", type: "online" };
+    case "LOGIN_REQUIRED":
+      return { text: "Требуется вход", type: "offline" };
+    case "CHALLENGE_REQUIRED":
+      return { text: "Проверка капчи", type: "warning" };
+    case "RATE_LIMITED":
+      return { text: "Лимит запросов", type: "warning" };
+    case "CHECKING":
+      return { text: "Проверяем…", type: "busy" };
+    default:
+      return { text: "Неизвестно", type: "offline" };
+  }
+}
+
 function App(): React.JSX.Element {
   const [projects, setProjects] = useState<ProjectView[]>([]);
   const [current, setCurrent] = useState<ProjectDetails | null>(null);
+  const [providerStatuses, setProviderStatuses] = useState<Record<string, { session: string; ready: boolean }>>({
+    chatgpt: { session: "CHECKING", ready: false },
+    gemini: { session: "CHECKING", ready: false },
+    deepseek: { session: "CHECKING", ready: false },
+  });
   const [name, setName] = useState("");
   const [task, setTask] = useState("");
-  const [mode, setMode] = useState("DEBATE");
-  const [providers, setProviders] = useState(["chatgpt", "gemini"]);
+  const [mode, setMode] = useState<string>("DEBATE");
+  const [continuationPolicy, setContinuationPolicy] = useState<"autonomous" | "approval">("autonomous");
   const [starter, setStarter] = useState<string>("chatgpt");
+  const [providers, setProviders] = useState<string[]>(["chatgpt", "gemini"]);
   const [stateText, setStateText] = useState(JSON.stringify(initialState, null, 2));
   const [projectState, setProjectState] = useState<ProjectStateView>(initialState);
   const [advancedStateOpen, setAdvancedStateOpen] = useState(false);
@@ -84,7 +130,7 @@ function App(): React.JSX.Element {
   const [running, setRunning] = useState(false);
   const [settings, setSettings] = useState<AppSettingsView>(fallbackSettings);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settingsTab, setSettingsTab] = useState<"profile" | "behavior" | "appearance" | "quality" | "diagnostics">("profile");
+  const [settingsTab, setSettingsTab] = useState<"profile" | "models" | "behavior" | "appearance" | "quality" | "diagnostics">("profile");
   const [releaseInfo, setReleaseInfo] = useState<ReleaseInfoView | null>(null);
   const [preflight, setPreflight] = useState<Array<{
     name: string;
@@ -97,7 +143,141 @@ function App(): React.JSX.Element {
   const [creationProviders, setCreationProviders] = useState<string[]>(["chatgpt", "gemini"]);
   const [streaming, setStreaming] = useState<Record<string, string>>({});
   const [optimisticUserTask, setOptimisticUserTask] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<ProjectView | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [activeSpecSection, setActiveSpecSection] = useState<string | null>(null);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [attachedFiles, setAttachedFiles] = useState<AttachedFileItem[]>([]);
+  const [viewMode, setViewMode] = useState<"SYNTHESIZED" | "LIVE">("SYNTHESIZED");
+  const [showTurnsSpoiler, setShowTurnsSpoiler] = useState(false);
+  const [terminalOutput, setTerminalOutput] = useState<{ command: string; stdout: string; stderr: string; exitCode: number } | null>(null);
+  const [terminalBusy, setTerminalBusy] = useState(false);
+  const [twoTierResult, setTwoTierResult] = useState<{
+    status: string;
+    strategicPlanText: string;
+    cliExecutionResults: Array<{ tool: string; success: boolean; exitCode: number; stdout: string; stderr: string; elapsedMs: number; commandExecuted: string }>;
+    finalBoardReport: string;
+  } | null>(null);
+  const [finalizerMode, setFinalizerMode] = useState<"MANUAL" | "LEAD_SELECTS" | "PEER_AGREEMENT">("MANUAL");
+  const [composerExpanded, setComposerExpanded] = useState(false);
+  const [newProjectDescriptionInput, setNewProjectDescriptionInput] = useState("");
+  const [activeStage, setActiveStage] = useState<string>("Анализ задачи");
+  const [projectMenuOpenId, setProjectMenuOpenId] = useState<string | null>(null);
+  const [newProjectModalOpen, setNewProjectModalOpen] = useState(false);
+  const [newProjectNameInput, setNewProjectNameInput] = useState("");
+  const [previewImageModalUrl, setPreviewImageModalUrl] = useState<string | null>(null);
+  const [webChatsDrawerOpen, setWebChatsDrawerOpen] = useState(false);
+  const [finalResponder, setFinalResponder] = useState<string>("auto");
   const outputRef = useRef<HTMLElement>(null);
+
+  async function runTerminal(command: string) {
+    if (terminalBusy) return;
+    setTerminalBusy(true);
+    setStatus(`Исполнение терминальной команды: ${command}…`);
+    try {
+      const res = await window.orchestrator.terminal.execute(command);
+      setTerminalOutput({ command, stdout: res.stdout, stderr: res.stderr, exitCode: res.exitCode });
+      setStatus(`Команда завершена с кодом: ${res.exitCode}`);
+    } catch (err: any) {
+      setStatus(`Ошибка терминала: ${err.message}`);
+    } finally {
+      setTerminalBusy(false);
+    }
+  }
+
+  function handleFileAttach(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
+    const newItems: AttachedFileItem[] = [];
+    for (const file of files) {
+      const check = validateFileForProviders(file.name, providers);
+      if (!check.valid) {
+        setStatus(`Файл '${file.name}' (${check.extension}) не поддерживается ИИ: ${check.unsupportedProviders.join(", ")}`);
+        return;
+      }
+      newItems.push({
+        id: `file-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        name: file.name,
+        size: file.size,
+        type: file.type,
+      });
+    }
+    setAttachedFiles((prev) => [...prev, ...newItems]);
+    setStatus(`Прикреплено файлов: ${files.length}`);
+  }
+
+  function removeFile(target: string | number) {
+    setAttachedFiles((prev) =>
+      prev.filter((item, index) => (typeof target === "number" ? index !== target : item.id !== target)),
+    );
+  }
+
+  function handlePaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
+    const items = Array.from(e.clipboardData.items || []);
+    const fileItems = items.filter((item) => item.kind === "file");
+    if (fileItems.length === 0) return;
+
+    for (const item of fileItems) {
+      const file = item.getAsFile();
+      if (!file) continue;
+
+      const filename = file.name || `screenshot_${Date.now()}.${file.type.split("/")[1] || "png"}`;
+      const check = validateFileForProviders(filename, providers);
+      if (!check.valid) {
+        setStatus(`Файл из буфера '${filename}' не поддерживается ИИ: ${check.unsupportedProviders.join(", ")}`);
+        continue;
+      }
+
+      if (file.type.startsWith("image/")) {
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          const dataUrl = event.target?.result as string;
+          setAttachedFiles((prev) => [
+            ...prev,
+            {
+              id: `file-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+              name: filename,
+              size: file.size,
+              type: file.type,
+              dataUrl,
+            },
+          ]);
+        };
+        reader.readAsDataURL(file);
+      } else {
+        setAttachedFiles((prev) => [
+          ...prev,
+          {
+            id: `file-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            name: filename,
+            size: file.size,
+            type: file.type,
+          },
+        ]);
+      }
+    }
+    setStatus(`Вставлено из буфера обмена (Ctrl+V)`);
+  }
+
+  async function confirmDeleteProject(deleteRemote: boolean): Promise<void> {
+    if (!deleteTarget || deleteBusy) return;
+    setDeleteBusy(true);
+    setStatus(deleteRemote ? "Удаление проекта и чатов в веб-сервисах ИИ…" : "Удаление проекта из G+G…");
+    try {
+      await window.orchestrator.projects.delete(deleteTarget.id, deleteRemote);
+      if (current?.project.id === deleteTarget.id) {
+        setCurrent(null);
+      }
+      setDeleteTarget(null);
+      await refresh();
+      setStatus("Проект успешно удалён");
+    } catch (err) {
+      setStatus(`Ошибка удаления: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setDeleteBusy(false);
+    }
+  }
 
   useEffect(() => {
     return window.orchestrator.orchestration.onProgress((data) => {
@@ -107,6 +287,42 @@ function App(): React.JSX.Element {
       }));
     });
   }, []);
+
+  useEffect(() => {
+    if (typeof window.orchestrator.events?.onEvent !== "function") return;
+    return window.orchestrator.events.onEvent((event) => {
+      if (event?.event_type === "phase:changed" && event.payload) {
+        const details = event.payload.details || event.payload.phase;
+        if (details) setStatus(details);
+      }
+    });
+  }, []);
+
+  const refreshProviderStatus = useCallback(async (providerId: string) => {
+    try {
+      const res = await window.orchestrator.provider.status(providerId);
+      setProviderStatuses((prev) => ({
+        ...prev,
+        [providerId]: { session: res.session, ready: res.ready },
+      }));
+    } catch {
+      setProviderStatuses((prev) => ({
+        ...prev,
+        [providerId]: { session: "UNKNOWN", ready: false },
+      }));
+    }
+  }, []);
+
+  const refreshAllSupportedStatuses = useCallback(async () => {
+    const targets = ["chatgpt", "gemini"];
+    for (const id of targets) {
+      await refreshProviderStatus(id);
+    }
+  }, [refreshProviderStatus]);
+
+  useEffect(() => {
+    void refreshAllSupportedStatuses();
+  }, [refreshAllSupportedStatuses]);
 
   const refresh = async (): Promise<void> => setProjects(await window.orchestrator.projects.list());
   useEffect(() => {
@@ -154,14 +370,38 @@ function App(): React.JSX.Element {
     setStateText(JSON.stringify(nextState, null, 2));
   }
 
+  const [showNoProjectToast, setShowNoProjectToast] = useState(false);
+  const [activeUserError, setActiveUserError] = useState<UserFacingError | null>(null);
+
   async function run(): Promise<void> {
     const submittedTask = task.trim();
-    if (!current || !submittedTask || running || providers.length === 0) return;
+    if (!current) {
+      setShowNoProjectToast(true);
+      return;
+    }
+    if (!submittedTask || running || providers.length === 0) return;
     const projectId = current.project.id;
     setOptimisticUserTask(submittedTask);
     setTask("");
     setStreaming({});
     setRunning(true);
+    if (mode === "AUTONOMOUS_CYCLE") {
+      setStatus("Запуск Двухуровневого Цикла (ИИ-Совет Web ➔ CLI Исполнители)…");
+      try {
+        const result = await window.orchestrator.twoTier.executeStep(submittedTask);
+        setTwoTierResult(result);
+        setStatus(`Двухуровневый цикл завершен со статусом: ${result.status}`);
+        await openProject(projectId);
+      } catch (err: any) {
+        const userErr = toUserFacingError(err, "Двухуровневый цикл");
+        setActiveUserError(userErr);
+        setStatus(`Ошибка: ${userErr.title}`);
+      } finally {
+        setRunning(false);
+        setOptimisticUserTask(null);
+      }
+      return;
+    }
     setStatus("Модели обсуждают сообщение…");
     try {
       const orderedProviders = [
@@ -174,6 +414,8 @@ function App(): React.JSX.Element {
         task: submittedTask,
         providers: orderedProviders,
         limits: settings.defaults.limits,
+        finalizerMode,
+        finalResponder,
       });
       setStatus(
         output.consensusReached
@@ -182,8 +424,9 @@ function App(): React.JSX.Element {
       );
       await openProject(projectId);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setStatus(message.replace(/^Error invoking remote method '[^']+': Error:\s*/, ""));
+      const userErr = toUserFacingError(error, "Запуск оркестратора");
+      setActiveUserError(userErr);
+      setStatus(userErr.message);
       await openProject(projectId);
     } finally {
       setRunning(false);
@@ -193,12 +436,20 @@ function App(): React.JSX.Element {
   }
 
   async function login(provider: string): Promise<void> {
-    setStatus(`Войдите в ${provider} в открывшемся окне…`);
+    setStatus(`Войдите в ${getProviderDisplayName(provider)} в открывшемся окне…`);
     try {
       const session = await window.orchestrator.provider.login(provider);
-      setStatus(`${provider}: ${session}`);
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : String(error));
+      setStatus(`Сессия ${getProviderDisplayName(provider)} активна: ${session}`);
+    } catch (error: any) {
+      if (error?.code === "LOGIN_ALREADY_ACTIVE" || String(error).includes("LOGIN_ALREADY_ACTIVE")) {
+        setStatus(error.message || "Уже выполняется вход в другой браузер.");
+        return;
+      }
+      const userErr = toUserFacingError(error, `Авторизация ${provider}`);
+      setActiveUserError(userErr);
+      setStatus(userErr.message);
+    } finally {
+      void refreshProviderStatus(provider);
     }
   }
 
@@ -254,6 +505,8 @@ function App(): React.JSX.Element {
     }
   }
 
+
+
   async function resetSession(provider: any): Promise<void> {
     setMaintenanceBusy(true);
     try {
@@ -263,6 +516,7 @@ function App(): React.JSX.Element {
       setStatus(`Сессия не сброшена: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
       setMaintenanceBusy(false);
+      void refreshProviderStatus(provider);
     }
   }
 
@@ -344,32 +598,40 @@ function App(): React.JSX.Element {
     }
   }
 
-  function relay(entry: ConversationEntryView): void {
-    setTask(
-      `Проверь и развей следующий ответ другой модели.\n\n<UNTRUSTED_PEER_RESPONSE>\n${entry.content}\n</UNTRUSTED_PEER_RESPONSE>`,
-    );
-    setMode("MANUAL");
-    setStatus("Ответ помещён в редактор. Выберите модель, отредактируйте текст и отправьте.");
+  async function relay(entry: ConversationEntryView): Promise<void> {
+    if (!current || running) return;
+    setRunning(true);
+    setStatus("Передача контекста следующему участнику…");
+    try {
+      const nextMessage = `<HANDOFF_CONTEXT>\nИсходная задача: ${current.project.name}\nПоследний принятый ответ (${entry.providerId ?? "peer"}):\n${entry.content}\n</HANDOFF_CONTEXT>\n\nПожалуйста, развей это решение и выдели ключевые моменты.`;
+      const nextProviders = (current.project.providers && current.project.providers.length > 0
+        ? current.project.providers
+        : ["gemini", "chatgpt"]
+      ).filter(p => p !== entry.providerId);
+      const targetProvider = nextProviders[0] || (entry.providerId === "chatgpt" ? "gemini" : "chatgpt");
+      await window.orchestrator.orchestration.run({
+        projectId: current.project.id,
+        mode: "MANUAL",
+        task: nextMessage,
+        providers: [targetProvider],
+        limits: { ...settings.defaults.limits, maxTurns: 1 },
+      });
+      await openProject(current.project.id);
+    } catch (err: any) {
+      setStatus(`Ошибка передачи: ${err.message}`);
+    } finally {
+      setRunning(false);
+    }
   }
 
   if (showSplash) {
-    const nameToUse =
-      settings.profile.greetingStyle === "display"
-        ? settings.profile.displayName
-        : settings.profile.greetingStyle === "real"
-        ? settings.profile.realName
-        : "";
-    const greetingText = nameToUse
-      ? `Привет, ${nameToUse}!`
-      : "С возвращением!";
+    const logoSrc = settings.appearance.theme === "light" ? logoLight : logoDark;
     return (
-      <div className="splash-screen">
-        <div className="splash-content">
-          <img src="./logo.png" className="splash-logo" alt="G+G Logo" />
-          <h1 className="splash-greeting">{greetingText}</h1>
-          <p className="splash-subtitle">Multi-model orchestrator workspace</p>
-          <div className="splash-loader"></div>
-        </div>
+      <div className="splash-overlay">
+        <img src={logoSrc} className="splash-logo" alt="G+G Workspace Logo" />
+        <h1 className="splash-greeting">G+G Workspace</h1>
+        <p className="splash-subtitle">Подготовка рабочего пространства…</p>
+        <div className="splash-loader" />
       </div>
     );
   }
@@ -377,238 +639,199 @@ function App(): React.JSX.Element {
   return (
     <main>
       <header>
-        <div><img src="./logo.png" className="header-logo" alt="G+G Logo" /><h1>Multi-model workspace</h1></div>
+        <div className="header-left">
+          <button
+            className="icon-header-btn hamburger-btn"
+            title="Переключить боковую панель"
+            onClick={() => setSidebarOpen(!sidebarOpen)}
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+              <line x1="3" y1="6" x2="21" y2="6" />
+              <line x1="3" y1="12" x2="21" y2="12" />
+              <line x1="3" y1="18" x2="21" y2="18" />
+            </svg>
+          </button>
+          <h1 className="header-title">G+G Workspace</h1>
+        </div>
         <div className="header-actions">
           <span className="status" role="status" aria-live="polite">{status}</span>
-          <button onClick={() => setSettingsOpen(true)}>
-            {settings.profile.displayName || "Профиль"} · Настройки
+          <button
+            className={`icon-header-btn ${inspectorOpen ? "active" : ""}`}
+            title="Конструктор спецификации"
+            onClick={() => setInspectorOpen(!inspectorOpen)}
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="10" />
+              <circle cx="12" cy="12" r="6" />
+              <circle cx="12" cy="12" r="2" />
+            </svg>
+            <span>Спецификация</span>
           </button>
         </div>
       </header>
-      <div className="layout">
-        <aside>
-          <h2>Проекты</h2>
-          <form
-            onSubmit={(event) => {
-              event.preventDefault();
-              void window.orchestrator.projects.create(name, creationProviders).then(async (project) => {
-                setName("");
-                await refresh();
-                await openProject(project.id);
-              });
-            }}
-          >
-            <input aria-label="Название проекта" value={name} onChange={(event) => setName(event.target.value)} placeholder="Название проекта" />
-            <details className="creation-providers-details">
-              <summary>Выбрать ИИ ({creationProviders.length})</summary>
-              <div className="creation-providers-list">
-                {(["chatgpt", "gemini", "deepseek", "claude", "copilot", "perplexity", "huggingchat", "groq", "duckduckgo", "mistral"] as const).map((prov) => (
-                  <label key={prov}>
-                    <input
-                      type="checkbox"
-                      checked={creationProviders.includes(prov)}
-                      onChange={() =>
-                        setCreationProviders((currentList) =>
-                          currentList.includes(prov)
-                            ? currentList.filter((item) => item !== prov)
-                            : [...currentList, prov],
-                        )
-                      }
-                    /> {prov}
-                  </label>
-                ))}
-              </div>
-            </details>
-            <button>Создать</button>
-          </form>
-          <nav>
-            {projects.map((project) => (
+      <div className={`layout ${!sidebarOpen ? "collapsed-sidebar" : ""} ${inspectorOpen ? "has-inspector" : ""}`}>
+        {sidebarOpen ? (
+          <aside className="sidebar-pane">
+            <div className="sidebar-header">
+              <h2>Проекты</h2>
               <button
-                className={current?.project.id === project.id ? "selected" : ""}
-                key={project.id}
-                onClick={() => void openProject(project.id)}
+                className="new-project-btn"
+                title="Создать новый проект"
+                onClick={() => {
+                  setNewProjectNameInput("");
+                  setNewProjectDescriptionInput("");
+                  setNewProjectModalOpen(true);
+                }}
               >
-                <strong>{project.name}</strong><small>{project.status}</small>
-              </button>
-            ))}
-          </nav>
-          <h2>Сессии</h2>
-          {(["chatgpt", "gemini", "deepseek", "claude", "copilot", "perplexity", "huggingchat", "groq", "duckduckgo", "mistral"] as const).map((provider) => (
-            <div className="session-row" key={provider}>
-              <button onClick={() => void login(provider)}>
-                Войти · {provider}
-              </button>
-              <button
-                className="logout"
-                aria-label={`Выйти из ${provider}`}
-                title={`Удалить локальную сессию ${provider}`}
-                onClick={() => void resetSession(provider)}
-              >
-                Выйти
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                  <line x1="12" y1="5" x2="12" y2="19" />
+                  <line x1="5" y1="12" x2="19" y2="12" />
+                </svg>
+                <span>Новый</span>
               </button>
             </div>
-          ))}
-        </aside>
-        <section className="workspace">
-          <div className="composer panel">
-            <h2>{current?.project.name ?? "Выберите проект"}</h2>
-            <textarea
-              aria-label="Сообщение для моделей"
-              value={task}
-              onChange={(event) => setTask(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && !event.shiftKey) {
-                  event.preventDefault();
-                  void run();
-                }
-              }}
-              placeholder="Напишите сообщение… Enter — отправить, Shift+Enter — новая строка"
-            />
-            <div className="controls">
-              <select aria-label="Режим оркестрации" value={mode} onChange={(event) => setMode(event.target.value)}>
-                <option value="DEBATE">Рассуждение — до согласия или лимита</option>
-                <option value="SEQUENTIAL">Очередь — по одному ответу каждой модели</option>
-                <option value="PARALLEL">Независимые ответы</option>
-                <option value="MANUAL">Один ответ</option>
-              </select>
-              {mode === "DEBATE" ? (
-                <label className="starter-control">
-                  Продолжение обсуждения
-                  <select
-                    aria-label="Продолжение обсуждения"
-                    value={settings.defaults.limits.requireConfirmation ? "approval" : "auto"}
-                    onChange={(event) => setSettings((value) => ({
-                      ...value,
-                      defaults: {
-                        ...value.defaults,
-                        limits: {
-                          ...value.defaults.limits,
-                          requireConfirmation: event.target.value === "approval",
-                        },
-                      },
-                    }))}
+            <nav className="projects-list-nav">
+              {projects.map((project) => (
+                <div className={`project-row ${current?.project.id === project.id ? "selected" : ""}`} key={project.id}>
+                  <button
+                    className="project-btn"
+                    onClick={() => void openProject(project.id)}
                   >
-                    <option value="auto">Автономно — до консенсуса</option>
-                    <option value="approval">С подтверждением пользователя</option>
-                  </select>
-                </label>
-              ) : null}
-              {providers.length > 1 && mode !== "PARALLEL" ? (
-                <label className="starter-control">
-                  Первым отвечает
-                  <select
-                    aria-label="Первым отвечает"
-                    value={starter}
-                    onChange={(event) =>
-                      setStarter(event.target.value as any)}
+                    <span className="project-name">{project.name}</span>
+                  </button>
+                  <button
+                    className="project-menu-btn"
+                    title="Действия с проектом"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setProjectMenuOpenId(projectMenuOpenId === project.id ? null : project.id);
+                    }}
                   >
-                    {providers.map((provider) => (
-                      <option key={provider} value={provider}>{provider}</option>
-                    ))}
-                  </select>
-                </label>
-              ) : null}
-              {(current?.project.providers && current.project.providers.length > 0
-                ? current.project.providers
-                : ["chatgpt", "gemini", "deepseek"]
-              ).map((provider) => (
-                <label key={provider}>
-                  <input
-                    type="checkbox"
-                    checked={providers.includes(provider)}
-                    onChange={() =>
-                      setProviders((value) => {
-                        const next = value.includes(provider)
-                          ? value.filter((item) => item !== provider)
-                          : [...value, provider];
-                        if (
-                          next.length < 2 &&
-                          (mode === "DEBATE" || mode === "SEQUENTIAL")
-                        ) {
-                          setMode("MANUAL");
-                        }
-                        if (!next.includes(starter) && next[0]) {
-                          setStarter(next[0] as any);
-                        }
-                        return next;
-                      })
-                    }
-                  /> {provider}
-                </label>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                      <circle cx="12" cy="5" r="2" />
+                      <circle cx="12" cy="12" r="2" />
+                      <circle cx="12" cy="19" r="2" />
+                    </svg>
+                  </button>
+                  {projectMenuOpenId === project.id ? (
+                    <div className="project-context-menu">
+                      <button
+                        onClick={() => {
+                          setProjectMenuOpenId(null);
+                          setDeleteTarget(project);
+                        }}
+                      >
+                        Удалить проект
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
               ))}
-              <button
-                className="primary"
-                disabled={!current || !task.trim() || running || providers.length === 0}
-                onClick={() => void run()}
-              >
-                {running ? "Идёт обсуждение…" : "Отправить"}
-              </button>
-              <button onClick={() => void window.orchestrator.orchestration.pause()}>Пауза</button>
-              <button onClick={() => void window.orchestrator.orchestration.resume()}>Продолжить</button>
-              <button onClick={() => void window.orchestrator.orchestration.stop()}>Стоп</button>
+            </nav>
+
+            <div className="sidebar-models-section">
+              <h3 className="sidebar-section-title">Модели</h3>
+              <div className="sidebar-models-list">
+                {["chatgpt", "gemini", "deepseek"].map((pId) => {
+                  const statusInfo = getSessionStatusDisplay(providerStatuses[pId]?.session);
+                  return (
+                    <ModelStatusRow
+                      key={pId}
+                      providerId={pId}
+                      statusText={statusInfo.text}
+                      statusType={statusInfo.type}
+                      onClick={() => setSettingsOpen(true)}
+                    />
+                  );
+                })}
+              </div>
             </div>
-          </div>
+
+            <footer className="sidebar-footer">
+              <div
+                className="profile-chip interactive"
+                onClick={() => setSettingsOpen(true)}
+                title="Нажмите для настройки профиля и системы"
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+                  <circle cx="12" cy="7" r="4" />
+                </svg>
+                <span>{settings.profile.displayName || "Пользователь"}</span>
+              </div>
+            </footer>
+          </aside>
+        ) : null}
+        <section className="workspace">
+          {current?.conversations && current.conversations.length > 0 ? (
+            <div className="web-chats-bar interactive" onClick={() => setWebChatsDrawerOpen(true)} title="Нажмите для открытия сессий ИИ в боковой панели">
+              <span className="web-chats-label">🔗 Закреплённые веб-чаты ({current.conversations.length}):</span>
+              {current.conversations.map((c) => (
+                <div className="web-chat-chip" key={c.providerId}>
+                  <span className="web-chat-provider">{c.providerId}</span>
+                  {c.externalRef ? (
+                    <span className="web-chat-link">Активен ↗</span>
+                  ) : (
+                    <small className="web-chat-pending">ожидает</small>
+                  )}
+                </div>
+              ))}
+            </div>
+          ) : null}
           <article className="panel output" ref={outputRef}>
             {current?.transcript.length || optimisticUserTask || Object.values(streaming).some(t => t.trim()) ? (
               <>
-                {(current?.transcript || []).map((entry) => (
-                  <section
-                    className={`message ${entry.role.toLowerCase()} ${entry.providerId ?? ""}`}
-                    key={entry.id}
-                  >
-                    <header>
-                      <strong>{entry.role === "USER" ? "Вы" : entry.providerId ?? entry.role}</strong>
-                      {entry.round ? <small>ход {entry.round}</small> : null}
-                    </header>
-                    <ReactMarkdown
-                      remarkPlugins={[remarkGfm]}
-                      skipHtml
-                      components={{
-                        a: ({ href, children }) => {
-                          if (!href || !/^https?:\/\//i.test(href)) {
-                            return <span>{children}</span>;
-                          }
-                          return (
-                            <a href={href} target="_blank" rel="noreferrer noopener">
-                              {children}
-                            </a>
-                          );
-                        },
-                      }}
-                    >
-                      {entry.content}
-                    </ReactMarkdown>
-                    {entry.role === "ASSISTANT" ? (
-                      <button className="relay" onClick={() => relay(entry)}>
-                        Передать дальше
-                      </button>
-                    ) : null}
-                  </section>
-                ))}
+                {viewMode === "SYNTHESIZED" ? (
+                  <>
+                    <details className="turns-spoiler" open={showTurnsSpoiler} onToggle={(e) => setShowTurnsSpoiler((e.target as HTMLDetailsElement).open)}>
+                      <summary className="turns-spoiler-summary">
+                        🔍 {showTurnsSpoiler ? "Скрыть ход обсуждения ИИ-моделей" : "Показать ход обсуждения ИИ-моделей"} ({(current?.transcript || []).filter(t => t.role === "ASSISTANT").length} ходов)
+                      </summary>
+                      <div className="turns-spoiler-content">
+                        {(current?.transcript || []).filter(t => t.role === "ASSISTANT").map((entry) => (
+                          <section className={`message assistant ${entry.providerId ?? ""}`} key={`spoiler-${entry.id}`}>
+                            <header>
+                              <strong>{entry.providerId ?? "ASSISTANT"}</strong>
+                              {entry.round ? <small>ход {entry.round}</small> : null}
+                            </header>
+                            <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml>{entry.content}</ReactMarkdown>
+                          </section>
+                        ))}
+                      </div>
+                    </details>
+                    {(current?.transcript || []).filter(t => t.role === "USER" || t.providerId === "system" || (t.role === "ASSISTANT" && current?.transcript && t.id === current.transcript[current.transcript.length - 1]?.id)).map((entry) => (
+                      <section className={`message ${entry.role.toLowerCase()} ${entry.providerId ?? ""}`} key={entry.id}>
+                        <header>
+                          <strong>{entry.role === "USER" ? "Вы" : entry.providerId === "system" ? "Системный отчёт" : `Итоговый ответ (${entry.providerId})`}</strong>
+                          {entry.round ? <small>ход {entry.round}</small> : null}
+                        </header>
+                        <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml>{entry.content}</ReactMarkdown>
+                      </section>
+                    ))}
+                  </>
+                ) : (
+                  (current?.transcript || []).map((entry) => (
+                    <section className={`message ${entry.role.toLowerCase()} ${entry.providerId ?? ""}`} key={entry.id}>
+                      <header>
+                        <strong>{entry.role === "USER" ? "Вы" : entry.providerId ?? entry.role}</strong>
+                        {entry.round ? <small>ход {entry.round}</small> : null}
+                      </header>
+                      <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml>{entry.content}</ReactMarkdown>
+                      {entry.role === "ASSISTANT" ? (
+                        <button className="relay" onClick={() => relay(entry)}>
+                          Передать дальше
+                        </button>
+                      ) : null}
+                    </section>
+                  ))
+                )}
                 {optimisticUserTask && !(current?.transcript || []).some(t => t.role === "USER" && t.content === optimisticUserTask) ? (
                   <section className="message user optimistic" key="optimistic-user-task">
                     <header>
                       <strong>Вы</strong>
                       <small>отправка…</small>
                     </header>
-                    <ReactMarkdown
-                      remarkPlugins={[remarkGfm]}
-                      skipHtml
-                      components={{
-                        a: ({ href, children }) => {
-                          if (!href || !/^https?:\/\//i.test(href)) {
-                            return <span>{children}</span>;
-                          }
-                          return (
-                            <a href={href} target="_blank" rel="noreferrer noopener">
-                              {children}
-                            </a>
-                          );
-                        },
-                      }}
-                    >
-                      {optimisticUserTask}
-                    </ReactMarkdown>
+                    <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml>{optimisticUserTask}</ReactMarkdown>
                   </section>
                 ) : null}
                 {running ? (
@@ -619,7 +842,7 @@ function App(): React.JSX.Element {
                       <span className="dot"></span>
                     </div>
                     <div className="discussion-status-text">
-                      <strong>Обсуждение в процессе…</strong>
+                      <strong>ИИ-совет вырабатывает единое структурированное решение…</strong>
                       <small>{status}</small>
                     </div>
                   </div>
@@ -631,42 +854,165 @@ function App(): React.JSX.Element {
                   );
                   if (alreadyPersisted) return null;
                   return (
-                    <section
-                      className={`message assistant ${providerId}`}
-                      key={`streaming-${providerId}`}
-                    >
+                    <section className={`message assistant ${providerId}`} key={`streaming-${providerId}`}>
                       <header>
                         <strong>{providerId}</strong>
                         <small>печатает...</small>
                       </header>
-                      <ReactMarkdown
-                        remarkPlugins={[remarkGfm]}
-                        skipHtml
-                        components={{
-                          a: ({ href, children }) => {
-                            if (!href || !/^https?:\/\//i.test(href)) {
-                              return <span>{children}</span>;
-                            }
-                            return (
-                              <a href={href} target="_blank" rel="noreferrer noopener">
-                                {children}
-                              </a>
-                            );
-                          },
-                        }}
-                      >
-                        {text}
-                      </ReactMarkdown>
+                      <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml>{text}</ReactMarkdown>
                     </section>
                   );
                 })}
               </>
             ) : (
-              <p className="empty">Здесь сохранится весь разговор ChatGPT, Gemini и ваш.</p>
+              <p className="empty">Напишите ваш первый запрос, чтобы запустить обсуждение ИИ-моделей.</p>
             )}
           </article>
+
+          {twoTierResult ? (
+            <div className="two-tier-result-card panel">
+              <header className="two-tier-card-header">
+                <strong>⚡ Двухуровневый Автономный Цикл (План ➔ Код ➔ Тесты)</strong>
+                <span className={`two-tier-status-badge ${twoTierResult.status === "COMPLETED" ? "success" : "warn"}`}>
+                  {twoTierResult.status}
+                </span>
+                <button className="close-two-tier-btn" onClick={() => setTwoTierResult(null)}>×</button>
+              </header>
+              <details open className="two-tier-section">
+                <summary>🏛️ План Архитектуры и UX/UI (Стратегический ИИ-Совет)</summary>
+                <div className="two-tier-markdown">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml>{twoTierResult.strategicPlanText}</ReactMarkdown>
+                </div>
+              </details>
+              <details open className="two-tier-section">
+                <summary>🛠️ Выполнение CLI Исполнителями ({twoTierResult.cliExecutionResults.length} задач)</summary>
+                {twoTierResult.cliExecutionResults.map((res, i) => (
+                  <div key={i} className="cli-execution-item">
+                    <header>
+                      <strong>Задача #{i + 1} [{res.tool.toUpperCase()}]</strong>
+                      <span className={res.success ? "text-success" : "text-error"}>
+                        {res.success ? "✅ Успешно (Exit 0)" : `❌ Ошибка (Exit ${res.exitCode})`}
+                      </span>
+                    </header>
+                    <code>{res.commandExecuted}</code>
+                    <pre className="cli-output">{res.stdout || res.stderr || "[Вывод пуст]"}</pre>
+                  </div>
+                ))}
+              </details>
+              <details className="two-tier-section">
+                <summary>📋 Финальный Отчёт QA Тестов для Совета</summary>
+                <div className="two-tier-markdown">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml>{twoTierResult.finalBoardReport}</ReactMarkdown>
+                </div>
+              </details>
+            </div>
+          ) : null}
+
+          {terminalOutput ? (
+            <div className="terminal-card panel">
+              <header className="terminal-card-header">
+                <strong>🖥️ Терминал: <code>{terminalOutput.command}</code></strong>
+                <span className={`terminal-status-badge ${terminalOutput.exitCode === 0 ? "success" : "error"}`}>
+                  Exit code: {terminalOutput.exitCode}
+                </span>
+                <button onClick={() => setTerminalOutput(null)}>×</button>
+              </header>
+              <pre className="terminal-console-output">{terminalOutput.stdout || terminalOutput.stderr || "[Вывод пуст]"}</pre>
+            </div>
+          ) : null}
+
+          <div className="composer panel composer-bottom">
+            <RunSummaryBar
+              viewMode={viewMode}
+              setViewMode={setViewMode}
+              mode={mode}
+              setMode={setMode}
+              finalizerMode={finalizerMode}
+              setFinalizerMode={setFinalizerMode}
+              finalResponder={finalResponder}
+              setFinalResponder={setFinalResponder}
+              providers={providers}
+              setProviders={setProviders}
+              availableProviders={current?.project.providers && current.project.providers.length > 0 ? current.project.providers : ["chatgpt", "gemini", "deepseek"]}
+              expanded={composerExpanded}
+              setExpanded={setComposerExpanded}
+            />
+
+            <div className="composer-input-row">
+              <label className="file-attach-btn" title="Прикрепить файл или картинку">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+                </svg>
+                <input type="file" onChange={handleFileAttach} hidden multiple />
+              </label>
+              <textarea
+                aria-label="Сообщение для моделей"
+                value={task}
+                onChange={(event) => setTask(event.target.value)}
+                onPaste={handlePaste}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && !event.shiftKey) {
+                    event.preventDefault();
+                    void run();
+                  }
+                }}
+                placeholder="Напишите запрос для ИИ-моделей… Enter — отправить, Shift+Enter — новая строка"
+              />
+              <div className="composer-action-cell">
+                {running ? (
+                  <button
+                    className="action-btn stop telegram-btn"
+                    onClick={() => void window.orchestrator.orchestration.stop()}
+                    title="Остановить генерацию"
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                      <rect x="5" y="5" width="14" height="14" rx="2" />
+                    </svg>
+                  </button>
+                ) : (
+                  <button
+                    className="action-btn send primary telegram-btn"
+                    disabled={!current || !task.trim() || providers.length === 0}
+                    onClick={() => void run()}
+                    title="Отправить сообщение"
+                  >
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <line x1="22" y1="2" x2="11" y2="13" />
+                      <polygon points="22 2 15 22 11 13 2 9 22 2" />
+                    </svg>
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {attachedFiles.length > 0 ? (
+              <div className="attached-files-row">
+                {attachedFiles.map((f) => (
+                  <span key={f.id} className="attached-file-tag">
+                    {f.dataUrl ? (
+                      <img
+                        src={f.dataUrl}
+                        alt={f.name}
+                        className="attached-file-preview interactive"
+                        onClick={() => setPreviewImageModalUrl(f.dataUrl!)}
+                        title="Нажмите для полноэкранного просмотра"
+                      />
+                    ) : (
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z" />
+                        <polyline points="13 2 13 9 20 9" />
+                      </svg>
+                    )}{" "}
+                    <span className="attached-file-name">{f.name}</span>
+                    <button onClick={() => removeFile(f.id)}>×</button>
+                  </span>
+                ))}
+              </div>
+            ) : null}
+          </div>
         </section>
-        <aside className="inspector">
+        {inspectorOpen ? (
+          <aside className="inspector">
           <div className="state-heading">
             <div>
               <h2>Конструктор спецификации</h2>
@@ -680,111 +1026,31 @@ function App(): React.JSX.Element {
               {Object.values(projectState).flat().filter((item) => item.text.trim()).length} пунктов
             </span>
           </div>
-          <div className="state-builder tree-view">
-            {stateSections.map((section) => (
-              <details
-                className="state-section tree-branch"
-                key={section.key}
-                open={openStateSections.has(section.key)}
-                onToggle={(event) => {
-                  const isOpen = event.currentTarget.open;
-                  setOpenStateSections((currentSections) => {
-                    if (currentSections.has(section.key) === isOpen) return currentSections;
-                    const next = new Set(currentSections);
-                    if (isOpen) next.add(section.key);
-                    else next.delete(section.key);
-                    return next;
-                  });
-                }}
-              >
-                <summary>
-                  <span>
-                    {section.key === "requirements" && "📋 "}
-                    {section.key === "constraints" && "🛑 "}
-                    {section.key === "decisions" && "✅ "}
-                    {section.key === "rejectedOptions" && "❌ "}
-                    {section.key === "openQuestions" && "❓ "}
-                    {section.key === "acceptanceCriteria" && "🎯 "}
-                    {section.title}
-                  </span>
-                  <small>{projectState[section.key].length}</small>
-                </summary>
-                <div className="state-items tree-items">
-                  {projectState[section.key].map((item, index) => (
-                    <article className="state-card tree-leaf" key={item.id}>
-                      <header>
-                        <strong>{index + 1}</strong>
-                        <button
-                          aria-label={`Удалить пункт ${index + 1} из раздела ${section.title}`}
-                          onClick={() => removeStateItem(section.key, item.id)}
-                        >×</button>
-                      </header>
-                      <textarea
-                        aria-label={`${section.title}, пункт ${index + 1}`}
-                        placeholder={section.empty}
-                        value={item.text}
-                        onChange={(event) =>
-                          updateStateItem(section.key, item.id, { text: event.target.value })}
-                      />
-                      {section.rationale ? (
-                        <textarea
-                          className="rationale-input"
-                          aria-label={`Обоснование пункта ${index + 1}`}
-                          placeholder="Почему принято такое решение?"
-                          value={item.rationale ?? ""}
-                          onChange={(event) =>
-                            updateStateItem(section.key, item.id, {
-                              rationale: event.target.value,
-                            })}
-                        />
-                      ) : null}
-                      <div className="source-picker">
-                        <select
-                          aria-label={`Источник пункта ${index + 1}`}
-                          value=""
-                          onChange={(event) => {
-                            const source = event.target.value;
-                            if (source && !item.sourceTurnIds.includes(source)) {
-                              updateStateItem(section.key, item.id, {
-                                sourceTurnIds: [...item.sourceTurnIds, source],
-                              });
-                            }
-                          }}
-                        >
-                          <option value="">Привязать к ответу…</option>
-                          {current?.transcript
-                            .filter((entry) => entry.role === "ASSISTANT")
-                            .map((entry) => (
-                              <option value={entry.id} key={entry.id}>
-                                {entry.providerId ?? "модель"} · {entry.content.slice(0, 55)}
-                              </option>
-                            ))}
-                        </select>
-                        <div className="source-tags">
-                          {item.sourceTurnIds.map((sourceId) => {
-                            const source = current?.transcript.find((entry) => entry.id === sourceId);
-                            return (
-                              <button
-                                key={sourceId}
-                                title="Убрать источник"
-                                onClick={() => updateStateItem(section.key, item.id, {
-                                  sourceTurnIds: item.sourceTurnIds.filter((id) => id !== sourceId),
-                                })}
-                              >
-                                {source?.providerId ?? "источник"} ×
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    </article>
-                  ))}
-                  <button className="add-state-item" onClick={() => addStateItem(section.key)}>
-                    + Добавить
-                  </button>
-                </div>
-              </details>
-            ))}
+          <div className="spec-cards-grid">
+            {stateSections.map((section) => {
+              const count = projectState[section.key].length;
+              return (
+                <button
+                  className="spec-category-chip"
+                  key={section.key}
+                  onClick={() => setActiveSpecSection(section.key)}
+                >
+                  <div className="spec-chip-header">
+                    <strong>
+                      {section.key === "requirements" && "📋 "}
+                      {section.key === "constraints" && "🛑 "}
+                      {section.key === "decisions" && "✅ "}
+                      {section.key === "rejectedOptions" && "❌ "}
+                      {section.key === "openQuestions" && "❓ "}
+                      {section.key === "acceptanceCriteria" && "🎯 "}
+                      {section.title}
+                    </strong>
+                    <span className="spec-chip-badge">{count}</span>
+                  </div>
+                  <small className="spec-chip-desc">{count > 0 ? `${count} пунктов заполнено` : "Нажмите для добавления"}</small>
+                </button>
+              );
+            })}
           </div>
           <details className="advanced-state" open={advancedStateOpen} onToggle={(event) =>
             setAdvancedStateOpen((event.currentTarget as HTMLDetailsElement).open)}>
@@ -827,388 +1093,259 @@ function App(): React.JSX.Element {
             ))}
           </ol>
         </aside>
+        ) : null}
       </div>
-      {settingsOpen ? (
-        <div className="modal-backdrop" role="presentation" onMouseDown={() => setSettingsOpen(false)}>
-          <section
-            className="settings-modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="settings-title"
-            onMouseDown={(event) => event.stopPropagation()}
-          >
+      <SettingsModal
+        isOpen={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        settings={settings}
+        setSettings={setSettings}
+        onSave={() => void saveSettings()}
+        login={login}
+        resetSession={resetSession}
+        qualityDashboard={qualityDashboard}
+        preflight={preflight}
+        runPreflight={refreshDiagnostics}
+        maintenanceBusy={maintenanceBusy}
+        createBackup={createBackup}
+        providerStatuses={providerStatuses}
+      />
+
+      <DeleteProjectDialog
+        isOpen={!!deleteTarget}
+        project={deleteTarget}
+        onClose={() => setDeleteTarget(null)}
+        onConfirmDelete={confirmDeleteProject}
+        isDeleting={deleteBusy}
+      />
+
+      <ProjectRequiredToast
+        isOpen={showNoProjectToast}
+        onClose={() => setShowNoProjectToast(false)}
+        onSelectProject={() => {
+          setShowNoProjectToast(false);
+          setSidebarOpen(true);
+        }}
+      />
+
+      <ErrorModal
+        error={activeUserError}
+        onClose={() => setActiveUserError(null)}
+      />
+      {activeSpecSection ? (
+        <div className="modal-backdrop" role="presentation" onMouseDown={() => setActiveSpecSection(null)}>
+          <section className="settings-modal spec-modal" role="dialog" onMouseDown={(event) => event.stopPropagation()}>
             <header>
-              <div>
-                <h1 id="settings-title">Профиль и настройки</h1>
-                <p>Хранятся только локально. Пароли и токены сюда не записываются.</p>
-              </div>
-              <button aria-label="Закрыть настройки" onClick={() => setSettingsOpen(false)}>×</button>
+              <h2>
+                {activeSpecSection === "requirements" && "📋 Требования"}
+                {activeSpecSection === "constraints" && "🛑 Ограничения"}
+                {activeSpecSection === "decisions" && "✅ Принятые решения"}
+                {activeSpecSection === "rejectedOptions" && "❌ Отклонения"}
+                {activeSpecSection === "openQuestions" && "❓ Открытые вопросы"}
+                {activeSpecSection === "acceptanceCriteria" && "🎯 Критерии приёмки"}
+              </h2>
+              <button onClick={() => setActiveSpecSection(null)}>×</button>
             </header>
-            <div className="settings-layout">
-              <aside className="settings-sidebar">
-                <button
-                  className={`settings-sidebar-btn ${settingsTab === "profile" ? "active" : ""}`}
-                  onClick={() => setSettingsTab("profile")}
-                >
-                  👤 Профиль
-                </button>
-                <button
-                  className={`settings-sidebar-btn ${settingsTab === "behavior" ? "active" : ""}`}
-                  onClick={() => setSettingsTab("behavior")}
-                >
-                  ⚙️ Поведение и лимиты
-                </button>
-                <button
-                  className={`settings-sidebar-btn ${settingsTab === "appearance" ? "active" : ""}`}
-                  onClick={() => setSettingsTab("appearance")}
-                >
-                  🎨 Внешний вид
-                </button>
-                <button
-                  className={`settings-sidebar-btn ${settingsTab === "quality" ? "active" : ""}`}
-                  onClick={() => setSettingsTab("quality")}
-                >
-                  📊 Центр качества
-                </button>
-                <button
-                  className={`settings-sidebar-btn ${settingsTab === "diagnostics" ? "active" : ""}`}
-                  onClick={() => setSettingsTab("diagnostics")}
-                >
-                  🛠️ Диагностика и данные
-                </button>
-              </aside>
-              <div className="settings-content settings-pane">
-                {settingsTab === "profile" && (
-                  <fieldset>
-                    <legend>Профиль</legend>
-                    <label>Никнейм
-                      <input
-                        maxLength={80}
-                        value={settings.profile.displayName}
-                        onChange={(event) => setSettings((value) => ({
-                          ...value,
-                          profile: { ...value.profile, displayName: event.target.value },
-                        }))}
-                        placeholder="Отображаемое имя"
-                      />
-                    </label>
-                    <label>Настоящее имя
-                      <input
-                        maxLength={80}
-                        value={settings.profile.realName ?? ""}
-                        onChange={(event) => setSettings((value) => ({
-                          ...value,
-                          profile: { ...value.profile, realName: event.target.value },
-                        }))}
-                        placeholder="Имя Фамилия"
-                      />
-                    </label>
-                    <label>Приветствие на старте
-                      <select
-                        value={settings.profile.greetingStyle ?? "generic"}
-                        onChange={(event) => setSettings((value) => ({
-                          ...value,
-                          profile: {
-                            ...value.profile,
-                            greetingStyle: event.target.value as any,
-                          },
-                        }))}
-                      >
-                        <option value="display">Использовать никнейм</option>
-                        <option value="real">Использовать настоящее имя</option>
-                        <option value="generic">Стандартное приветствие</option>
-                      </select>
-                    </label>
-                  </fieldset>
-                )}
-
-                {settingsTab === "behavior" && (
-                  <>
-                    <fieldset>
-                      <legend>Новый запуск по умолчанию</legend>
-                      <label>Режим
-                        <select
-                          value={settings.defaults.mode}
-                          onChange={(event) => setSettings((value) => ({
-                            ...value,
-                            defaults: {
-                              ...value.defaults,
-                              mode: event.target.value as AppSettingsView["defaults"]["mode"],
-                            },
-                          }))}
-                        >
-                          <option value="DEBATE">Обсуждение</option>
-                          <option value="SEQUENTIAL">Рецензирование</option>
-                          <option value="PARALLEL">Независимые ответы</option>
-                          <option value="MANUAL">Один ответ</option>
-                        </select>
-                      </label>
-                      <div className="settings-checks">
-                        {(["chatgpt", "gemini", "deepseek", "claude", "copilot", "perplexity", "huggingchat", "groq", "duckduckgo", "mistral"] as const).map((provider) => (
-                          <label key={provider}>
-                            <input
-                              type="checkbox"
-                              checked={settings.defaults.providers.includes(provider)}
-                              onChange={() => setSettings((value) => ({
-                                ...value,
-                                defaults: {
-                                  ...value.defaults,
-                                  providers: (value.defaults.providers.includes(provider)
-                                    ? value.defaults.providers.filter((item) => item !== provider)
-                                    : [...value.defaults.providers, provider]) as any,
-                                },
-                              }))}
-                            /> {provider}
-                          </label>
+            <div className="settings-pane spec-modal-body">
+              {projectState[activeSpecSection as keyof typeof projectState].map((item, index) => (
+                <article className="state-card tree-leaf" key={item.id}>
+                  <header>
+                    <strong>Пункт {index + 1}</strong>
+                    <button
+                      aria-label={`Удалить пункт ${index + 1}`}
+                      onClick={() => removeStateItem(activeSpecSection as any, item.id)}
+                    >×</button>
+                  </header>
+                  <textarea
+                    aria-label={`Пункт ${index + 1}`}
+                    placeholder="Описание пункта..."
+                    value={item.text}
+                    onChange={(event) =>
+                      updateStateItem(activeSpecSection as any, item.id, { text: event.target.value })}
+                  />
+                  {activeSpecSection === "decisions" || activeSpecSection === "rejectedOptions" ? (
+                    <textarea
+                      className="rationale-input"
+                      aria-label={`Обоснование пункта ${index + 1}`}
+                      placeholder="Почему принято такое решение?"
+                      value={(item as any).rationale ?? ""}
+                      onChange={(event) =>
+                        updateStateItem(activeSpecSection as any, item.id, {
+                          rationale: event.target.value,
+                        })}
+                    />
+                  ) : null}
+                  <div className="source-picker">
+                    <select
+                      aria-label={`Источник пункта ${index + 1}`}
+                      value=""
+                      onChange={(event) => {
+                        const source = event.target.value;
+                        if (source && !item.sourceTurnIds.includes(source)) {
+                          updateStateItem(activeSpecSection as any, item.id, {
+                            sourceTurnIds: [...item.sourceTurnIds, source],
+                          });
+                        }
+                      }}
+                    >
+                      <option value="">Привязать к ответу…</option>
+                      {current?.transcript
+                        .filter((entry) => entry.role === "ASSISTANT")
+                        .map((entry) => (
+                          <option value={entry.id} key={entry.id}>
+                            {entry.providerId ?? "модель"} · {entry.content.slice(0, 55)}
+                          </option>
                         ))}
-                      </div>
-                    </fieldset>
-                    <fieldset>
-                      <legend>Ограничения оркестрации</legend>
-                      <label className="settings-toggle">
-                        <input
-                          type="checkbox"
-                          checked={settings.defaults.limits.requireConfirmation === true}
-                          onChange={(event) => setSettings((value) => ({
-                            ...value,
-                            defaults: {
-                              ...value.defaults,
-                              limits: {
-                                ...value.defaults.limits,
-                                requireConfirmation: event.target.checked,
-                              },
-                            },
-                          }))}
-                        />
-                        Спрашивать разрешение на продолжение обсуждения
-                      </label>
-                      <p className="settings-help">
-                        Выключено: модели работают до независимого консенсуса или защитного лимита ходов.
-                        Включено: G+G останавливается через заданный интервал и ждёт вашего решения.
-                      </p>
-                      <div className="settings-grid">
-                        <label>Максимум ходов
-                          <select
-                            value={settings.defaults.limits.maxTurns}
-                            onChange={(event) => updateLimit("maxTurns", event.target.value)}
+                    </select>
+                    <div className="source-tags">
+                      {item.sourceTurnIds.map((sourceId) => {
+                        const source = current?.transcript.find((entry) => entry.id === sourceId);
+                        return (
+                          <button
+                            key={sourceId}
+                            title="Убрать источник"
+                            onClick={() => updateStateItem(activeSpecSection as any, item.id, {
+                              sourceTurnIds: item.sourceTurnIds.filter((id) => id !== sourceId),
+                            })}
                           >
-                            {[2, 4, 6, 8, 10, 12, 16, 20, 30].map(n => (
-                              <option key={n} value={n}>{n}</option>
-                            ))}
-                          </select>
-                        </label>
-                        <label>Повторных попыток
-                          <select
-                            value={settings.defaults.limits.maxRetries}
-                            onChange={(event) => updateLimit("maxRetries", event.target.value)}
-                          >
-                            {[0, 1, 2, 3, 4, 5].map(n => (
-                              <option key={n} value={n}>{n}</option>
-                            ))}
-                          </select>
-                        </label>
-                        <label>Таймаут хода
-                          <select
-                            value={settings.defaults.limits.maxTurnMs}
-                            onChange={(event) => updateLimit("maxTurnMs", event.target.value)}
-                          >
-                            <option value={30000}>30 секунд</option>
-                            <option value={60000}>1 минута</option>
-                            <option value={120000}>2 минуты</option>
-                            <option value={180000}>3 минуты</option>
-                            <option value={300000}>5 минут</option>
-                            <option value={600000}>10 минут</option>
-                          </select>
-                        </label>
-                        <label>Таймаут сессии
-                          <select
-                            value={settings.defaults.limits.maxSessionMs}
-                            onChange={(event) => updateLimit("maxSessionMs", event.target.value)}
-                          >
-                            <option value={300000}>5 минут</option>
-                            <option value={600000}>10 минут</option>
-                            <option value={900000}>15 минут</option>
-                            <option value={1800000}>30 минут</option>
-                            <option value={3600000}>1 час</option>
-                            <option value={7200000}>2 часа</option>
-                            <option value={14400000}>4 часа</option>
-                          </select>
-                        </label>
-                        <label>Интервал подтверждения (ходов)
-                          <select
-                            disabled={settings.defaults.limits.requireConfirmation !== true}
-                            value={settings.defaults.limits.confirmationEvery}
-                            onChange={(event) => updateLimit("confirmationEvery", event.target.value)}
-                          >
-                            {[1, 2, 3, 5, 10, 15, 20].map(n => (
-                              <option key={n} value={n}>{n}</option>
-                            ))}
-                          </select>
-                        </label>
-                      </div>
-                    </fieldset>
-                  </>
-                )}
-
-                {settingsTab === "appearance" && (
-                  <fieldset>
-                    <legend>Внешний вид</legend>
-                    <div className="settings-grid">
-                      <label>Тема
-                        <select
-                          value={settings.appearance.theme}
-                          onChange={(event) => setSettings((value) => ({
-                            ...value,
-                            appearance: { ...value.appearance, theme: event.target.value as AppSettingsView["appearance"]["theme"] },
-                          }))}
-                        >
-                          <option value="dark">Тёмная</option>
-                          <option value="light">Светлая</option>
-                          <option value="system">Как в системе</option>
-                        </select>
-                      </label>
-                      <label>Плотность
-                        <select
-                          value={settings.appearance.density}
-                          onChange={(event) => setSettings((value) => ({
-                            ...value,
-                            appearance: { ...value.appearance, density: event.target.value as AppSettingsView["appearance"]["density"] },
-                          }))}
-                        >
-                          <option value="comfortable">Обычная</option>
-                          <option value="compact">Компактная</option>
-                        </select>
-                      </label>
-                      <label>Масштаб текста, %
-                        <select
-                          value={settings.appearance.fontScale}
-                          onChange={(event) => setSettings((value) => ({
-                            ...value,
-                            appearance: { ...value.appearance, fontScale: Number(event.target.value) },
-                          }))}
-                        >
-                          {[80, 90, 100, 110, 120, 130, 140].map(scale => (
-                            <option key={scale} value={scale}>{scale}%</option>
-                          ))}
-                        </select>
-                      </label>
+                            {source?.providerId ?? "источник"} ×
+                          </button>
+                        );
+                      })}
                     </div>
-                  </fieldset>
-                )}
-
-                {settingsTab === "quality" && (
-                  <fieldset>
-                    <legend>Центр качества · последние 30 дней</legend>
-                    <div className="quality-heading">
-                      <p className="settings-note">
-                        Локальная статистика помогает отличить сбой провайдера от ошибки
-                        приложения. Тексты сообщений в метрики не попадают.
-                      </p>
-                      <button onClick={() => void loadQualityDashboard()}>Обновить</button>
-                    </div>
-                    {qualityDashboard?.totalSamples ? (
-                      <>
-                        <div className="quality-providers">
-                          {Object.entries(qualityDashboard.providers).map(([provider, metrics]) => {
-                            const success = metrics.find((metric) =>
-                              metric.name === "provider.turn.success");
-                            const elapsed = metrics.find((metric) =>
-                              metric.name === "provider.turn.elapsed_ms");
-                            const retries = metrics.find((metric) =>
-                              metric.name === "provider.turn.retry_count");
-                            return (
-                              <article className="provider-score" key={provider}>
-                                <header>
-                                  <strong>{provider}</strong>
-                                  <span data-score={
-                                    !success ? "unknown" : success.average >= .98 ? "good"
-                                      : success.average >= .85 ? "warn" : "bad"
-                                  }>
-                                    {success ? metricValue(success) : "нет данных"}
-                                  </span>
-                                </header>
-                                <dl>
-                                  <div><dt>Ходов</dt><dd>{success?.count ?? 0}</dd></div>
-                                  <div><dt>Средний ответ</dt><dd>{elapsed ? metricValue(elapsed) : "—"}</dd></div>
-                                  <div><dt>Повторы</dt><dd>{retries ? metricValue(retries) : "—"}</dd></div>
-                                </dl>
-                              </article>
-                            );
-                          })}
-                        </div>
-                        <div className="metric-grid">
-                          {qualityDashboard.overall.map((metric) => (
-                            <article className="metric-card" key={metric.name}>
-                              <span>{metricLabels[metric.name] ?? metric.name}</span>
-                              <strong>{metricValue(metric)}</strong>
-                              <small>{metric.count} измерений · min {Math.round(metric.minimum)} · max {Math.round(metric.maximum)}</small>
-                            </article>
-                          ))}
-                        </div>
-                      </>
-                    ) : (
-                      <div className="quality-empty">
-                        <strong>Пока недостаточно данных</strong>
-                        <span>Метрики появятся после первых запусков моделей.</span>
-                      </div>
-                    )}
-                  </fieldset>
-                )}
-
-                {settingsTab === "diagnostics" && (
-                  <fieldset>
-                    <legend>Диагностика и данные</legend>
-                    <p className="settings-note">
-                      Проверка выполняется локально. Резервная копия содержит базу проектов и
-                      обезличенные настройки, но не браузерные профили, cookies и пароли.
-                    </p>
-                    <div className="maintenance-actions">
-                      <button disabled={maintenanceBusy} onClick={() => void refreshDiagnostics()}>
-                        Проверить окружение
-                      </button>
-                      <button disabled={maintenanceBusy} onClick={() => void createBackup()}>
-                        Создать резервную копию
-                      </button>
-                      <button disabled={maintenanceBusy} onClick={() => void openDataFolder()}>
-                        Открыть папку данных
-                      </button>
-                    </div>
-                    {releaseInfo ? (
-                      <dl className="release-info">
-                        <div><dt>Версия</dt><dd>{releaseInfo.appVersion}</dd></div>
-                        <div><dt>Commit</dt><dd>{releaseInfo.commit}</dd></div>
-                        <div><dt>Данные</dt><dd>{releaseInfo.dataPath}</dd></div>
-                      </dl>
-                    ) : null}
-                    {preflight.length > 0 ? (
-                      <ul className="preflight-list" aria-label="Результаты диагностики">
-                        {preflight.map((check) => (
-                          <li key={check.name} data-status={check.status}>
-                            <strong>{check.status.toUpperCase()} · {check.name}</strong>
-                            <span>{check.detail}</span>
-                          </li>
-                        ))}
-                      </ul>
-                    ) : null}
-                    <div className="danger-zone">
-                      <strong>Сброс авторизации</strong>
-                      <span>Удаляет только локальную сессию выбранного сервиса.</span>
-                      <div className="maintenance-actions">
-                        <button disabled={maintenanceBusy} onClick={() => void resetSession("chatgpt")}>Сбросить ChatGPT</button>
-                        <button disabled={maintenanceBusy} onClick={() => void resetSession("gemini")}>Сбросить Gemini</button>
-                        <button disabled={maintenanceBusy} onClick={() => void resetSession("deepseek")}>Сбросить DeepSeek</button>
-                      </div>
-                    </div>
-                  </fieldset>
-                )}
-              </div>
+                  </div>
+                </article>
+              ))}
+              <button
+                className="add-state-item primary"
+                style={{ width: "100%", marginTop: "10px" }}
+                onClick={() => addStateItem(activeSpecSection as any)}
+              >
+                + Добавить пункт
+              </button>
             </div>
             <footer>
-              <button onClick={() => setSettings(fallbackSettings)}>Сбросить</button>
-              <button onClick={() => setSettingsOpen(false)}>Отмена</button>
-              <button className="primary" onClick={() => void saveSettings()}>Сохранить</button>
+              <button className="primary" onClick={() => setActiveSpecSection(null)}>Готово</button>
             </footer>
           </section>
+        </div>
+      ) : null}
+      {newProjectModalOpen ? (
+        <div className="modal-backdrop" onClick={() => setNewProjectModalOpen(false)}>
+          <div className="custom-modal-card" onClick={(e) => e.stopPropagation()}>
+            <header className="custom-modal-header">
+              <h3>📁 Создание нового проекта</h3>
+              <button className="close-modal-btn" onClick={() => setNewProjectModalOpen(false)}>×</button>
+            </header>
+            <div className="custom-modal-body">
+              <label className="form-label">
+                Название проекта (обязательно):
+                <input
+                  type="text"
+                  value={newProjectNameInput}
+                  onChange={(e) => setNewProjectNameInput(e.target.value)}
+                  placeholder="Например: Мой Салон Красоты"
+                  autoFocus
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && newProjectNameInput.trim()) {
+                      e.preventDefault();
+                      void window.orchestrator.projects.create(newProjectNameInput.trim(), creationProviders).then(async (project) => {
+                        setNewProjectNameInput("");
+                        setNewProjectDescriptionInput("");
+                        setNewProjectModalOpen(false);
+                        await refresh();
+                        await openProject(project.id);
+                      });
+                    }
+                  }}
+                />
+              </label>
+              <label className="form-label">
+                Описание проекта (необязательно):
+                <input
+                  type="text"
+                  value={newProjectDescriptionInput}
+                  onChange={(e) => setNewProjectDescriptionInput(e.target.value)}
+                  placeholder="Короткая цель или специфика проекта"
+                />
+              </label>
+              <div className="creation-providers-section">
+                <label className="form-label">Модели ИИ в проекте:</label>
+                <div className="creation-providers-grid">
+                  {(["chatgpt", "gemini", "deepseek", "claude", "copilot", "perplexity", "groq", "mistral"] as const).map((prov) => (
+                    <label key={prov} className={`provider-chip-label ${creationProviders.includes(prov) ? "active" : ""}`}>
+                      <input
+                        type="checkbox"
+                        checked={creationProviders.includes(prov)}
+                        onChange={() =>
+                          setCreationProviders((currentList) =>
+                            currentList.includes(prov)
+                              ? currentList.filter((item) => item !== prov)
+                              : [...currentList, prov],
+                          )
+                        }
+                      /> {prov}
+                    </label>
+                  ))}
+                </div>
+              </div>
+            </div>
+            <footer className="custom-modal-footer">
+              <button className="btn" onClick={() => setNewProjectModalOpen(false)}>Отмена</button>
+              <button
+                className="btn btn-primary"
+                disabled={!newProjectNameInput.trim()}
+                onClick={() => {
+                  void window.orchestrator.projects.create(newProjectNameInput.trim(), creationProviders).then(async (project) => {
+                    setNewProjectNameInput("");
+                    setNewProjectModalOpen(false);
+                    await refresh();
+                    await openProject(project.id);
+                  });
+                }}
+              >
+                Создать проект
+              </button>
+            </footer>
+          </div>
+        </div>
+      ) : null}
+
+      {previewImageModalUrl ? (
+        <div className="modal-backdrop" onClick={() => setPreviewImageModalUrl(null)}>
+          <div className="image-preview-modal-card" onClick={(e) => e.stopPropagation()}>
+            <button className="close-modal-btn" onClick={() => setPreviewImageModalUrl(null)}>×</button>
+            <img src={previewImageModalUrl} alt="Полноэкранный просмотр" className="full-preview-image" />
+          </div>
+        </div>
+      ) : null}
+
+      {webChatsDrawerOpen ? (
+        <div className="modal-backdrop" onClick={() => setWebChatsDrawerOpen(false)}>
+          <div className="web-chats-drawer-card" onClick={(e) => e.stopPropagation()}>
+            <header className="custom-modal-header">
+              <h3>🔗 Закреплённые Веб-Чаты Проекта</h3>
+              <button className="close-modal-btn" onClick={() => setWebChatsDrawerOpen(false)}>×</button>
+            </header>
+            <div className="drawer-body">
+              {current?.conversations && current.conversations.length > 0 ? (
+                current.conversations.map((c) => (
+                  <div key={c.providerId} className="drawer-chat-item">
+                    <strong className="drawer-provider-title">{c.providerId.toUpperCase()}</strong>
+                    {c.externalRef ? (
+                      <a href={c.externalRef} target="_blank" rel="noreferrer noopener" className="btn btn-primary">
+                        Открыть сессию в браузере ↗
+                      </a>
+                    ) : (
+                      <span className="text-muted">Сессия создастся после первого хода</span>
+                    )}
+                  </div>
+                ))
+              ) : (
+                <p className="text-muted">Разговоры еще не начаты</p>
+              )}
+            </div>
+          </div>
         </div>
       ) : null}
     </main>

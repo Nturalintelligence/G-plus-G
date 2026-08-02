@@ -1,3 +1,8 @@
+declare module "*.svg" {
+  const content: string;
+  export default content;
+}
+
 interface Window {
   orchestrator: {
     system: {
@@ -24,9 +29,11 @@ interface Window {
       list(): Promise<ProjectView[]>;
       create(name: string, providers: string[]): Promise<ProjectView>;
       open(id: string): Promise<ProjectDetails>;
+      delete(id: string, deleteRemote?: boolean): Promise<{ success: boolean }>;
     };
     provider: {
       login(provider: string): Promise<string>;
+      status(provider: string): Promise<{ provider: string; session: string; ready: boolean }>;
       send(provider: string, message: string): Promise<{ response: string }>;
     };
     orchestration: {
@@ -36,6 +43,9 @@ interface Window {
       stop(): Promise<void>;
       onProgress(callback: (value: { providerId: string; text: string }) => void): () => void;
     };
+    events: {
+      onEvent(callback: (event: any) => void): () => void;
+    };
     state: {
       latest(projectId: string): Promise<StateVersion | null>;
       save(projectId: string, state: unknown): Promise<StateVersion>;
@@ -43,6 +53,18 @@ interface Window {
     };
     exports: {
       spec(projectId: string): Promise<{ directory: string; manifestHash: string }>;
+    };
+    terminal: {
+      execute(command: string, cwd?: string): Promise<{ exitCode: number; stdout: string; stderr: string; elapsedMs: number }>;
+    };
+    twoTier: {
+      executeStep(userTask: string, simulatedResponse?: string): Promise<{
+        status: "COMPLETED" | "NEEDS_USER_ACTION" | "FAILED";
+        iterationsCompleted: number;
+        strategicPlanText: string;
+        cliExecutionResults: Array<{ tool: string; success: boolean; exitCode: number; stdout: string; stderr: string; elapsedMs: number; commandExecuted: string }>;
+        finalBoardReport: string;
+      }>;
     };
     settings: {
       get(): Promise<AppSettingsView>;
@@ -59,7 +81,7 @@ interface AppSettingsView {
     greetingStyle: "display" | "real" | "generic";
   };
   defaults: {
-    mode: "MANUAL" | "SEQUENTIAL" | "PARALLEL" | "DEBATE";
+    mode: "MANUAL" | "SEQUENTIAL" | "PARALLEL" | "DEBATE" | "AUTONOMOUS_CYCLE";
     providers: Array<
       | "chatgpt"
       | "gemini"
@@ -81,6 +103,7 @@ interface AppSettingsView {
       requireConfirmation?: boolean;
     };
   };
+  models?: Record<string, { role: string; customPrompt: string }>;
   appearance: {
     theme: "dark" | "light" | "system";
     density: "comfortable" | "compact";
@@ -125,6 +148,11 @@ interface ProjectDetails {
   project: ProjectView;
   recoveredTurns: number;
   recoveredRuns: number;
+  conversations?: Array<{
+    id: string;
+    providerId: string;
+    externalRef: string | null;
+  }>;
   events: Array<{
     sequence: number;
     aggregateType: string;

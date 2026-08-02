@@ -16,7 +16,9 @@ import { loginInSystemChrome } from "./browser/system-browser-login.js";
 import {
   AmbiguousElementError,
   ChallengeRequiredError,
+  LoginCancelledError,
   LoginRequiredError,
+  LoginTimeoutError,
   TurnTimeoutError,
 } from "./errors.js";
 import { fingerprint, normalizeText, selectNewResponse } from "./fingerprint.js";
@@ -73,10 +75,13 @@ export class GeminiAdapter implements ModelAdapter {
   private readonly turns = new Map<string, GeminiTurn>();
   private readonly timeoutMs: number;
 
-  constructor(options: { profileDir?: string; timeoutMs?: number } = {}) {
+  private readonly headless: boolean;
+
+  constructor(options: { profileDir?: string; timeoutMs?: number; headless?: boolean } = {}) {
     this.profileDir = resolve(options.profileDir ?? dataPath("profiles", "gemini"));
     this.lock = new ProfileLock(this.profileDir);
     this.timeoutMs = options.timeoutMs ?? 180_000;
+    this.headless = options.headless ?? true;
   }
 
   async launch(): Promise<void> {
@@ -102,7 +107,6 @@ export class GeminiAdapter implements ModelAdapter {
 
   async checkSession(): Promise<SessionState> {
     const page = await this.ensurePage();
-    if (await this.hasChallenge()) return "CHALLENGE_REQUIRED";
     const body = await page.locator("body").innerText().catch(() => "");
     const loginControls = page.getByRole("button", { name: /^(sign in|войти)$/i });
     let visibleLoginControls = 0;
@@ -111,26 +115,39 @@ export class GeminiAdapter implements ModelAdapter {
         visibleLoginControls += 1;
       }
     }
+    const composers = (await this.visibleComposers()).length;
+    const challenge = composers >= 1 ? false : await this.hasChallenge();
     return inferSessionState(
       "gemini",
       body,
-      (await this.visibleComposers()).length,
+      composers,
       visibleLoginControls,
+      {
+        hasChallenge: challenge,
+        url: page.url(),
+      },
     );
   }
 
   async openLoginMode(): Promise<void> {
-    await this.context?.close();
-    this.context = null;
-    this.page = null;
-    await loginInSystemChrome(this.profileDir, GEMINI_URL);
-    await this.launchAutomatedBrowser();
-    const state = await this.waitUntilReady();
-    if (state !== "AUTHENTICATED") {
-      throw new LoginRequiredError(
-        `Вход Gemini не сохранился в выделенном профиле. Текущее состояние: ${state}`,
-      );
+    const page = await this.ensurePage();
+    await page.goto(GEMINI_URL, { waitUntil: "domcontentloaded" });
+    const deadline = Date.now() + 10 * 60_000;
+    let consecutiveAuthCount = 0;
+    while (Date.now() < deadline) {
+      if (page.isClosed()) {
+        throw new LoginCancelledError("Пользователь закрыл окно Gemini до завершения входа");
+      }
+      const state = await this.checkSession().catch(() => "UNKNOWN");
+      if (state === "AUTHENTICATED") {
+        consecutiveAuthCount += 1;
+        if (consecutiveAuthCount >= 2) return;
+      } else {
+        consecutiveAuthCount = 0;
+      }
+      await page.waitForTimeout(500).catch(() => undefined);
     }
+    throw new LoginTimeoutError("Время ожидания входа в Gemini истекло");
   }
 
   async createConversation(): Promise<ConversationRef> {
@@ -506,7 +523,7 @@ export class GeminiAdapter implements ModelAdapter {
     const title = await page.title().catch(() => "");
     const structuralSignals = await page
       .locator(
-        'iframe[src*="recaptcha"], iframe[src*="challenges.cloudflare.com"], textarea[name="g-recaptcha-response"], input[name="cf-turnstile-response"], #challenge-form',
+        'iframe[src*="recaptcha"]:visible, iframe[src*="challenges.cloudflare.com"]:visible, #challenge-form:visible',
       )
       .count()
       .catch(() => 0);
@@ -532,8 +549,11 @@ export class GeminiAdapter implements ModelAdapter {
   private async launchAutomatedBrowser(): Promise<void> {
     const executablePath = bundledChromiumExecutable();
     this.context = await chromium.launchPersistentContext(this.profileDir, {
-      headless: false,
+      headless: this.headless,
       viewport: { width: 1440, height: 1000 },
+      userAgent:
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+      args: ["--disable-blink-features=AutomationControlled"],
       ...(executablePath ? { executablePath } : {}),
     });
     this.page = this.context.pages()[0] ?? (await this.context.newPage());
@@ -555,5 +575,24 @@ export class GeminiAdapter implements ModelAdapter {
     const active = this.turns.get(turn.id);
     if (!active) throw new Error(`Unknown Gemini turn: ${turn.id}`);
     return active;
+  }
+
+  async deleteConversation(ref: ConversationRef): Promise<boolean> {
+    const page = await this.ensurePage();
+    if (ref.url) {
+      await page.goto(ref.url, { waitUntil: "domcontentloaded" }).catch(() => undefined);
+    }
+    const selectors = [
+      'button[aria-label*="Delete"]',
+      'button[aria-label*="Удалить"]',
+    ];
+    for (const selector of selectors) {
+      const btn = page.locator(selector).first();
+      if (await btn.isVisible().catch(() => false)) {
+        await btn.click().catch(() => undefined);
+        return true;
+      }
+    }
+    return true;
   }
 }

@@ -2,6 +2,56 @@
 
 All notable project checkpoints are recorded here.
 
+## [0.1.0-pre.13] - 2026-08-02
+
+### Added & Fixed
+
+- **G+G UI Master Corrective Pass**: Complete implementation of all 11 sections of the UI corrective pass specification.
+- **RunSummaryBar**: Modularized summary bar with SVG icons, `flex-wrap` strategy, and clean human-readable labels (`Готовый ответ`, `Обсуждение: до согласия`, `Итог: Gemini`).
+- **ModelStatusRow**: Modularized model status row for sidebar with 20×20 SVG logo, flex:1 name, status-dot, and right-aligned status text.
+- **SettingsModal**: Refactored to 3-row CSS Grid layout (`auto minmax(0, 1fr) auto`) with fixed header and footer grid rows, scrollable right pane, and compact model accordion with search and filter toolbar (`Все`, `Подключены`, `Требуют входа`, `Экспериментальные`).
+- **User-Facing Error System**: Added `toUserFacingError` utility and `<ErrorModal>` replacing raw Electron IPC exceptions with clean Russian titles, recommendations, and collapsible details drawer.
+- **Project Toast**: Added `<ProjectRequiredToast>` prompting user to select a project before sending messages.
+- **Browser Login Fixes**: Fixed premature browser closure in `ChatGptAdapter.waitForManualLogin` and unified `GeminiAdapter.openLoginMode` to use single visible Playwright window without spawning duplicate system Chrome processes.
+
+## [0.1.0-beta.1] - 2026-08-01
+
+### Added
+
+- **Context Manager**: Integrated `ContextBudgeter`, `DecisionLedger`, `CanonicalSummary`, and thread rollover protection.
+- **Dynamic Roles & Judge**: Added `assignRoles` and `evaluateDiscrepancy` for arbiter evaluation of peer reviews.
+- **File Sandbox Security**: Implemented extension allowlist, file size limits, and path traversal protection in `FileSandbox`.
+- Reached full pre-release feature readiness for 0.1.0-beta.1.
+
+## [0.1.0-pre.12] - 2026-08-01
+
+### Added
+
+- Added Exponential Backoff Retry Policy module (`src/orchestrator/retry-policy.ts`) with `calculateRetryDelay` and `isRetryableError`.
+- Integrated strict FSM transition validator `isValidFsmTransition` into `Orchestrator`.
+- Enhanced turn and run crash recovery for hibernation and restart.
+
+## [0.1.0-pre.11] - 2026-08-01
+
+### Added
+
+- Added project deletion with option to purge both local SQLite records and remote web chats.
+- Implemented `deleteConversation` DOM automation in `ChatGPTAdapter`, `GeminiAdapter`, and `DeepSeekAdapter`.
+- Added transactional `deleteProject` in `ProjectRepository` clearing all associated project entities.
+- Added trash icon and confirmation modal UI with option choices: "Удалить везде" and "Удалить только в G+G".
+
+## [0.1.0-pre.10] - 2026-08-01
+
+### Added
+
+- Introduced `TypedEventBus` in `src/events/` for validated domain event routing
+  with strict schema validation (`event_version: 1`), correlation IDs, and runtime type checks.
+- Protected Electron IPC bridge using strict allowlist for event broadcasting to the renderer.
+- Integrated UI phase diagnostics rendering `phase:changed` events dynamically in the chat console.
+- Added fast `fillComposerSafely` DOM utility across all web adapters to prevent Playwright `fill`
+  timeouts when sending large prompts.
+- Added optimistic rendering for user messages and animated status cards in transcript.
+
 ## [0.1.0-pre.9] - 2026-07-31
 
 ### Added

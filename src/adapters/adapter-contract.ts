@@ -52,4 +52,5 @@ export interface ModelAdapter {
   completeManually(turn: TurnRef, response: string): Promise<void>;
   recover(): Promise<RecoveryResult>;
   collectDiagnostics(): Promise<DiagnosticReport>;
+  deleteConversation?(ref: ConversationRef): Promise<boolean>;
 }

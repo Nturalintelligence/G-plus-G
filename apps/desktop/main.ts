@@ -34,11 +34,16 @@ import {
 } from "../../src/release/release-tools.js";
 import { resetProviderSession } from "../../src/maintenance.js";
 import { QualityMetrics } from "../../src/observability/metrics.js";
+import { globalEventBus } from "../../src/events/event-bus.js";
+import { executeTerminalCommand } from "../../src/terminal/terminal-engine.js";
+import { TwoTierOrchestrator } from "../../src/orchestrator/two-tier-orchestrator.js";
 
 let mainWindow: BrowserWindow | null = null;
 let database: AppDatabase | null = null;
 let activeOrchestrator: Orchestrator | null = null;
-let activeAdapters: Map<string, ModelAdapter> | null = null;
+let activeOrchestrationAdapters: Map<string, ModelAdapter> | null = null;
+const activeLoginAdapters = new Map<string, ModelAdapter>();
+let activeInteractiveLogin: { provider: string; promise: Promise<any> } | null = null;
 let providerOperationActive = false;
 let quitAfterCleanup = false;
 
@@ -60,10 +65,15 @@ function db(): AppDatabase {
 }
 
 async function closeActiveAdapters(): Promise<void> {
-  const adapters = activeAdapters;
-  activeAdapters = null;
-  if (!adapters) return;
-  await Promise.allSettled([...adapters.values()].map((adapter) => adapter.close()));
+  if (activeOrchestrationAdapters) {
+    const adapters = activeOrchestrationAdapters;
+    activeOrchestrationAdapters = null;
+    await Promise.allSettled([...adapters.values()].map((adapter) => adapter.close()));
+  }
+  for (const adapter of activeLoginAdapters.values()) {
+    await adapter.close().catch(() => undefined);
+  }
+  activeLoginAdapters.clear();
 }
 
 function createWindow(): void {
@@ -110,6 +120,12 @@ function createWindow(): void {
     .catch((error) => console.error("Failed to load desktop renderer", error));
 }
 
+globalEventBus.on("*", (event) => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send("bus:event", event);
+  }
+});
+
 function assertTrustedRenderer(event: IpcMainInvokeEvent): void {
   const url = event.senderFrame?.url ?? "";
   if (!url.startsWith("app://bundle/")) {
@@ -146,7 +162,9 @@ function validateRunInput(value: unknown): {
   mode: RunMode;
   task: string;
   providers: ProviderId[];
-  limits?: OrchestrationLimits;
+  limits?: OrchestrationLimits | undefined;
+  finalizerMode?: string | undefined;
+  finalResponder?: string | undefined;
 } {
   if (!value || typeof value !== "object") throw new Error("Invalid run input");
   const input = value as Record<string, unknown>;
@@ -176,12 +194,16 @@ function validateRunInput(value: unknown): {
       ? undefined
       : (input.limits as OrchestrationLimits);
   if (limits) validateLimits(limits);
+  const finalizerMode = typeof input.finalizerMode === "string" ? input.finalizerMode : undefined;
+  const finalResponder = typeof input.finalResponder === "string" ? input.finalResponder : undefined;
   return {
     projectId,
     mode: input.mode as RunMode,
     task,
     providers,
-    ...(limits ? { limits } : {}),
+    limits: input.limits as OrchestrationLimits | undefined,
+    finalizerMode,
+    finalResponder,
   };
 }
 
@@ -209,7 +231,7 @@ function registerIpc(): void {
     return dataPath();
   });
   handle("maintenance:backup", async () => {
-    if (providerOperationActive || activeOrchestrator || activeAdapters) {
+    if (providerOperationActive || activeOrchestrator || activeOrchestrationAdapters || activeLoginAdapters.size > 0 || activeInteractiveLogin !== null) {
       throw new Error("Cannot create a backup while a provider operation is active");
     }
     const destination = dataPath("backups");
@@ -218,7 +240,7 @@ function registerIpc(): void {
     return path;
   });
   handle("maintenance:resetSession", async (_event, providerValue: unknown) => {
-    if (providerOperationActive || activeOrchestrator || activeAdapters) {
+    if (providerOperationActive || activeOrchestrator || activeOrchestrationAdapters || activeLoginAdapters.size > 0 || activeInteractiveLogin !== null) {
       throw new Error("Cannot reset a session while a provider operation is active");
     }
     const provider = parseProvider(
@@ -271,45 +293,144 @@ function registerIpc(): void {
         ? 0
         : repository.recoverUnfinishedTurns(projectId),
       recoveredRuns,
+      conversations: repository.getConversationsForProject(projectId).map((c) => ({
+        id: c.id,
+        providerId: c.providerId,
+        externalRef: c.externalRef,
+      })),
       events: repository.projectEvents(projectId),
       transcript: repository.conversationEntries(projectId),
       state: new ProjectStateService(db()).latest(projectId),
     };
   });
-  handle("provider:login", async (_event, providerValue: unknown) => {
-    if (providerOperationActive || activeOrchestrator || activeAdapters) {
-      throw new Error("Another provider operation is already active");
+  handle("projects:delete", async (_event, input: unknown) => {
+    const obj = (typeof input === "object" && input !== null ? input : {}) as Record<string, unknown>;
+    const projectId = requireString(obj.projectId, "Project ID", 200);
+    const deleteRemote = Boolean(obj.deleteRemote);
+
+    logEvent("INFO", "project.delete.started", { projectId, deleteRemote });
+
+    if (deleteRemote && activeOrchestrationAdapters) {
+      const repository = new ProjectRepository(db());
+      const conversations = repository.getConversationsForProject(projectId);
+
+      for (const conv of conversations) {
+        if (!conv.externalRef) continue;
+        const adapter = activeOrchestrationAdapters.get(conv.providerId);
+        if (adapter && typeof adapter.deleteConversation === "function") {
+          try {
+            logEvent("INFO", "provider.conversation.deleting_remote", {
+              providerId: conv.providerId,
+              url: conv.externalRef,
+            });
+            await adapter.deleteConversation({ id: conv.id, url: conv.externalRef });
+          } catch (err) {
+            logEvent("WARN", "provider.conversation.delete_remote_failed", {
+              providerId: conv.providerId,
+              error: err,
+            });
+          }
+        }
+      }
     }
-    providerOperationActive = true;
+
+    const repository = new ProjectRepository(db());
+    repository.deleteProject(projectId);
+
+    logEvent("INFO", "project.delete.completed", { projectId, deleteRemote });
+    return { success: true, projectId };
+  });
+  const activeProviderOperations = new Map<string, Promise<any>>();
+
+  handle("provider:login", async (_event, providerValue: unknown) => {
     const provider = parseProvider(
       requireString(providerValue, "provider", 20),
     );
-    const adapter = createAdapter(provider);
-    activeAdapters = new Map([[provider, adapter]]);
-    logEvent("INFO", "provider.login.started", { provider });
-    try {
-      await adapter.launch();
-      await adapter.openLoginMode();
-      const session = await adapter.checkSession();
-      logEvent("INFO", "provider.login.completed", { provider, session });
-      return session;
-    } catch (error) {
-      const diagnosticPath = writeDiagnostic(error, {
-        operation: "provider:login",
-        provider,
-      });
-      throw new Error(
-        `${error instanceof Error ? error.message : String(error)} Диагностика: ${diagnosticPath}`,
+
+    if (activeOrchestrator || activeOrchestrationAdapters) {
+      throw new Error("Orchestration is currently active. Please wait or pause first.");
+    }
+
+    if (activeInteractiveLogin) {
+      if (activeInteractiveLogin.provider === provider) {
+        return activeInteractiveLogin.promise;
+      }
+      const activeName = PROVIDER_METADATA[activeInteractiveLogin.provider as ProviderId]?.name ?? activeInteractiveLogin.provider;
+      const err = new Error(
+        `Сейчас выполняется вход в ${activeName}. Завершите или отмените его перед входом в другую модель.`
       );
+      (err as any).code = "LOGIN_ALREADY_ACTIVE";
+      (err as any).activeProvider = activeInteractiveLogin.provider;
+      throw err;
+    }
+
+    const adapter = createAdapter(provider, 180_000, false);
+    activeLoginAdapters.set(provider, adapter);
+
+    const loginTask = (async () => {
+      logEvent("INFO", "provider.login.started", { provider });
+      try {
+        await adapter.launch();
+        await adapter.openLoginMode();
+        const session = await adapter.checkSession();
+        logEvent("INFO", "provider.login.completed", { provider, session });
+        return session;
+      } catch (error) {
+        const diagnosticPath = writeDiagnostic(error, {
+          operation: "provider:login",
+          provider,
+        });
+        throw new Error(
+          `${error instanceof Error ? error.message : String(error)} Диагностика: ${diagnosticPath}`,
+        );
+      } finally {
+        activeLoginAdapters.delete(provider);
+        await adapter.close().catch((err) => {
+          logEvent("WARN", "provider.login.close_failed", { provider, error: err });
+        });
+      }
+    })();
+
+    activeInteractiveLogin = { provider, promise: loginTask };
+    try {
+      return await loginTask;
     } finally {
-      await closeActiveAdapters();
-      providerOperationActive = false;
+      if (activeInteractiveLogin?.provider === provider) {
+        activeInteractiveLogin = null;
+      }
     }
   });
+
+  handle("provider:status", async (_event, providerValue: unknown) => {
+    const provider = parseProvider(
+      requireString(providerValue, "provider", 20),
+    );
+
+    const meta = PROVIDER_METADATA[provider];
+    if (!meta || !meta.statusProbe) {
+      return { provider, session: "UNKNOWN", ready: false, isSupported: false };
+    }
+
+    if (activeInteractiveLogin?.provider === provider || activeLoginAdapters.has(provider)) {
+      return { provider, session: "BUSY", ready: false };
+    }
+
+    const adapter = createAdapter(provider, 30_000, true);
+    try {
+      await adapter.launch();
+      const session = await adapter.checkSession();
+      return { provider, session, ready: session === "AUTHENTICATED" };
+    } catch (error) {
+      return { provider, session: "UNKNOWN", ready: false, error: String(error) };
+    } finally {
+      await adapter.close().catch(() => undefined);
+    }
+  });
+
   handle(
     "provider:send",
     async (_event, providerValue: unknown, messageValue: unknown) => {
-      if (providerOperationActive || activeOrchestrator || activeAdapters) {
+      if (providerOperationActive || activeOrchestrator || activeOrchestrationAdapters || activeInteractiveLogin) {
         throw new Error("Another provider operation is already active");
       }
       providerOperationActive = true;
@@ -317,8 +438,7 @@ function registerIpc(): void {
       const provider = parseProvider(
         requireString(providerValue, "provider", 20),
       );
-      const adapter = createAdapter(provider);
-      activeAdapters = new Map([[provider, adapter]]);
+      const adapter = createAdapter(provider, 180_000, true);
       logEvent("INFO", "provider.send.started", {
         provider,
         messageLength: message.length,
@@ -343,25 +463,26 @@ function registerIpc(): void {
           `${error instanceof Error ? error.message : String(error)} Диагностика: ${diagnosticPath}`,
         );
       } finally {
-        await closeActiveAdapters();
+        await adapter.close().catch(() => undefined);
         providerOperationActive = false;
       }
     },
   );
+
   handle(
     "orchestration:run",
     async (
       _event,
       inputValue: unknown,
     ) => {
-      if (providerOperationActive || activeOrchestrator || activeAdapters) {
+      if (providerOperationActive || activeOrchestrator || activeOrchestrationAdapters || activeInteractiveLogin) {
         throw new Error("An orchestration run is already active");
       }
       const input = validateRunInput(inputValue);
       const adapters = new Map(
-        input.providers.map((provider) => [provider, createAdapter(provider)]),
+        input.providers.map((provider) => [provider, createAdapter(provider, 180_000, true)]),
       );
-      activeAdapters = adapters;
+      activeOrchestrationAdapters = adapters;
       try {
         const launches = await Promise.allSettled(
           [...adapters.entries()].map(async ([provider, adapter]) => {
@@ -458,7 +579,11 @@ function registerIpc(): void {
         }
         throw new Error(`${message} Диагностика: ${diagnosticPath}`);
       } finally {
-        await closeActiveAdapters();
+        if (activeOrchestrationAdapters) {
+          const toClose = activeOrchestrationAdapters;
+          activeOrchestrationAdapters = null;
+          await Promise.allSettled([...toClose.values()].map((adapter) => adapter.close()));
+        }
         activeOrchestrator = null;
       }
     },
@@ -489,6 +614,17 @@ function registerIpc(): void {
     if (!state) throw new Error("Create Project State before export");
     return new SpecExporter(db()).export(projectId, state);
   });
+  handle("terminal:execute", async (_event, input: unknown) => {
+    const data = input as { command?: string; cwd?: string };
+    const command = requireString(data?.command, "command", 4000);
+    return executeTerminalCommand({ command, cwd: data?.cwd });
+  });
+  handle("twoTier:executeStep", async (_event, input: unknown) => {
+    const data = input as { userTask?: string; simulatedResponse?: string };
+    const userTask = requireString(data?.userTask, "userTask", 10000);
+    const orchestrator = new TwoTierOrchestrator();
+    return orchestrator.executeCycleStep(userTask, data?.simulatedResponse);
+  });
 }
 
 app.whenReady().then(() => {
@@ -513,7 +649,7 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", (event) => {
-  if ((!activeOrchestrator && !activeAdapters) || quitAfterCleanup) return;
+  if ((!activeOrchestrator && !activeOrchestrationAdapters && activeLoginAdapters.size === 0) || quitAfterCleanup) return;
   event.preventDefault();
   void (async () => {
     await activeOrchestrator?.stop();

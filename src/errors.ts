@@ -25,3 +25,17 @@ export class TurnTimeoutError extends Error {
     this.name = "TurnTimeoutError";
   }
 }
+
+export class LoginCancelledError extends Error {
+  constructor(message = "Пользователь закрыл окно до завершения входа") {
+    super(message);
+    this.name = "LoginCancelledError";
+  }
+}
+
+export class LoginTimeoutError extends Error {
+  constructor(message = "Время ожидания входа истекло") {
+    super(message);
+    this.name = "LoginTimeoutError";
+  }
+}

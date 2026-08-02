@@ -7,8 +7,8 @@ import { type ProviderId, PROVIDER_METADATA } from "../settings/settings.js";
 
 export { ProviderId };
 
-export function createAdapter(provider: ProviderId, timeoutMs?: number): ModelAdapter {
-  const options = timeoutMs === undefined ? {} : { timeoutMs };
+export function createAdapter(provider: ProviderId, timeoutMs?: number, headless?: boolean): ModelAdapter {
+  const options = { ...(timeoutMs !== undefined ? { timeoutMs } : {}), ...(headless !== undefined ? { headless } : {}) };
   if (provider === "chatgpt") return new ChatGptAdapter(options);
   if (provider === "gemini") return new GeminiAdapter(options);
   if (provider === "deepseek") return new DeepSeekAdapter(options);
