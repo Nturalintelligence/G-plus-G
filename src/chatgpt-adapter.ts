@@ -84,7 +84,7 @@ export class ChatGptAdapter implements ModelAdapter {
     this.profileLock = new ProfileLock(this.profileDir);
     this.timeoutMs = options.timeoutMs ?? 180_000;
     this.settleMs = options.settleMs ?? 2_500;
-    this.headless = options.headless ?? false;
+    this.headless = options.headless ?? true;
   }
 
   async launch(): Promise<void> {
@@ -256,17 +256,21 @@ export class ChatGptAdapter implements ModelAdapter {
   }
 
   async waitForManualLogin(): Promise<void> {
-    console.log("Войдите в ChatGPT в открытом окне. CLI продолжит работу после появления поля ввода.");
+    const page = this.requirePage();
+    console.log("Войдите в ChatGPT в открытом окне.");
     const deadline = Date.now() + 10 * 60_000;
-    while (Date.now() < deadline) {
-      const state = await this.checkSession();
-      if (state === "CHALLENGE_REQUIRED") {
-        console.log("Обнаружена проверка. Решите её вручную в браузере.");
+    while (Date.now() < deadline && !page.isClosed()) {
+      const state = await this.checkSession().catch(() => "UNKNOWN");
+      if (state === "AUTHENTICATED") {
+        // Wait until user closes the window or 5 minutes pass
+        await page.waitForEvent("close", { timeout: 300_000 }).catch(() => undefined);
+        return;
       }
-      if (state === "AUTHENTICATED") return;
-      await this.requirePage().waitForTimeout(1_000);
+      await page.waitForTimeout(1_000).catch(() => undefined);
     }
-    throw new TurnTimeoutError("Поле ввода не появилось за 10 минут");
+    if (!page.isClosed()) {
+      throw new TurnTimeoutError("Поле ввода не появилось за 10 минут");
+    }
   }
 
   async diagnostics(): Promise<DiagnosticReport> {

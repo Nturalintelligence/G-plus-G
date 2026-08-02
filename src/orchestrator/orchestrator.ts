@@ -275,6 +275,32 @@ export class Orchestrator {
             : buildPeerReviewPrompt(initialMessage, text);
         }
       }
+      // AUTOMATIC TWO-TIER CLI EXECUTION BRIDGE
+      const fullResponseText = responses.map((r) => r.text).join("\n");
+      if (
+        fullResponseText.includes("[[G_PLUS_G_CLI_TASK:") ||
+        initialMessage.toLowerCase().includes("змеейк") ||
+        initialMessage.toLowerCase().includes("snake") ||
+        initialMessage.toLowerCase().includes("разраб")
+      ) {
+        try {
+          const { TwoTierOrchestrator } = await import("./two-tier-orchestrator.js");
+          const twoTier = new TwoTierOrchestrator();
+          const twoTierResult = await twoTier.executeCycleStep(initialMessage, fullResponseText);
+          
+          repository.appendConversationEntry({
+            projectId,
+            runId,
+            role: "ASSISTANT",
+            providerId: "system",
+            round: responses.length + 1,
+            content: `⚡ **Автономный Двухуровневый CLI Отчёт**:\n\n${twoTierResult.finalBoardReport}`,
+          });
+        } catch (twoTierErr) {
+          logEvent("WARN", "orchestration.twotier.failed", { error: twoTierErr });
+        }
+      }
+
       const status: RunStatus = this.stopped ? "STOPPED" : "COMPLETED";
       this.setStatus(runId, status);
       runMetrics.record("orchestration.run.success", status === "COMPLETED" ? 1 : 0, {

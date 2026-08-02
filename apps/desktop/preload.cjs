@@ -55,6 +55,10 @@ const api = {
   terminal: {
     execute: (command, cwd) => ipcRenderer.invoke("terminal:execute", { command, cwd }),
   },
+  twoTier: {
+    executeStep: (userTask, simulatedResponse) =>
+      ipcRenderer.invoke("twoTier:executeStep", { userTask, simulatedResponse }),
+  },
   settings: {
     get: () => ipcRenderer.invoke("settings:get"),
     save: (value) => ipcRenderer.invoke("settings:save", value),

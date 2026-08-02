@@ -36,6 +36,7 @@ import { resetProviderSession } from "../../src/maintenance.js";
 import { QualityMetrics } from "../../src/observability/metrics.js";
 import { globalEventBus } from "../../src/events/event-bus.js";
 import { executeTerminalCommand } from "../../src/terminal/terminal-engine.js";
+import { TwoTierOrchestrator } from "../../src/orchestrator/two-tier-orchestrator.js";
 
 let mainWindow: BrowserWindow | null = null;
 let database: AppDatabase | null = null;
@@ -279,6 +280,11 @@ function registerIpc(): void {
         ? 0
         : repository.recoverUnfinishedTurns(projectId),
       recoveredRuns,
+      conversations: repository.getConversationsForProject(projectId).map((c) => ({
+        id: c.id,
+        providerId: c.providerId,
+        externalRef: c.externalRef,
+      })),
       events: repository.projectEvents(projectId),
       transcript: repository.conversationEntries(projectId),
       state: new ProjectStateService(db()).latest(projectId),
@@ -329,7 +335,7 @@ function registerIpc(): void {
     const provider = parseProvider(
       requireString(providerValue, "provider", 20),
     );
-    const adapter = createAdapter(provider);
+    const adapter = createAdapter(provider, 180_000, false);
     activeAdapters = new Map([[provider, adapter]]);
     logEvent("INFO", "provider.login.started", { provider });
     try {
@@ -538,6 +544,12 @@ function registerIpc(): void {
     const data = input as { command?: string; cwd?: string };
     const command = requireString(data?.command, "command", 4000);
     return executeTerminalCommand({ command, cwd: data?.cwd });
+  });
+  handle("twoTier:executeStep", async (_event, input: unknown) => {
+    const data = input as { userTask?: string; simulatedResponse?: string };
+    const userTask = requireString(data?.userTask, "userTask", 10000);
+    const orchestrator = new TwoTierOrchestrator();
+    return orchestrator.executeCycleStep(userTask, data?.simulatedResponse);
   });
 }
 

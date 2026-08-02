@@ -79,7 +79,7 @@ export class GeminiAdapter implements ModelAdapter {
     this.profileDir = resolve(options.profileDir ?? dataPath("profiles", "gemini"));
     this.lock = new ProfileLock(this.profileDir);
     this.timeoutMs = options.timeoutMs ?? 180_000;
-    this.headless = options.headless ?? false;
+    this.headless = options.headless ?? true;
   }
 
   async launch(): Promise<void> {
@@ -123,16 +123,16 @@ export class GeminiAdapter implements ModelAdapter {
   }
 
   async openLoginMode(): Promise<void> {
-    await this.context?.close();
-    this.context = null;
-    this.page = null;
-    await loginInSystemChrome(this.profileDir, GEMINI_URL);
-    await this.launchAutomatedBrowser();
-    const state = await this.waitUntilReady();
-    if (state !== "AUTHENTICATED") {
-      throw new LoginRequiredError(
-        `Вход Gemini не сохранился в выделенном профиле. Текущее состояние: ${state}`,
-      );
+    const page = await this.ensurePage();
+    await page.goto(GEMINI_URL, { waitUntil: "domcontentloaded" });
+    const deadline = Date.now() + 10 * 60_000;
+    while (Date.now() < deadline && !page.isClosed()) {
+      const state = await this.checkSession().catch(() => "UNKNOWN");
+      if (state === "AUTHENTICATED") {
+        await page.waitForEvent("close", { timeout: 300_000 }).catch(() => undefined);
+        return;
+      }
+      await page.waitForTimeout(1_000).catch(() => undefined);
     }
   }
 
