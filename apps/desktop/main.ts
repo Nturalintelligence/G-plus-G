@@ -18,6 +18,7 @@ import { ProjectStateService, type ProjectState } from "../../src/project-state.
 import { AppDatabase } from "../../src/storage/database.js";
 import { ProjectRepository } from "../../src/storage/repository.js";
 import { CliExecutionService } from "../../src/cli-executors/cli-execution-service.js";
+import type { AttachmentRefV1 } from "../../src/attachments/attachments.js";
 import type { ModelAdapter } from "../../src/adapters/adapter-contract.js";
 import { configureDataRoot, dataPath } from "../../src/paths.js";
 import {
@@ -44,7 +45,6 @@ import { ThreeTierMemoryManager } from "../../src/context/three-tier-memory.js";
 import { ContextRolloverManager } from "../../src/context/context-rollover.js";
 import { PromptRegistry } from "../../src/orchestrator/prompt-registry.js";
 import { LocalArtifactStore } from "../../src/attachments/artifact-store.js";
-import { AttachmentRefV1 } from "../../src/attachments/attachments.js";
 
 let mainWindow: BrowserWindow | null = null;
 let database: AppDatabase | null = null;
@@ -184,6 +184,7 @@ function validateRunInput(value: unknown): {
   limits?: OrchestrationLimits | undefined;
   finalizerMode?: string | undefined;
   finalResponder?: string | undefined;
+  attachments?: AttachmentRefV1[] | undefined;
 } {
   if (!value || typeof value !== "object") throw new Error("Invalid run input");
   const input = value as Record<string, unknown>;
@@ -215,6 +216,32 @@ function validateRunInput(value: unknown): {
   if (limits) validateLimits(limits);
   const finalizerMode = typeof input.finalizerMode === "string" ? input.finalizerMode : undefined;
   const finalResponder = typeof input.finalResponder === "string" ? input.finalResponder : undefined;
+  const attachments: AttachmentRefV1[] = [];
+  if (Array.isArray(input.attachments)) {
+    for (const attItem of input.attachments.slice(0, 10)) {
+      const attId = typeof attItem === "string" ? attItem : (attItem as any)?.id;
+      if (typeof attId === "string" && attId.trim().length > 0) {
+        const row = db().raw.prepare("SELECT * FROM message_attachments WHERE id = ? AND project_id = ?").get(attId, projectId) as Record<string, unknown> | undefined;
+        if (row) {
+          attachments.push({
+            id: String(row.id),
+            messageId: String(row.message_id),
+            projectId: String(row.project_id),
+            kind: row.kind as any,
+            fileName: String(row.file_name),
+            mimeType: String(row.mime_type),
+            sizeBytes: Number(row.size_bytes),
+            sha256: String(row.sha256),
+            localRelativePath: String(row.local_relative_path),
+            source: row.source as any,
+            status: row.status as any,
+            quarantineReason: row.quarantine_reason ? String(row.quarantine_reason) as any : undefined,
+          });
+        }
+      }
+    }
+  }
+
   return {
     projectId,
     mode: input.mode as RunMode,
@@ -223,6 +250,7 @@ function validateRunInput(value: unknown): {
     limits: input.limits as OrchestrationLimits | undefined,
     finalizerMode,
     finalResponder,
+    attachments,
   };
 }
 
@@ -593,6 +621,7 @@ function registerIpc(): void {
               }
             },
           },
+          input.attachments,
         );
       } catch (error) {
         const diagnosticPath = writeDiagnostic(error, {

@@ -1,4 +1,6 @@
 import { fingerprint } from "../fingerprint.js";
+import { TurnChannel } from "../adapters/turn-channel.js";
+import type { AttachmentRefV1 } from "../attachments/attachments.js";
 import { newId } from "../ids.js";
 import type {
   ConversationRef,
@@ -98,13 +100,14 @@ export class Orchestrator {
     await this.cancelActiveTurns();
   }
 
-  async run(
+  public async run(
     projectId: string,
     mode: RunMode,
     task: string,
     providerIds: string[],
     limits: OrchestrationLimits = defaultLimits,
     hooks: RunHooks = {},
+    attachments?: AttachmentRefV1[],
   ): Promise<RunOutput> {
     validateLimits(limits);
     if (providerIds.length === 0) throw new Error("At least one provider is required");
@@ -157,6 +160,7 @@ export class Orchestrator {
                   initialMessage,
                   limits,
                   hooks,
+                  attachments,
                 ),
               ),
               round: 1,
@@ -196,6 +200,7 @@ export class Orchestrator {
               initialMessage,
               limits,
               hooks,
+              attachments,
             ),
           ),
           round: 1,
@@ -231,6 +236,7 @@ export class Orchestrator {
             message,
             limits,
             hooks,
+            turn < providerIds.length ? attachments : undefined,
           );
           const agreed =
             effectiveMode === "DEBATE" && rawText.includes(consensusToken);
@@ -358,6 +364,7 @@ export class Orchestrator {
     message: string,
     limits: OrchestrationLimits,
     hooks: RunHooks,
+    attachments?: AttachmentRefV1[],
   ): Promise<string> {
     const adapter = this.adapters.get(providerId);
     if (!adapter) throw new Error(`Adapter is not registered: ${providerId}`);
@@ -390,7 +397,7 @@ export class Orchestrator {
           attempt: attemptIndex + 1,
         });
         repository.updateTurnStatus(started.turn.id, "SUBMITTING");
-        turn = await adapter.sendMessage({ content: edited });
+        turn = await adapter.sendMessage(attachments ? { content: edited, attachments } : { content: edited });
         repository.updateTurnStatus(started.turn.id, "WAITING_RESPONSE");
         logEvent("INFO", "provider.turn.submitted", {
           runId: this.activeRunId,
