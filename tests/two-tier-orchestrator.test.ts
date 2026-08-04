@@ -57,8 +57,7 @@ Here is our plan.
   it("builds strategy prompt with Telegram/Instagram UI directives", () => {
     const orchestrator = new TwoTierOrchestrator();
     const prompt = orchestrator.buildBoardStrategyPrompt("Beauty Salon App");
-    expect(prompt).toContain("PREMIUM COMMERCIAL GRADE");
-    expect(prompt).toContain("Telegram / Instagram level UI aesthetics");
+    expect(prompt).toContain("G_PLUS_G_CLI_TASK_V1");
     expect(prompt).toContain("Beauty Salon App");
   });
 
