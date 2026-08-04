@@ -64,6 +64,22 @@ const api = {
     get: () => ipcRenderer.invoke("settings:get"),
     save: (value) => ipcRenderer.invoke("settings:save", value),
   },
+  cliTasks: {
+    list: (projectId) => ipcRenderer.invoke("cliTasks:list", projectId),
+    approve: (taskId) => ipcRenderer.invoke("cliTasks:approve", taskId),
+    reject: (taskId, reason) => ipcRenderer.invoke("cliTasks:reject", { taskId, reason }),
+    cancel: (taskId) => ipcRenderer.invoke("cliTasks:cancel", taskId),
+    retry: (taskId) => ipcRenderer.invoke("cliTasks:retry", taskId),
+  },
+  memory: {
+    getBrief: (projectId) => ipcRenderer.invoke("memory:getBrief", projectId),
+    createCheckpoint: (projectId) => ipcRenderer.invoke("memory:createCheckpoint", projectId),
+    rollover: (projectId, provider) => ipcRenderer.invoke("memory:rollover", { projectId, provider }),
+  },
+  prompts: {
+    listProposals: () => ipcRenderer.invoke("prompts:listProposals"),
+    approveProposal: (id) => ipcRenderer.invoke("prompts:approveProposal", id),
+  },
 };
 
 contextBridge.exposeInMainWorld("orchestrator", api);

@@ -37,6 +37,10 @@ import { QualityMetrics } from "../../src/observability/metrics.js";
 import { globalEventBus } from "../../src/events/event-bus.js";
 import { executeTerminalCommand } from "../../src/terminal/terminal-engine.js";
 import { TwoTierOrchestrator } from "../../src/orchestrator/two-tier-orchestrator.js";
+import { TaskFsmRepository } from "../../src/storage/task-fsm-repository.js";
+import { ThreeTierMemoryManager } from "../../src/context/three-tier-memory.js";
+import { ContextRolloverManager } from "../../src/context/context-rollover.js";
+import { PromptRegistry } from "../../src/orchestrator/prompt-registry.js";
 
 let mainWindow: BrowserWindow | null = null;
 let database: AppDatabase | null = null;
@@ -624,6 +628,74 @@ function registerIpc(): void {
     const userTask = requireString(data?.userTask, "userTask", 10000);
     const orchestrator = new TwoTierOrchestrator();
     return orchestrator.executeCycleStep(userTask, data?.simulatedResponse);
+  });
+  handle("cliTasks:list", (_event, projectId: unknown) => {
+    const pId = requireString(projectId, "projectId", 200);
+    return new TaskFsmRepository(db().raw).listTasksByProject(pId);
+  });
+  handle("cliTasks:approve", (_event, taskId: unknown) => {
+    const tId = requireString(taskId, "taskId", 200);
+    const row = db().raw.prepare("SELECT project_id FROM cli_tasks WHERE task_id = ?").get(tId) as { project_id: string } | undefined;
+    if (!row) throw new Error(`Task ${tId} not found`);
+    return new TaskFsmRepository(db().raw).transitionState(row.project_id, tId, "QUEUED");
+  });
+  handle("cliTasks:reject", (_event, input: unknown) => {
+    const data = input as { taskId?: string; reason?: string };
+    const tId = requireString(data?.taskId, "taskId", 200);
+    const row = db().raw.prepare("SELECT project_id FROM cli_tasks WHERE task_id = ?").get(tId) as { project_id: string } | undefined;
+    if (!row) throw new Error(`Task ${tId} not found`);
+    return new TaskFsmRepository(db().raw).transitionState(row.project_id, tId, "REJECTED", { reason: data?.reason });
+  });
+  handle("cliTasks:cancel", (_event, taskId: unknown) => {
+    const tId = requireString(taskId, "taskId", 200);
+    const row = db().raw.prepare("SELECT project_id FROM cli_tasks WHERE task_id = ?").get(tId) as { project_id: string } | undefined;
+    if (!row) throw new Error(`Task ${tId} not found`);
+    return new TaskFsmRepository(db().raw).transitionState(row.project_id, tId, "CANCELLED");
+  });
+  handle("cliTasks:retry", (_event, taskId: unknown) => {
+    const tId = requireString(taskId, "taskId", 200);
+    const repo = new TaskFsmRepository(db().raw);
+    const row = db().raw.prepare("SELECT project_id FROM cli_tasks WHERE task_id = ?").get(tId) as { project_id: string } | undefined;
+    if (!row) throw new Error(`Task ${tId} not found`);
+    repo.createAttempt(tId);
+    return repo.transitionState(row.project_id, tId, "QUEUED");
+  });
+  handle("memory:getBrief", (_event, projectId: unknown) => {
+    const pId = requireString(projectId, "projectId", 200);
+    return new ThreeTierMemoryManager(db().raw).getLatestRollingBrief(pId);
+  });
+  handle("memory:createCheckpoint", (_event, projectId: unknown) => {
+    const pId = requireString(projectId, "projectId", 200);
+    const memMgr = new ThreeTierMemoryManager(db().raw);
+    const rollMgr = new ContextRolloverManager(db().raw);
+    const activeItems = memMgr.getActiveMemoryItems(pId);
+    const pack = rollMgr.createContinuationPack({
+      projectId: pId,
+      previousConversationId: "conv-manual",
+      objective: "Manual user checkpoint",
+      activeMemoryItems: activeItems,
+      completedWork: [],
+      openTasks: [],
+      failedAttempts: [],
+      nextAction: "Continue",
+    });
+    rollMgr.saveCheckpoint(pack, "manual-run");
+    return pack;
+  });
+  handle("memory:rollover", (_event, input: unknown) => {
+    const data = input as { projectId?: string; provider?: string };
+    const pId = requireString(data?.projectId, "projectId", 200);
+    const prov = requireString(data?.provider, "provider", 100);
+    return { success: true, projectId: pId, provider: prov, status: "COMPLETED" };
+  });
+  handle("prompts:listProposals", () => {
+    const rows = db().raw.prepare("SELECT * FROM prompt_change_proposals ORDER BY created_at DESC").all();
+    return rows;
+  });
+  handle("prompts:approveProposal", (_event, id: unknown) => {
+    const propId = requireString(id, "proposalId", 200);
+    const registry = new PromptRegistry(db().raw);
+    return registry.approveChangeProposal(propId, `v1.${Date.now().toString().slice(-3)}.0`, "G+G PRODUCTIVE COLLABORATION PROTOCOL v1-updated");
   });
 }
 

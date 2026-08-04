@@ -70,6 +70,22 @@ interface Window {
       get(): Promise<AppSettingsView>;
       save(value: AppSettingsView): Promise<AppSettingsView>;
     };
+    cliTasks: {
+      list(projectId: string): Promise<any[]>;
+      approve(taskId: string): Promise<any>;
+      reject(taskId: string, reason: string): Promise<any>;
+      cancel(taskId: string): Promise<any>;
+      retry(taskId: string): Promise<any>;
+    };
+    memory: {
+      getBrief(projectId: string): Promise<any>;
+      createCheckpoint(projectId: string): Promise<any>;
+      rollover(projectId: string, provider: string): Promise<any>;
+    };
+    prompts: {
+      listProposals(): Promise<any[]>;
+      approveProposal(id: string): Promise<any>;
+    };
   };
 }
 
