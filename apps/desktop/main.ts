@@ -17,6 +17,7 @@ import { Orchestrator, type RunMode } from "../../src/orchestrator/orchestrator.
 import { ProjectStateService, type ProjectState } from "../../src/project-state.js";
 import { AppDatabase } from "../../src/storage/database.js";
 import { ProjectRepository } from "../../src/storage/repository.js";
+import { CliExecutionService } from "../../src/cli-executors/cli-execution-service.js";
 import type { ModelAdapter } from "../../src/adapters/adapter-contract.js";
 import { configureDataRoot, dataPath } from "../../src/paths.js";
 import {
@@ -65,6 +66,17 @@ protocol.registerSchemesAsPrivileged([
     },
   },
 ]);
+
+let cliService: CliExecutionService | null = null;
+
+function getCliService(): CliExecutionService {
+  if (!cliService) {
+    cliService = new CliExecutionService(db().raw, {
+      desktopPath: app.getPath("desktop"),
+    });
+  }
+  return cliService;
+}
 
 function db(): AppDatabase {
   if (!database) throw new Error("Database is not initialized");
@@ -342,11 +354,28 @@ function registerIpc(): void {
     }
 
     const repository = new ProjectRepository(db());
-    repository.deleteProject(projectId);
-
-    logEvent("INFO", "project.delete.completed", { projectId, deleteRemote });
-    return { success: true, projectId };
+    new ProjectRepository(db()).deleteProject(projectId);
+    logEvent("INFO", "project.delete.completed", { projectId });
+    return { success: true };
   });
+
+  handle("cliTasks:approve", async (_event, projectIdValue: unknown, taskIdValue: unknown) => {
+    const projectId = requireString(projectIdValue, "projectId", 200);
+    const taskId = requireString(taskIdValue, "taskId", 200);
+    return getCliService().approveTask(projectId, taskId);
+  });
+
+  handle("cliTasks:reject", async (_event, projectIdValue: unknown, taskIdValue: unknown, reasonValue?: unknown) => {
+    const projectId = requireString(projectIdValue, "projectId", 200);
+    const taskId = requireString(taskIdValue, "taskId", 200);
+    const reason = typeof reasonValue === "string" ? reasonValue : undefined;
+    return getCliService().rejectTask(projectId, taskId, reason);
+  });
+
+  handle("cliTasks:executors", async () => {
+    return getCliService().getAvailableExecutors();
+  });
+
   const activeProviderOperations = new Map<string, Promise<any>>();
 
   handle("provider:login", async (_event, providerValue: unknown) => {
