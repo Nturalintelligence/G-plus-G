@@ -1,4 +1,4 @@
-const { contextBridge, ipcRenderer } = require("electron");
+const { contextBridge, ipcRenderer, webUtils } = require("electron");
 
 const api = {
   system: {
@@ -80,6 +80,16 @@ const api = {
     listProposals: () => ipcRenderer.invoke("prompts:listProposals"),
     approveProposal: (id) => ipcRenderer.invoke("prompts:approveProposal", id),
   },
+  attachments: {
+    pickFiles: (projectId, messageId) => ipcRenderer.invoke("attachments:pickFiles", { projectId, messageId }),
+    stageDroppedFile: (projectId, messageId, filePath) => ipcRenderer.invoke("attachments:stageDroppedFile", { projectId, messageId, filePath }),
+    stageClipboardImage: (projectId, messageId, base64Data) => ipcRenderer.invoke("attachments:stageClipboardImage", { projectId, messageId, base64Data }),
+    removeDraft: (attachmentId) => ipcRenderer.invoke("attachments:removeDraft", attachmentId),
+    open: (attachmentId) => ipcRenderer.invoke("attachments:open", attachmentId),
+    saveAs: (attachmentId) => ipcRenderer.invoke("attachments:saveAs", attachmentId),
+    getPreviewUrl: (attachmentId) => ipcRenderer.invoke("attachments:getPreviewUrl", attachmentId),
+  },
+  getPathForFile: (file) => webUtils.getPathForFile(file),
 };
 
 contextBridge.exposeInMainWorld("orchestrator", api);

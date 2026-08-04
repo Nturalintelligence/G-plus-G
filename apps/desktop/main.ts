@@ -1,4 +1,5 @@
-import { join, resolve, sep } from "node:path";
+import fs from "node:fs";
+import path, { join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   app,
@@ -41,6 +42,8 @@ import { TaskFsmRepository } from "../../src/storage/task-fsm-repository.js";
 import { ThreeTierMemoryManager } from "../../src/context/three-tier-memory.js";
 import { ContextRolloverManager } from "../../src/context/context-rollover.js";
 import { PromptRegistry } from "../../src/orchestrator/prompt-registry.js";
+import { LocalArtifactStore } from "../../src/attachments/artifact-store.js";
+import { AttachmentRefV1 } from "../../src/attachments/attachments.js";
 
 let mainWindow: BrowserWindow | null = null;
 let database: AppDatabase | null = null;
@@ -696,6 +699,164 @@ function registerIpc(): void {
     const propId = requireString(id, "proposalId", 200);
     const registry = new PromptRegistry(db().raw);
     return registry.approveChangeProposal(propId, `v1.${Date.now().toString().slice(-3)}.0`, "G+G PRODUCTIVE COLLABORATION PROTOCOL v1-updated");
+  });
+  handle("attachments:pickFiles", async (_event, input: unknown) => {
+    const data = input as { projectId?: string; messageId?: string };
+    const projectId = requireString(data?.projectId, "projectId", 200);
+    const messageId = data?.messageId || `msg_${Date.now()}`;
+    const result = await dialog.showOpenDialog(mainWindow!, {
+      properties: ["openFile", "multiSelections"],
+      title: "Select Attachments",
+    });
+    if (result.canceled || !result.filePaths.length) return [];
+
+    const store = new LocalArtifactStore();
+    const refs: AttachmentRefV1[] = [];
+    for (const filePath of result.filePaths) {
+      const fileBuf = fs.readFileSync(filePath);
+      const ref = store.storeBuffer(fileBuf, {
+        projectId,
+        messageId,
+        source: "user",
+        originalFileName: path.basename(filePath),
+      });
+      db().raw.prepare(`
+        INSERT OR REPLACE INTO message_attachments
+        (id, message_id, project_id, kind, file_name, mime_type, size_bytes, sha256, local_relative_path, source, status, quarantine_reason, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        ref.id,
+        ref.messageId,
+        ref.projectId,
+        ref.kind,
+        ref.fileName,
+        ref.mimeType,
+        ref.sizeBytes,
+        ref.sha256,
+        ref.localRelativePath,
+        ref.source,
+        ref.status,
+        ref.quarantineReason || null,
+        new Date().toISOString()
+      );
+      refs.push(ref);
+    }
+    return refs;
+  });
+  handle("attachments:stageDroppedFile", async (_event, input: unknown) => {
+    const data = input as { projectId?: string; messageId?: string; filePath?: string };
+    const projectId = requireString(data?.projectId, "projectId", 200);
+    const messageId = data?.messageId || `msg_${Date.now()}`;
+    const filePath = requireString(data?.filePath, "filePath", 1000);
+
+    const store = new LocalArtifactStore();
+    const fileBuf = fs.readFileSync(filePath);
+    const ref = store.storeBuffer(fileBuf, {
+      projectId,
+      messageId,
+      source: "user",
+      originalFileName: path.basename(filePath),
+    });
+    db().raw.prepare(`
+      INSERT OR REPLACE INTO message_attachments
+      (id, message_id, project_id, kind, file_name, mime_type, size_bytes, sha256, local_relative_path, source, status, quarantine_reason, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      ref.id,
+      ref.messageId,
+      ref.projectId,
+      ref.kind,
+      ref.fileName,
+      ref.mimeType,
+      ref.sizeBytes,
+      ref.sha256,
+      ref.localRelativePath,
+      ref.source,
+      ref.status,
+      ref.quarantineReason || null,
+      new Date().toISOString()
+    );
+    return ref;
+  });
+  handle("attachments:stageClipboardImage", async (_event, input: unknown) => {
+    const data = input as { projectId?: string; messageId?: string; base64Data?: string };
+    const projectId = requireString(data?.projectId, "projectId", 200);
+    const messageId = data?.messageId || `msg_${Date.now()}`;
+    const base64Data = requireString(data?.base64Data, "base64Data", 15_000_000);
+
+    const cleanBase64 = base64Data.replace(/^data:image\/\w+;base64,/, "");
+    const fileBuf = Buffer.from(cleanBase64, "base64");
+
+    const store = new LocalArtifactStore();
+    const ref = store.storeBuffer(fileBuf, {
+      projectId,
+      messageId,
+      source: "user",
+      originalFileName: `pasted_screenshot_${Date.now()}.png`,
+    });
+    db().raw.prepare(`
+      INSERT OR REPLACE INTO message_attachments
+      (id, message_id, project_id, kind, file_name, mime_type, size_bytes, sha256, local_relative_path, source, status, quarantine_reason, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      ref.id,
+      ref.messageId,
+      ref.projectId,
+      ref.kind,
+      ref.fileName,
+      ref.mimeType,
+      ref.sizeBytes,
+      ref.sha256,
+      ref.localRelativePath,
+      ref.source,
+      ref.status,
+      ref.quarantineReason || null,
+      new Date().toISOString()
+    );
+    return ref;
+  });
+  handle("attachments:removeDraft", (_event, attachmentId: unknown) => {
+    const id = requireString(attachmentId, "attachmentId", 200);
+    db().raw.prepare("DELETE FROM message_attachments WHERE id = ?").run(id);
+    return { success: true };
+  });
+  handle("attachments:open", async (_event, attachmentId: unknown) => {
+    const id = requireString(attachmentId, "attachmentId", 200);
+    const row = db().raw.prepare("SELECT local_relative_path FROM message_attachments WHERE id = ?").get(id) as { local_relative_path: string } | undefined;
+    if (!row) return { success: false, error: "Attachment not found" };
+
+    const store = new LocalArtifactStore();
+    const fullPath = store.resolveAbsolutePath(row.local_relative_path);
+    const err = await shell.openPath(fullPath);
+    return { success: !err, error: err || undefined };
+  });
+  handle("attachments:saveAs", async (_event, attachmentId: unknown) => {
+    const id = requireString(attachmentId, "attachmentId", 200);
+    const row = db().raw.prepare("SELECT file_name, local_relative_path FROM message_attachments WHERE id = ?").get(id) as { file_name: string; local_relative_path: string } | undefined;
+    if (!row) return { success: false };
+
+    const saveRes = await dialog.showSaveDialog(mainWindow!, {
+      defaultPath: row.file_name,
+    });
+    if (saveRes.canceled || !saveRes.filePath) return { success: false };
+
+    const store = new LocalArtifactStore();
+    const buf = store.readBuffer(row.local_relative_path);
+    fs.writeFileSync(saveRes.filePath, buf);
+    return { success: true, targetPath: saveRes.filePath };
+  });
+  handle("attachments:getPreviewUrl", (_event, attachmentId: unknown) => {
+    const id = requireString(attachmentId, "attachmentId", 200);
+    const row = db().raw.prepare("SELECT mime_type, local_relative_path FROM message_attachments WHERE id = ?").get(id) as { mime_type: string; local_relative_path: string } | undefined;
+    if (!row) return null;
+
+    try {
+      const store = new LocalArtifactStore();
+      const buf = store.readBuffer(row.local_relative_path);
+      return `data:${row.mime_type};base64,${buf.toString("base64")}`;
+    } catch {
+      return null;
+    }
   });
 }
 

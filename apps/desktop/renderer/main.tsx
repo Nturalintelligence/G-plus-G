@@ -186,34 +186,58 @@ function App(): React.JSX.Element {
     }
   }
 
-  function handleFileAttach(e: React.ChangeEvent<HTMLInputElement>) {
-    const files = Array.from(e.target.files || []);
-    if (files.length === 0) return;
-    const newItems: AttachedFileItem[] = [];
-    for (const file of files) {
-      const check = validateFileForProviders(file.name, providers);
-      if (!check.valid) {
-        setStatus(`Файл '${file.name}' (${check.extension}) не поддерживается ИИ: ${check.unsupportedProviders.join(", ")}`);
-        return;
-      }
-      newItems.push({
-        id: `file-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-        name: file.name,
-        size: file.size,
-        type: file.type,
-      });
+  async function handlePickFiles() {
+    if (!current) {
+      setShowNoProjectToast(true);
+      return;
     }
-    setAttachedFiles((prev) => [...prev, ...newItems]);
-    setStatus(`Прикреплено файлов: ${files.length}`);
+    try {
+      const refs = await window.orchestrator.attachments.pickFiles(current.project.id, `msg_${Date.now()}`);
+      if (refs && refs.length > 0) {
+        setAttachedFiles((prev: any[]) => [...prev, ...refs]);
+        setStatus(`Прикреплено файлов: ${refs.length}`);
+      }
+    } catch (err: any) {
+      setStatus(`Ошибка выбора файла: ${err.message}`);
+    }
   }
 
-  function removeFile(target: string | number) {
-    setAttachedFiles((prev) =>
-      prev.filter((item, index) => (typeof target === "number" ? index !== target : item.id !== target)),
-    );
+  async function handleDropFiles(e: React.DragEvent<HTMLElement>) {
+    e.preventDefault();
+    if (!current || !e.dataTransfer.files.length) return;
+    const projectId = current.project.id;
+    const messageId = `msg_${Date.now()}`;
+    const newRefs: AttachmentRefView[] = [];
+
+    for (const file of Array.from(e.dataTransfer.files)) {
+      try {
+        const filePath = window.orchestrator.getPathForFile(file);
+        if (filePath) {
+          const ref = await window.orchestrator.attachments.stageDroppedFile(projectId, messageId, filePath);
+          newRefs.push(ref);
+        }
+      } catch (err: any) {
+        setStatus(`Ошибка прикрепления файла: ${err.message}`);
+      }
+    }
+
+    if (newRefs.length > 0) {
+      setAttachedFiles((prev: any[]) => [...prev, ...newRefs]);
+      setStatus(`Прикреплено файлов перетаскиванием: ${newRefs.length}`);
+    }
   }
 
-  function handlePaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
+  async function removeFile(attachmentId: string) {
+    try {
+      await window.orchestrator.attachments.removeDraft(attachmentId);
+    } catch {
+      // Ignore cleanup error
+    }
+    setAttachedFiles((prev: any[]) => prev.filter((f: any) => f.id !== attachmentId));
+  }
+
+  async function handlePaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
+    if (!current) return;
     const items = Array.from(e.clipboardData.items || []);
     const fileItems = items.filter((item) => item.kind === "file");
     if (fileItems.length === 0) return;
@@ -222,42 +246,27 @@ function App(): React.JSX.Element {
       const file = item.getAsFile();
       if (!file) continue;
 
-      const filename = file.name || `screenshot_${Date.now()}.${file.type.split("/")[1] || "png"}`;
-      const check = validateFileForProviders(filename, providers);
-      if (!check.valid) {
-        setStatus(`Файл из буфера '${filename}' не поддерживается ИИ: ${check.unsupportedProviders.join(", ")}`);
-        continue;
-      }
-
       if (file.type.startsWith("image/")) {
         const reader = new FileReader();
-        reader.onload = (event) => {
-          const dataUrl = event.target?.result as string;
-          setAttachedFiles((prev) => [
-            ...prev,
-            {
-              id: `file-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-              name: filename,
-              size: file.size,
-              type: file.type,
-              dataUrl,
-            },
-          ]);
+        reader.onload = async (event) => {
+          const base64Data = event.target?.result as string;
+          if (base64Data) {
+            try {
+              const ref = await window.orchestrator.attachments.stageClipboardImage(
+                current.project.id,
+                `msg_${Date.now()}`,
+                base64Data
+              );
+              setAttachedFiles((prev: any[]) => [...prev, ref]);
+              setStatus("Вставлено изображение из буфера обмена (Ctrl+V)");
+            } catch (err: any) {
+              setStatus(`Ошибка вставки из буфера: ${err.message}`);
+            }
+          }
         };
         reader.readAsDataURL(file);
-      } else {
-        setAttachedFiles((prev) => [
-          ...prev,
-          {
-            id: `file-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-            name: filename,
-            size: file.size,
-            type: file.type,
-          },
-        ]);
       }
     }
-    setStatus(`Вставлено из буфера обмена (Ctrl+V)`);
   }
 
   async function confirmDeleteProject(deleteRemote: boolean): Promise<void> {
@@ -416,7 +425,9 @@ function App(): React.JSX.Element {
         limits: settings.defaults.limits,
         finalizerMode,
         finalResponder,
+        attachments: attachedFiles,
       });
+      setAttachedFiles([]);
       setStatus(
         output.consensusReached
           ? "Модели независимо подтвердили согласованное решение"
@@ -921,7 +932,11 @@ function App(): React.JSX.Element {
             </div>
           ) : null}
 
-          <div className="composer panel composer-bottom">
+          <div
+            className="composer panel composer-bottom"
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={(e) => void handleDropFiles(e)}
+          >
             <RunSummaryBar
               viewMode={viewMode}
               setViewMode={setViewMode}
@@ -939,12 +954,16 @@ function App(): React.JSX.Element {
             />
 
             <div className="composer-input-row">
-              <label className="file-attach-btn" title="Прикрепить файл или картинку">
+              <button
+                type="button"
+                className="file-attach-btn"
+                onClick={() => void handlePickFiles()}
+                title="Прикрепить файл или картинку"
+              >
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
                 </svg>
-                <input type="file" onChange={handleFileAttach} hidden multiple />
-              </label>
+              </button>
               <textarea
                 aria-label="Сообщение для моделей"
                 value={task}

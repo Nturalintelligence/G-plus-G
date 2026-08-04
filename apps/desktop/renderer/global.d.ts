@@ -86,7 +86,32 @@ interface Window {
       listProposals(): Promise<any[]>;
       approveProposal(id: string): Promise<any>;
     };
+    attachments: {
+      pickFiles(projectId: string, messageId: string): Promise<AttachmentRefView[]>;
+      stageDroppedFile(projectId: string, messageId: string, filePath: string): Promise<AttachmentRefView>;
+      stageClipboardImage(projectId: string, messageId: string, base64Data: string): Promise<AttachmentRefView>;
+      removeDraft(attachmentId: string): Promise<{ success: boolean }>;
+      open(attachmentId: string): Promise<{ success: boolean; error?: string }>;
+      saveAs(attachmentId: string): Promise<{ success: boolean; targetPath?: string }>;
+      getPreviewUrl(attachmentId: string): Promise<string | null>;
+    };
+    getPathForFile(file: File): string;
   };
+}
+
+interface AttachmentRefView {
+  id: string;
+  messageId: string;
+  projectId: string;
+  kind: "image" | "document" | "text" | "archive" | "audio" | "video" | "binary";
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  sha256: string;
+  localRelativePath: string;
+  source: "user" | "chatgpt" | "gemini" | "cli";
+  status: "STAGED" | "UPLOADING" | "READY" | "FAILED" | "QUARANTINED";
+  quarantineReason?: "EXECUTABLE_BLOCKED" | "MIME_MISMATCH" | "SIZE_LIMIT" | "UNSAFE_FILENAME" | "MANUAL_REVIEW_REQUIRED";
 }
 
 interface AppSettingsView {
