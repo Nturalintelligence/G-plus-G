@@ -82,7 +82,10 @@ const api = {
   },
   attachments: {
     pickFiles: (projectId, messageId) => ipcRenderer.invoke("attachments:pickFiles", { projectId, messageId }),
-    stageDroppedFile: (projectId, messageId, filePath) => ipcRenderer.invoke("attachments:stageDroppedFile", { projectId, messageId, filePath }),
+    stageDroppedFile: (projectId, messageId, fileOrPath) => {
+      const filePath = typeof fileOrPath === "string" ? fileOrPath : webUtils.getPathForFile(fileOrPath);
+      return ipcRenderer.invoke("attachments:stageDroppedFile", { projectId, messageId, filePath });
+    },
     stageClipboardImage: (projectId, messageId, base64Data) => ipcRenderer.invoke("attachments:stageClipboardImage", { projectId, messageId, base64Data }),
     removeDraft: (attachmentId) => ipcRenderer.invoke("attachments:removeDraft", attachmentId),
     open: (attachmentId) => ipcRenderer.invoke("attachments:open", attachmentId),
