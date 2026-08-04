@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { CliExecutorBridge, CliTaskExecutionResult, CliToolType } from "../cli-executors/cli-executor-bridge.js";
+import { extractCliTasksV1 } from "../cli-executors/cli-task-schema.js";
 
 export interface TwoTierCycleRequest {
   task: string;
@@ -23,39 +24,29 @@ export interface TwoTierCycleResult {
 
 export function parseCliTasksFromBoardResponse(boardResponseText: string, defaultTool: CliToolType = "gemini"): CliTaskSpec[] {
   const tasks: CliTaskSpec[] = [];
-  const regex = /\[\[G_PLUS_G_CLI_TASK:(.*?)\]\]/gs;
-  let match: RegExpExecArray | null;
+  if (!boardResponseText || typeof boardResponseText !== "string") {
+    return tasks;
+  }
 
-  while ((match = regex.exec(boardResponseText)) !== null) {
-    const rawContent = match[1]?.trim() ?? "";
-    try {
-      if (rawContent.startsWith("{")) {
-        const parsed = JSON.parse(rawContent);
-        tasks.push({
-          tool: (parsed.tool as CliToolType) || defaultTool,
-          task: parsed.task || rawContent,
-        });
-      } else {
-        tasks.push({
-          tool: defaultTool,
-          task: rawContent,
-        });
-      }
-    } catch {
+  // Parse V1 blocks only
+  const v1Results = extractCliTasksV1(boardResponseText);
+  for (const res of v1Results) {
+    if (res.success) {
+      const tool: CliToolType =
+        res.envelope.executor === "codex"
+          ? "codex"
+          : res.envelope.executor === "gemini"
+          ? "gemini"
+          : defaultTool;
       tasks.push({
-        tool: defaultTool,
-        task: rawContent,
+        tool,
+        task: res.envelope.objective || res.envelope.title,
       });
     }
   }
 
-  // Fallback: If no explicit tag was found, extract standard code or action blocks
-  if (tasks.length === 0 && boardResponseText.length > 0) {
-    tasks.push({
-      tool: defaultTool,
-      task: `Execute commercial implementation for: ${boardResponseText.slice(0, 1000)}`,
-    });
-  }
+  // Legacy tags [[G_PLUS_G_CLI_TASK:...]] are strictly NOT executed.
+  // No raw text fallback to first 1000 characters is allowed.
 
   return tasks;
 }
