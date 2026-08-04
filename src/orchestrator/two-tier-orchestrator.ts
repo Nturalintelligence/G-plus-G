@@ -66,18 +66,11 @@ export class TwoTierOrchestrator {
     return `G+G TWO-TIER COMMERCIAL APPLICATION ARCHITECT DIRECTIVE
 
 You are acting as the Chief Product Architect and Lead Designer.
-Target UI/UX Standard: PREMIUM COMMERCIAL GRADE (Telegram / Instagram level UI aesthetics).
-- Dynamic, curated color palettes, dark/light themes.
-- Glassmorphism, smooth CSS transitions, modern typography (Inter/Roboto/Outfit).
-- Clear responsive grid, micro-interactions, zero generic basic MVP placeholders.
-
 YOUR TASK:
 1. Propose the complete architectural plan, UX flow, and module breakdown for:
 ${userTask}
 
-2. Output explicit tasks for tactical CLI executors (Gemini CLI / Codex CLI) using this exact syntax:
-[[G_PLUS_G_CLI_TASK:{"tool":"gemini","task":"Create index.css with Telegram-grade theme tokens and glassmorphism utilities"}]]
-[[G_PLUS_G_CLI_TASK:{"tool":"codex","task":"Create main component structure and run npm test to verify"}]]
+2. Output explicit tasks for tactical CLI executors using complete G_PLUS_G_CLI_TASK_V1 envelopes matching the schema.
 
 STRICT RULE: Respond in the exact language of the user task (if Russian, write in Russian).`;
   }
@@ -91,7 +84,7 @@ STRICT RULE: Respond in the exact language of the user task (if Russian, write i
       return `### Task #${index + 1} [${res.tool.toUpperCase()}] - ${statusStr}\n**Command**: \`${res.commandExecuted}\`\n**Stdout**:\n\`\`\`\n${res.stdout.slice(0, 1500)}\n\`\`\`\n**Stderr**:\n\`\`\`\n${res.stderr.slice(0, 1500)}\n\`\`\``;
     });
 
-    return `TACTICAL CLI EXECUTION & QA REPORT:\n\n${reportLines.join("\n\n---\n\n")}\n\nInspect the test and build results. If all criteria are met, approve the implementation. If failures occurred, issue revised [[G_PLUS_G_CLI_TASK:...]] tags to fix the code.`;
+    return `TACTICAL CLI EXECUTION & QA REPORT:\n\n${reportLines.join("\n\n---\n\n")}\n\nInspect the test and build results. If all criteria are met, approve the implementation. If failures occurred, issue revised G_PLUS_G_CLI_TASK_V1 envelopes to fix the code.`;
   }
 
   /**
@@ -101,7 +94,7 @@ STRICT RULE: Respond in the exact language of the user task (if Russian, write i
     userTask: string,
     simulatedBoardResponse?: string,
   ): Promise<TwoTierCycleResult> {
-    const boardResponse = simulatedBoardResponse || this.buildBoardStrategyPrompt(userTask);
+    const boardResponse = simulatedBoardResponse || userTask;
     const cliTasks = parseCliTasksFromBoardResponse(boardResponse, "gemini");
 
     const cliResults: CliTaskExecutionResult[] = [];
