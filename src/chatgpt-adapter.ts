@@ -11,6 +11,7 @@ import type {
   TurnRef,
 } from "./adapters/adapter-contract.js";
 import { LocalArtifactStore } from "./attachments/artifact-store.js";
+import { ResponseArtifactDownloader } from "./attachments/artifact-downloader.js";
 import type { AttachmentRefV1 } from "./attachments/attachments.js";
 import { TurnChannel } from "./adapters/turn-channel.js";
 import { ProfileLock } from "./browser/profile-lock.js";
@@ -416,10 +417,26 @@ export class ChatGptAdapter implements ModelAdapter {
     channel?.publish({ type: "MESSAGE_SUBMITTED", at: new Date().toISOString() });
 
     const response = await this.waitForBoundResponse(before, channel);
+
+    const extractedArtifacts: AttachmentRefV1[] = [];
+    const extractedLinks: Array<{ label: string; url: string; downloadable: boolean }> = [];
+
+    try {
+      const downloader = new ResponseArtifactDownloader({ prepare: () => ({ run: () => undefined }) } as any);
+      const items = await downloader.extractTurnArtifactsFromPage(page, '[data-message-author-role="assistant"]');
+      for (const item of items) {
+        extractedLinks.push({ label: item.label, url: item.url, downloadable: !item.isImage });
+      }
+    } catch {
+      // Best-effort artifact scan
+    }
+
     return {
       response: response.text,
       responseFingerprint: response.fingerprint,
       elapsedMs: Date.now() - startedAt,
+      artifacts: extractedArtifacts,
+      links: extractedLinks,
     };
   }
 
