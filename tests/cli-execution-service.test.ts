@@ -60,7 +60,18 @@ describe("CliExecutionService Queue & Scheduler Integration", () => {
       dependsOn: [],
     };
 
-    service.fsmRepo.saveTaskEnvelope(envelope, "PROPOSED");
+    service.broker.registerExecutor({
+      id: "codex" as any,
+      capabilities: () => ({ supportsStreaming: true, supportedRisks: ["WORKSPACE_WRITE"], maxTimeoutMs: 5000 }),
+      healthCheck: async () => ({ healthy: true, executorId: "codex" }),
+      execute: async function* (input) {
+        fs.writeFileSync(path.join(input.workspaceRoot, "sample.txt"), "hello");
+        yield { type: "STARTED", at: new Date().toISOString(), attemptId: input.attemptId };
+        yield { type: "PROCESS_EXITED", at: new Date().toISOString(), exitCode: 0 };
+      },
+    });
+
+    service.fsmRepo.saveTaskEnvelope(envelope, "VALIDATED");
     service.fsmRepo.transitionState("p-srv", "task-srv-1", "AWAITING_APPROVAL");
 
     const approvedTask = await service.approveTask("p-srv", "task-srv-1");
