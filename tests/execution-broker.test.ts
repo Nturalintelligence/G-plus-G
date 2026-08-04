@@ -95,7 +95,7 @@ describe("Phase C: Safe Execution Broker & Executor Adapters", () => {
 
     const res = await broker.executeTaskEnvelope(dangerousEnvelope, "att-1", dummyWorkspace);
     expect(res.status).toBe("FAILED");
-    expect(res.summary).toContain("protected component");
+    expect(res.summary).toContain("forbidden system component");
   });
 
   it("should execute task with registered mock executor and run verification steps", async () => {
