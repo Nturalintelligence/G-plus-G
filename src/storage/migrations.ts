@@ -341,4 +341,61 @@ export const migrations: readonly Migration[] = [
       CREATE INDEX run_evaluations_project_idx ON run_evaluations(project_id, prompt_version);
     `,
   },
+  {
+    version: 7,
+    name: "message_attachments_and_artifact_deliveries",
+    sql: `
+      CREATE TABLE message_attachments (
+        id TEXT PRIMARY KEY,
+        message_id TEXT NOT NULL,
+        project_id TEXT NOT NULL REFERENCES projects(id),
+        kind TEXT NOT NULL,
+        file_name TEXT NOT NULL,
+        mime_type TEXT NOT NULL,
+        size_bytes INTEGER NOT NULL,
+        sha256 TEXT NOT NULL,
+        local_relative_path TEXT NOT NULL,
+        source TEXT NOT NULL,
+        status TEXT NOT NULL,
+        quarantine_reason TEXT,
+        provider_metadata_json TEXT,
+        created_at TEXT NOT NULL
+      );
+
+      CREATE TABLE attachment_deliveries (
+        id TEXT PRIMARY KEY,
+        attachment_id TEXT NOT NULL REFERENCES message_attachments(id),
+        provider_id TEXT NOT NULL,
+        conversation_id TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('PENDING', 'UPLOADING', 'DELIVERED', 'UNSUPPORTED', 'FAILED')),
+        provider_file_id TEXT,
+        delivered_at TEXT
+      );
+
+      CREATE TABLE provider_submissions (
+        submission_id TEXT PRIMARY KEY,
+        message_id TEXT NOT NULL,
+        provider_id TEXT NOT NULL,
+        attachment_ids_json TEXT NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('PREPARING', 'FILES_UPLOADED', 'SUBMITTED', 'CONFIRMED', 'UNKNOWN')),
+        created_at TEXT NOT NULL
+      );
+
+      CREATE TABLE downloaded_artifacts (
+        id TEXT PRIMARY KEY,
+        message_id TEXT NOT NULL,
+        project_id TEXT NOT NULL REFERENCES projects(id),
+        provider_id TEXT NOT NULL,
+        original_url TEXT NOT NULL,
+        sha256 TEXT NOT NULL,
+        local_relative_path TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('READY', 'DOWNLOAD_EXPIRED', 'FAILED', 'QUARANTINED')),
+        downloaded_at TEXT NOT NULL
+      );
+
+      CREATE INDEX message_attachments_project_idx ON message_attachments(project_id, message_id);
+      CREATE INDEX attachment_deliveries_conv_idx ON attachment_deliveries(attachment_id, provider_id, conversation_id);
+      CREATE INDEX provider_submissions_msg_idx ON provider_submissions(message_id, provider_id);
+    `,
+  },
 ];
