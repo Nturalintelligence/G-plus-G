@@ -1,5 +1,3 @@
-import fs from "node:fs";
-import path from "node:path";
 import { CliExecutorBridge, CliTaskExecutionResult, CliToolType } from "../cli-executors/cli-executor-bridge.js";
 
 export interface TwoTierCycleRequest {
@@ -125,51 +123,12 @@ STRICT RULE: Respond in the exact language of the user task (if Russian, write i
     const report = this.buildCliReportForBoard(cliResults);
     const allPassed = cliResults.every((r) => r.success);
 
-    // Snake Games Desktop Verification
-    const snakeVerification = this.verifySnakeGamesOnDesktop();
-
     return {
-      status: allPassed && snakeVerification.allThreePresent ? "COMPLETED" : "NEEDS_USER_ACTION",
+      status: allPassed ? "COMPLETED" : "NEEDS_USER_ACTION",
       iterationsCompleted: 1,
       strategicPlanText: boardResponse,
       cliExecutionResults: cliResults,
-      finalBoardReport: `${report}\n\n### Snake Games Desktop Verification:\n- 1_simple_snake.html: ${snakeVerification.simple ? "✅ OK" : "❌ Missing/Invalid"}\n- 2_medium_snake.html: ${snakeVerification.medium ? "✅ OK" : "❌ Missing/Invalid"}\n- 3_pro_snake.html: ${snakeVerification.pro ? "✅ OK" : "❌ Missing/Invalid"}`,
+      finalBoardReport: report,
     };
-  }
-
-  /**
-   * Verifies that all 3 valid Snake games exist in C:\Users\onadl\OneDrive\Рабочий стол\Snake_Games\
-   */
-  public verifySnakeGamesOnDesktop(): { simple: boolean; medium: boolean; pro: boolean; allThreePresent: boolean } {
-    try {
-      const targetDir = "C:\\Users\\onadl\\OneDrive\\Рабочий стол\\Snake_Games";
-      
-      if (!fs.existsSync(targetDir)) {
-        fs.mkdirSync(targetDir, { recursive: true });
-      }
-
-      const simplePath = path.join(targetDir, "1_simple_snake.html");
-      const mediumPath = path.join(targetDir, "2_medium_snake.html");
-      const proPath = path.join(targetDir, "3_pro_snake.html");
-
-      const isValidHtml = (p: string) => {
-        if (!fs.existsSync(p)) return false;
-        const content = fs.readFileSync(p, "utf-8").toLowerCase();
-        return content.includes("<html") && content.includes("<canvas") && content.length > 200;
-      };
-
-      const simple = isValidHtml(simplePath);
-      const medium = isValidHtml(mediumPath);
-      const pro = isValidHtml(proPath);
-
-      return {
-        simple,
-        medium,
-        pro,
-        allThreePresent: simple && medium && pro,
-      };
-    } catch {
-      return { simple: false, medium: false, pro: false, allThreePresent: false };
-    }
   }
 }

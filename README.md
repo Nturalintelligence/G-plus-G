@@ -1,5 +1,10 @@
 # G plus G
 
+> **Статус: Beta — активная разработка.** Интерфейсы и адаптеры веб-провайдеров могут меняться между релизами.
+
+[![CI](https://github.com/Nturalintelligence/G-plus-G/actions/workflows/ci.yml/badge.svg)](https://github.com/Nturalintelligence/G-plus-G/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+
 Локальное desktop-приложение для управляемого совместного обсуждения задач через
 ChatGPT Web и Gemini Web. Проекты, история, требования и решения остаются на
 компьютере пользователя; веб-интерфейсы провайдеров используются через видимый
@@ -10,6 +15,32 @@ ChatGPT Web и Gemini Web. Проекты, история, требования 
 резервные копии, диагностика и Electron UI.
 Локальный Центр качества показывает успешность, задержки и повторные попытки
 отдельно для ChatGPT и Gemini, не сохраняя содержимое сообщений.
+
+## Интерфейс
+
+![Рабочее пространство G plus G](docs/screenshots/workspace.png)
+
+| Параллельный запуск | Результаты ChatGPT и Gemini |
+| --- | --- |
+| ![Пустое рабочее пространство](docs/screenshots/parallel-run.png) | ![Результат параллельного запуска](docs/screenshots/parallel-result.png) |
+
+Короткая видеодемонстрация будет добавлена к ближайшему GitHub Release.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    UI[Electron + React UI] --> IPC[Typed IPC]
+    IPC --> ORCH[Orchestrator]
+    ORCH --> C[ChatGPT web adapter]
+    ORCH --> G[Gemini web adapter]
+    ORCH --> DB[(Local SQLite)]
+    C --> B[Visible isolated browser profiles]
+    G --> B
+    ORCH --> EXP[Verified spec export]
+```
+
+Проекты, история и диагностика хранятся локально. Адаптеры работают через видимые браузерные сессии пользователя; приложение не требует передачи cookies или токенов стороннему backend.
 
 ## Установка и запуск
 
