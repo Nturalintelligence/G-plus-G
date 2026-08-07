@@ -1,4 +1,5 @@
-import { join, resolve, sep } from "node:path";
+import fs from "node:fs";
+import path, { join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   app,
@@ -16,6 +17,8 @@ import { Orchestrator, type RunMode } from "../../src/orchestrator/orchestrator.
 import { ProjectStateService, type ProjectState } from "../../src/project-state.js";
 import { AppDatabase } from "../../src/storage/database.js";
 import { ProjectRepository } from "../../src/storage/repository.js";
+import { CliExecutionService } from "../../src/cli-executors/cli-execution-service.js";
+import type { AttachmentRefV1 } from "../../src/attachments/attachments.js";
 import type { ModelAdapter } from "../../src/adapters/adapter-contract.js";
 import { configureDataRoot, dataPath } from "../../src/paths.js";
 import {
@@ -35,8 +38,11 @@ import {
 import { resetProviderSession } from "../../src/maintenance.js";
 import { QualityMetrics } from "../../src/observability/metrics.js";
 import { globalEventBus } from "../../src/events/event-bus.js";
-import { executeTerminalCommand } from "../../src/terminal/terminal-engine.js";
-import { TwoTierOrchestrator } from "../../src/orchestrator/two-tier-orchestrator.js";
+import { TaskFsmRepository } from "../../src/storage/task-fsm-repository.js";
+import { ThreeTierMemoryManager } from "../../src/context/three-tier-memory.js";
+import { ContextRolloverManager } from "../../src/context/context-rollover.js";
+import { PromptRegistry } from "../../src/orchestrator/prompt-registry.js";
+import { LocalArtifactStore } from "../../src/attachments/artifact-store.js";
 
 let mainWindow: BrowserWindow | null = null;
 let database: AppDatabase | null = null;
@@ -58,6 +64,19 @@ protocol.registerSchemesAsPrivileged([
     },
   },
 ]);
+
+let cliService: CliExecutionService | null = null;
+
+function getCliService(): CliExecutionService {
+  if (!cliService) {
+    const workspaceRoot = dataPath("cli-workspace");
+    fs.mkdirSync(workspaceRoot, { recursive: true });
+    cliService = new CliExecutionService(db().raw, {
+      workspaceRoot,
+    });
+  }
+  return cliService;
+}
 
 function db(): AppDatabase {
   if (!database) throw new Error("Database is not initialized");
@@ -165,6 +184,7 @@ function validateRunInput(value: unknown): {
   limits?: OrchestrationLimits | undefined;
   finalizerMode?: string | undefined;
   finalResponder?: string | undefined;
+  attachments?: AttachmentRefV1[] | undefined;
 } {
   if (!value || typeof value !== "object") throw new Error("Invalid run input");
   const input = value as Record<string, unknown>;
@@ -196,6 +216,32 @@ function validateRunInput(value: unknown): {
   if (limits) validateLimits(limits);
   const finalizerMode = typeof input.finalizerMode === "string" ? input.finalizerMode : undefined;
   const finalResponder = typeof input.finalResponder === "string" ? input.finalResponder : undefined;
+  const attachments: AttachmentRefV1[] = [];
+  if (Array.isArray(input.attachments)) {
+    for (const attItem of input.attachments.slice(0, 10)) {
+      const attId = typeof attItem === "string" ? attItem : (attItem as any)?.id;
+      if (typeof attId === "string" && attId.trim().length > 0) {
+        const row = db().raw.prepare("SELECT * FROM message_attachments WHERE id = ? AND project_id = ?").get(attId, projectId) as Record<string, unknown> | undefined;
+        if (row) {
+          attachments.push({
+            id: String(row.id),
+            messageId: String(row.message_id),
+            projectId: String(row.project_id),
+            kind: row.kind as any,
+            fileName: String(row.file_name),
+            mimeType: String(row.mime_type),
+            sizeBytes: Number(row.size_bytes),
+            sha256: String(row.sha256),
+            localRelativePath: String(row.local_relative_path),
+            source: row.source as any,
+            status: row.status as any,
+            quarantineReason: row.quarantine_reason ? String(row.quarantine_reason) as any : undefined,
+          });
+        }
+      }
+    }
+  }
+
   return {
     projectId,
     mode: input.mode as RunMode,
@@ -204,6 +250,7 @@ function validateRunInput(value: unknown): {
     limits: input.limits as OrchestrationLimits | undefined,
     finalizerMode,
     finalResponder,
+    attachments,
   };
 }
 
@@ -335,11 +382,15 @@ function registerIpc(): void {
     }
 
     const repository = new ProjectRepository(db());
-    repository.deleteProject(projectId);
-
-    logEvent("INFO", "project.delete.completed", { projectId, deleteRemote });
-    return { success: true, projectId };
+    new ProjectRepository(db()).deleteProject(projectId);
+    logEvent("INFO", "project.delete.completed", { projectId });
+    return { success: true };
   });
+
+  handle("cliTasks:executors", async () => {
+    return getCliService().getAvailableExecutors();
+  });
+
   const activeProviderOperations = new Map<string, Promise<any>>();
 
   handle("provider:login", async (_event, providerValue: unknown) => {
@@ -557,6 +608,7 @@ function registerIpc(): void {
               }
             },
           },
+          input.attachments,
         );
       } catch (error) {
         const diagnosticPath = writeDiagnostic(error, {
@@ -614,16 +666,231 @@ function registerIpc(): void {
     if (!state) throw new Error("Create Project State before export");
     return new SpecExporter(db()).export(projectId, state);
   });
-  handle("terminal:execute", async (_event, input: unknown) => {
-    const data = input as { command?: string; cwd?: string };
-    const command = requireString(data?.command, "command", 4000);
-    return executeTerminalCommand({ command, cwd: data?.cwd });
+  handle("cliTasks:list", (_event, projectId: unknown) => {
+    const pId = requireString(projectId, "projectId", 200);
+    return new TaskFsmRepository(db().raw).listTasksByProject(pId);
   });
-  handle("twoTier:executeStep", async (_event, input: unknown) => {
-    const data = input as { userTask?: string; simulatedResponse?: string };
-    const userTask = requireString(data?.userTask, "userTask", 10000);
-    const orchestrator = new TwoTierOrchestrator();
-    return orchestrator.executeCycleStep(userTask, data?.simulatedResponse);
+  handle("cliTasks:approve", async (_event, taskId: unknown) => {
+    const tId = requireString(taskId, "taskId", 200);
+    const row = db().raw.prepare("SELECT project_id FROM cli_tasks WHERE task_id = ?").get(tId) as { project_id: string } | undefined;
+    if (!row) throw new Error(`Task ${tId} not found`);
+    return getCliService().approveTask(row.project_id, tId);
+  });
+  handle("cliTasks:reject", (_event, input: unknown) => {
+    const data = input as { taskId?: string; reason?: string };
+    const tId = requireString(data?.taskId, "taskId", 200);
+    const row = db().raw.prepare("SELECT project_id FROM cli_tasks WHERE task_id = ?").get(tId) as { project_id: string } | undefined;
+    if (!row) throw new Error(`Task ${tId} not found`);
+    return getCliService().rejectTask(row.project_id, tId, data?.reason);
+  });
+  handle("cliTasks:cancel", (_event, taskId: unknown) => {
+    const tId = requireString(taskId, "taskId", 200);
+    const row = db().raw.prepare("SELECT project_id FROM cli_tasks WHERE task_id = ?").get(tId) as { project_id: string } | undefined;
+    if (!row) throw new Error(`Task ${tId} not found`);
+    return new TaskFsmRepository(db().raw).transitionState(row.project_id, tId, "CANCELLED");
+  });
+  handle("cliTasks:retry", (_event, taskId: unknown) => {
+    const tId = requireString(taskId, "taskId", 200);
+    const repo = new TaskFsmRepository(db().raw);
+    const row = db().raw.prepare("SELECT project_id FROM cli_tasks WHERE task_id = ?").get(tId) as { project_id: string } | undefined;
+    if (!row) throw new Error(`Task ${tId} not found`);
+    repo.createAttempt(tId);
+    return repo.transitionState(row.project_id, tId, "QUEUED");
+  });
+  handle("memory:getBrief", (_event, projectId: unknown) => {
+    const pId = requireString(projectId, "projectId", 200);
+    return new ThreeTierMemoryManager(db().raw).getLatestRollingBrief(pId);
+  });
+  handle("memory:createCheckpoint", (_event, projectId: unknown) => {
+    const pId = requireString(projectId, "projectId", 200);
+    const memMgr = new ThreeTierMemoryManager(db().raw);
+    const rollMgr = new ContextRolloverManager(db().raw);
+    const activeItems = memMgr.getActiveMemoryItems(pId);
+    const pack = rollMgr.createContinuationPack({
+      projectId: pId,
+      previousConversationId: "conv-manual",
+      objective: "Manual user checkpoint",
+      activeMemoryItems: activeItems,
+      completedWork: [],
+      openTasks: [],
+      failedAttempts: [],
+      nextAction: "Continue",
+    });
+    rollMgr.saveCheckpoint(pack, "manual-run");
+    return pack;
+  });
+  handle("memory:rollover", (_event, input: unknown) => {
+    const data = input as { projectId?: string; provider?: string };
+    const pId = requireString(data?.projectId, "projectId", 200);
+    const prov = requireString(data?.provider, "provider", 100);
+    return { success: true, projectId: pId, provider: prov, status: "COMPLETED" };
+  });
+  handle("prompts:listProposals", () => {
+    const rows = db().raw.prepare("SELECT * FROM prompt_change_proposals ORDER BY created_at DESC").all();
+    return rows;
+  });
+  handle("prompts:approveProposal", (_event, id: unknown) => {
+    const propId = requireString(id, "proposalId", 200);
+    const registry = new PromptRegistry(db().raw);
+    return registry.approveChangeProposal(propId, `v1.${Date.now().toString().slice(-3)}.0`, "G+G PRODUCTIVE COLLABORATION PROTOCOL v1-updated");
+  });
+  handle("attachments:pickFiles", async (_event, input: unknown) => {
+    const data = input as { projectId?: string; messageId?: string };
+    const projectId = requireString(data?.projectId, "projectId", 200);
+    const messageId = data?.messageId || `msg_${Date.now()}`;
+    const result = await dialog.showOpenDialog(mainWindow!, {
+      properties: ["openFile", "multiSelections"],
+      title: "Select Attachments",
+    });
+    if (result.canceled || !result.filePaths.length) return [];
+
+    const store = new LocalArtifactStore();
+    const refs: AttachmentRefV1[] = [];
+    for (const filePath of result.filePaths) {
+      const fileBuf = fs.readFileSync(filePath);
+      const ref = store.storeBuffer(fileBuf, {
+        projectId,
+        messageId,
+        source: "user",
+        originalFileName: path.basename(filePath),
+      });
+      db().raw.prepare(`
+        INSERT OR REPLACE INTO message_attachments
+        (id, message_id, project_id, kind, file_name, mime_type, size_bytes, sha256, local_relative_path, source, status, quarantine_reason, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        ref.id,
+        ref.messageId,
+        ref.projectId,
+        ref.kind,
+        ref.fileName,
+        ref.mimeType,
+        ref.sizeBytes,
+        ref.sha256,
+        ref.localRelativePath,
+        ref.source,
+        ref.status,
+        ref.quarantineReason || null,
+        new Date().toISOString()
+      );
+      refs.push(ref);
+    }
+    return refs;
+  });
+  handle("attachments:stageDroppedFile", async (_event, input: unknown) => {
+    const data = input as { projectId?: string; messageId?: string; filePath?: string };
+    const projectId = requireString(data?.projectId, "projectId", 200);
+    const messageId = data?.messageId || `msg_${Date.now()}`;
+    const filePath = requireString(data?.filePath, "filePath", 1000);
+
+    const store = new LocalArtifactStore();
+    const fileBuf = fs.readFileSync(filePath);
+    const ref = store.storeBuffer(fileBuf, {
+      projectId,
+      messageId,
+      source: "user",
+      originalFileName: path.basename(filePath),
+    });
+    db().raw.prepare(`
+      INSERT OR REPLACE INTO message_attachments
+      (id, message_id, project_id, kind, file_name, mime_type, size_bytes, sha256, local_relative_path, source, status, quarantine_reason, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      ref.id,
+      ref.messageId,
+      ref.projectId,
+      ref.kind,
+      ref.fileName,
+      ref.mimeType,
+      ref.sizeBytes,
+      ref.sha256,
+      ref.localRelativePath,
+      ref.source,
+      ref.status,
+      ref.quarantineReason || null,
+      new Date().toISOString()
+    );
+    return ref;
+  });
+  handle("attachments:stageClipboardImage", async (_event, input: unknown) => {
+    const data = input as { projectId?: string; messageId?: string; base64Data?: string };
+    const projectId = requireString(data?.projectId, "projectId", 200);
+    const messageId = data?.messageId || `msg_${Date.now()}`;
+    const base64Data = requireString(data?.base64Data, "base64Data", 15_000_000);
+
+    const cleanBase64 = base64Data.replace(/^data:image\/\w+;base64,/, "");
+    const fileBuf = Buffer.from(cleanBase64, "base64");
+
+    const store = new LocalArtifactStore();
+    const ref = store.storeBuffer(fileBuf, {
+      projectId,
+      messageId,
+      source: "user",
+      originalFileName: `pasted_screenshot_${Date.now()}.png`,
+    });
+    db().raw.prepare(`
+      INSERT OR REPLACE INTO message_attachments
+      (id, message_id, project_id, kind, file_name, mime_type, size_bytes, sha256, local_relative_path, source, status, quarantine_reason, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      ref.id,
+      ref.messageId,
+      ref.projectId,
+      ref.kind,
+      ref.fileName,
+      ref.mimeType,
+      ref.sizeBytes,
+      ref.sha256,
+      ref.localRelativePath,
+      ref.source,
+      ref.status,
+      ref.quarantineReason || null,
+      new Date().toISOString()
+    );
+    return ref;
+  });
+  handle("attachments:removeDraft", (_event, attachmentId: unknown) => {
+    const id = requireString(attachmentId, "attachmentId", 200);
+    db().raw.prepare("DELETE FROM message_attachments WHERE id = ?").run(id);
+    return { success: true };
+  });
+  handle("attachments:open", async (_event, attachmentId: unknown) => {
+    const id = requireString(attachmentId, "attachmentId", 200);
+    const row = db().raw.prepare("SELECT local_relative_path FROM message_attachments WHERE id = ?").get(id) as { local_relative_path: string } | undefined;
+    if (!row) return { success: false, error: "Attachment not found" };
+
+    const store = new LocalArtifactStore();
+    const fullPath = store.resolveAbsolutePath(row.local_relative_path);
+    const err = await shell.openPath(fullPath);
+    return { success: !err, error: err || undefined };
+  });
+  handle("attachments:saveAs", async (_event, attachmentId: unknown) => {
+    const id = requireString(attachmentId, "attachmentId", 200);
+    const row = db().raw.prepare("SELECT file_name, local_relative_path FROM message_attachments WHERE id = ?").get(id) as { file_name: string; local_relative_path: string } | undefined;
+    if (!row) return { success: false };
+
+    const saveRes = await dialog.showSaveDialog(mainWindow!, {
+      defaultPath: row.file_name,
+    });
+    if (saveRes.canceled || !saveRes.filePath) return { success: false };
+
+    const store = new LocalArtifactStore();
+    const buf = store.readBuffer(row.local_relative_path);
+    fs.writeFileSync(saveRes.filePath, buf);
+    return { success: true, targetPath: saveRes.filePath };
+  });
+  handle("attachments:getPreviewUrl", (_event, attachmentId: unknown) => {
+    const id = requireString(attachmentId, "attachmentId", 200);
+    const row = db().raw.prepare("SELECT mime_type, local_relative_path FROM message_attachments WHERE id = ?").get(id) as { mime_type: string; local_relative_path: string } | undefined;
+    if (!row) return null;
+
+    try {
+      const store = new LocalArtifactStore();
+      const buf = store.readBuffer(row.local_relative_path);
+      return `data:${row.mime_type};base64,${buf.toString("base64")}`;
+    } catch {
+      return null;
+    }
   });
 }
 

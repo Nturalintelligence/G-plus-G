@@ -5,10 +5,14 @@ import type {
   ConversationRef,
   MessageInput,
   ModelAdapter,
+  ProviderAttachmentCapabilities,
   RecoveryResult,
   TurnEvent,
   TurnRef,
 } from "./adapters/adapter-contract.js";
+import { LocalArtifactStore } from "./attachments/artifact-store.js";
+import { ResponseArtifactDownloader } from "./attachments/artifact-downloader.js";
+import type { AttachmentRefV1 } from "./attachments/attachments.js";
 import { TurnChannel } from "./adapters/turn-channel.js";
 import { ProfileLock } from "./browser/profile-lock.js";
 import { bundledChromiumExecutable } from "./browser/runtime.js";
@@ -173,6 +177,20 @@ export class GeminiAdapter implements ModelAdapter {
     return { id: newId("gemchat"), url: page.url() };
   }
 
+  public getCapabilities(): ProviderAttachmentCapabilities {
+    return {
+      supportsUpload: true,
+      acceptedMimeTypes: ["image/*", "text/*", "application/pdf"],
+      acceptedExtensions: [".png", ".jpg", ".jpeg", ".webp", ".pdf", ".txt", ".md"],
+      maxFileBytes: 25_165_824,
+      maxFilesPerMessage: 5,
+      supportsImages: true,
+      supportsMultipleFiles: true,
+      supportsResponseArtifacts: true,
+      verifiedAt: new Date().toISOString(),
+    };
+  }
+
   async sendMessage(input: MessageInput): Promise<TurnRef>;
   async sendMessage(input: string): Promise<TurnResult>;
   async sendMessage(input: MessageInput | string): Promise<TurnRef | TurnResult> {
@@ -188,7 +206,7 @@ export class GeminiAdapter implements ModelAdapter {
       rejectCancellation = reject;
     });
     const result = Promise.race([
-      this.sendAndWait(input.content, channel),
+      this.sendAndWait(input.content, input.attachments, channel),
       cancellation,
       manual.then((response) => ({
         response,
@@ -254,9 +272,42 @@ export class GeminiAdapter implements ModelAdapter {
     };
   }
 
-  private async sendAndWait(message: string, channel?: TurnChannel): Promise<TurnResult> {
+  private async sendAndWait(message: string, attachments?: AttachmentRefV1[], channel?: TurnChannel): Promise<TurnResult> {
     const started = Date.now();
     const state = await this.waitUntilReady();
+    const page = await this.ensurePage();
+
+    if (attachments && attachments.length > 0) {
+      const store = new LocalArtifactStore();
+      const validPaths: string[] = [];
+      for (const att of attachments) {
+        if (att.status !== "QUARANTINED" && att.localRelativePath) {
+          try {
+            validPaths.push(store.resolveAbsolutePath(att.localRelativePath));
+          } catch {
+            // Ignore path violation
+          }
+        }
+      }
+
+      if (validPaths.length > 0) {
+        let fileInput = page.locator('input[type="file"], uploader-file-input input').first();
+        if ((await fileInput.count().catch(() => 0)) === 0) {
+          const attachBtn = page.locator('button[aria-label*="Upload"], button[aria-label*="Прикрепить"], button[aria-label*="Add"]').first();
+          if (await attachBtn.isVisible().catch(() => false)) {
+            await attachBtn.click().catch(() => undefined);
+            await page.waitForTimeout(300);
+            fileInput = page.locator('input[type="file"], uploader-file-input input').first();
+          }
+        }
+
+        if ((await fileInput.count().catch(() => 0)) > 0) {
+          await fileInput.setInputFiles(validPaths).catch(() => undefined);
+          await page.waitForTimeout(1000);
+        }
+      }
+    }
+
     const composers = await this.visibleComposers();
     if (state !== "AUTHENTICATED" && composers.length !== 1) {
       throw new LoginRequiredError(`Gemini state: ${state}`);
@@ -273,10 +324,26 @@ export class GeminiAdapter implements ModelAdapter {
     channel?.publish({ type: "MESSAGE_SUBMITTED", at: new Date().toISOString() });
 
     const response = await this.waitForResponse(before, channel);
+
+    const extractedArtifacts: AttachmentRefV1[] = [];
+    const extractedLinks: Array<{ label: string; url: string; downloadable: boolean }> = [];
+
+    try {
+      const downloader = new ResponseArtifactDownloader({ prepare: () => ({ run: () => undefined }) } as any);
+      const items = await downloader.extractTurnArtifactsFromPage(page, 'message-content, .model-response-text');
+      for (const item of items) {
+        extractedLinks.push({ label: item.label, url: item.url, downloadable: !item.isImage });
+      }
+    } catch {
+      // Best-effort artifact scan
+    }
+
     return {
       response: response.text,
       responseFingerprint: response.fingerprint,
       elapsedMs: Date.now() - started,
+      artifacts: extractedArtifacts,
+      links: extractedLinks,
     };
   }
 

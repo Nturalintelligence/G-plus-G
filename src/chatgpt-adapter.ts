@@ -5,10 +5,14 @@ import type {
   ConversationRef,
   MessageInput,
   ModelAdapter,
+  ProviderAttachmentCapabilities,
   RecoveryResult,
   TurnEvent,
   TurnRef,
 } from "./adapters/adapter-contract.js";
+import { LocalArtifactStore } from "./attachments/artifact-store.js";
+import { ResponseArtifactDownloader } from "./attachments/artifact-downloader.js";
+import type { AttachmentRefV1 } from "./attachments/attachments.js";
 import { TurnChannel } from "./adapters/turn-channel.js";
 import { ProfileLock } from "./browser/profile-lock.js";
 import { bundledChromiumExecutable } from "./browser/runtime.js";
@@ -156,6 +160,20 @@ export class ChatGptAdapter implements ModelAdapter {
     return { id: newId("webchat"), url: page.url() };
   }
 
+  public getCapabilities(): ProviderAttachmentCapabilities {
+    return {
+      supportsUpload: true,
+      acceptedMimeTypes: ["image/*", "text/*", "application/pdf", "application/json"],
+      acceptedExtensions: [".png", ".jpg", ".jpeg", ".pdf", ".txt", ".md", ".json", ".csv"],
+      maxFileBytes: 52_428_800,
+      maxFilesPerMessage: 10,
+      supportsImages: true,
+      supportsMultipleFiles: true,
+      supportsResponseArtifacts: true,
+      verifiedAt: new Date().toISOString(),
+    };
+  }
+
   async sendMessage(input: MessageInput): Promise<TurnRef>;
   async sendMessage(input: string): Promise<TurnResult>;
   async sendMessage(input: MessageInput | string): Promise<TurnRef | TurnResult> {
@@ -170,7 +188,7 @@ export class ChatGptAdapter implements ModelAdapter {
     const cancellation = new Promise<never>((_resolve, reject) => {
       rejectCancellation = reject;
     });
-    const automated = this.sendAndWait(input.content, channel);
+    const automated = this.sendAndWait(input.content, input.attachments, channel);
     const result = Promise.race([
       automated,
       cancellation,
@@ -352,10 +370,42 @@ export class ChatGptAdapter implements ModelAdapter {
     if (state !== "AUTHENTICATED") throw new LoginRequiredError(`ChatGPT state: ${state}`);
   }
 
-  private async sendAndWait(message: string, channel?: TurnChannel): Promise<TurnResult> {
+  private async sendAndWait(message: string, attachments?: AttachmentRefV1[], channel?: TurnChannel): Promise<TurnResult> {
     const page = await this.ensurePage();
     await this.waitUntilReady();
     await this.installMutationObserver();
+
+    if (attachments && attachments.length > 0) {
+      const store = new LocalArtifactStore();
+      const validPaths: string[] = [];
+      for (const att of attachments) {
+        if (att.status !== "QUARANTINED" && att.localRelativePath) {
+          try {
+            validPaths.push(store.resolveAbsolutePath(att.localRelativePath));
+          } catch {
+            // Ignore path violation
+          }
+        }
+      }
+
+      if (validPaths.length > 0) {
+        let fileInput = page.locator('input[type="file"]').first();
+        if ((await fileInput.count().catch(() => 0)) === 0) {
+          const attachBtn = page.locator('button[aria-label*="Attach"], button[aria-label*="Прикрепить"], button[data-testid="attach-button"]').first();
+          if (await attachBtn.isVisible().catch(() => false)) {
+            await attachBtn.click().catch(() => undefined);
+            await page.waitForTimeout(300);
+            fileInput = page.locator('input[type="file"]').first();
+          }
+        }
+
+        if ((await fileInput.count().catch(() => 0)) > 0) {
+          await fileInput.setInputFiles(validPaths).catch(() => undefined);
+          await page.waitForTimeout(1000);
+        }
+      }
+    }
+
     const before = await this.captureResponses();
     const userMessagesBefore = await this.captureUserMessageSignatures();
     const composer = await this.getUniqueComposer();
@@ -367,10 +417,26 @@ export class ChatGptAdapter implements ModelAdapter {
     channel?.publish({ type: "MESSAGE_SUBMITTED", at: new Date().toISOString() });
 
     const response = await this.waitForBoundResponse(before, channel);
+
+    const extractedArtifacts: AttachmentRefV1[] = [];
+    const extractedLinks: Array<{ label: string; url: string; downloadable: boolean }> = [];
+
+    try {
+      const downloader = new ResponseArtifactDownloader({ prepare: () => ({ run: () => undefined }) } as any);
+      const items = await downloader.extractTurnArtifactsFromPage(page, '[data-message-author-role="assistant"]');
+      for (const item of items) {
+        extractedLinks.push({ label: item.label, url: item.url, downloadable: !item.isImage });
+      }
+    } catch {
+      // Best-effort artifact scan
+    }
+
     return {
       response: response.text,
       responseFingerprint: response.fingerprint,
       elapsedMs: Date.now() - startedAt,
+      artifacts: extractedArtifacts,
+      links: extractedLinks,
     };
   }
 

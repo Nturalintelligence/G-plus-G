@@ -1,3 +1,5 @@
+import type { AttachmentRefV1 } from "./attachments/attachments.js";
+
 export type SessionState =
   | "AUTHENTICATED"
   | "LOGIN_REQUIRED"
@@ -17,6 +19,8 @@ export interface TurnResult {
   response: string;
   responseFingerprint: string;
   elapsedMs: number;
+  artifacts?: AttachmentRefV1[];
+  links?: Array<{ label: string; url: string; downloadable: boolean }>;
 }
 
 export interface DiagnosticReport {

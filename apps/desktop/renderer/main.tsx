@@ -151,14 +151,6 @@ function App(): React.JSX.Element {
   const [attachedFiles, setAttachedFiles] = useState<AttachedFileItem[]>([]);
   const [viewMode, setViewMode] = useState<"SYNTHESIZED" | "LIVE">("SYNTHESIZED");
   const [showTurnsSpoiler, setShowTurnsSpoiler] = useState(false);
-  const [terminalOutput, setTerminalOutput] = useState<{ command: string; stdout: string; stderr: string; exitCode: number } | null>(null);
-  const [terminalBusy, setTerminalBusy] = useState(false);
-  const [twoTierResult, setTwoTierResult] = useState<{
-    status: string;
-    strategicPlanText: string;
-    cliExecutionResults: Array<{ tool: string; success: boolean; exitCode: number; stdout: string; stderr: string; elapsedMs: number; commandExecuted: string }>;
-    finalBoardReport: string;
-  } | null>(null);
   const [finalizerMode, setFinalizerMode] = useState<"MANUAL" | "LEAD_SELECTS" | "PEER_AGREEMENT">("MANUAL");
   const [composerExpanded, setComposerExpanded] = useState(false);
   const [newProjectDescriptionInput, setNewProjectDescriptionInput] = useState("");
@@ -171,49 +163,58 @@ function App(): React.JSX.Element {
   const [finalResponder, setFinalResponder] = useState<string>("auto");
   const outputRef = useRef<HTMLElement>(null);
 
-  async function runTerminal(command: string) {
-    if (terminalBusy) return;
-    setTerminalBusy(true);
-    setStatus(`Исполнение терминальной команды: ${command}…`);
+  async function handlePickFiles() {
+    if (!current) {
+      setShowNoProjectToast(true);
+      return;
+    }
     try {
-      const res = await window.orchestrator.terminal.execute(command);
-      setTerminalOutput({ command, stdout: res.stdout, stderr: res.stderr, exitCode: res.exitCode });
-      setStatus(`Команда завершена с кодом: ${res.exitCode}`);
-    } catch (err: any) {
-      setStatus(`Ошибка терминала: ${err.message}`);
-    } finally {
-      setTerminalBusy(false);
-    }
-  }
-
-  function handleFileAttach(e: React.ChangeEvent<HTMLInputElement>) {
-    const files = Array.from(e.target.files || []);
-    if (files.length === 0) return;
-    const newItems: AttachedFileItem[] = [];
-    for (const file of files) {
-      const check = validateFileForProviders(file.name, providers);
-      if (!check.valid) {
-        setStatus(`Файл '${file.name}' (${check.extension}) не поддерживается ИИ: ${check.unsupportedProviders.join(", ")}`);
-        return;
+      const refs = await window.orchestrator.attachments.pickFiles(current.project.id, `msg_${Date.now()}`);
+      if (refs && refs.length > 0) {
+        setAttachedFiles((prev: any[]) => [...prev, ...refs]);
+        setStatus(`Прикреплено файлов: ${refs.length}`);
       }
-      newItems.push({
-        id: `file-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-        name: file.name,
-        size: file.size,
-        type: file.type,
-      });
+    } catch (err: any) {
+      setStatus(`Ошибка выбора файла: ${err.message}`);
     }
-    setAttachedFiles((prev) => [...prev, ...newItems]);
-    setStatus(`Прикреплено файлов: ${files.length}`);
   }
 
-  function removeFile(target: string | number) {
-    setAttachedFiles((prev) =>
-      prev.filter((item, index) => (typeof target === "number" ? index !== target : item.id !== target)),
-    );
+  async function handleDropFiles(e: React.DragEvent<HTMLElement>) {
+    e.preventDefault();
+    if (!current || !e.dataTransfer.files.length) return;
+    const projectId = current.project.id;
+    const messageId = `msg_${Date.now()}`;
+    const newRefs: AttachmentRefView[] = [];
+
+    for (const file of Array.from(e.dataTransfer.files)) {
+      try {
+        const filePath = window.orchestrator.getPathForFile(file);
+        if (filePath) {
+          const ref = await window.orchestrator.attachments.stageDroppedFile(projectId, messageId, filePath);
+          newRefs.push(ref);
+        }
+      } catch (err: any) {
+        setStatus(`Ошибка прикрепления файла: ${err.message}`);
+      }
+    }
+
+    if (newRefs.length > 0) {
+      setAttachedFiles((prev: any[]) => [...prev, ...newRefs]);
+      setStatus(`Прикреплено файлов перетаскиванием: ${newRefs.length}`);
+    }
   }
 
-  function handlePaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
+  async function removeFile(attachmentId: string) {
+    try {
+      await window.orchestrator.attachments.removeDraft(attachmentId);
+    } catch {
+      // Ignore cleanup error
+    }
+    setAttachedFiles((prev: any[]) => prev.filter((f: any) => f.id !== attachmentId));
+  }
+
+  async function handlePaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
+    if (!current) return;
     const items = Array.from(e.clipboardData.items || []);
     const fileItems = items.filter((item) => item.kind === "file");
     if (fileItems.length === 0) return;
@@ -222,42 +223,27 @@ function App(): React.JSX.Element {
       const file = item.getAsFile();
       if (!file) continue;
 
-      const filename = file.name || `screenshot_${Date.now()}.${file.type.split("/")[1] || "png"}`;
-      const check = validateFileForProviders(filename, providers);
-      if (!check.valid) {
-        setStatus(`Файл из буфера '${filename}' не поддерживается ИИ: ${check.unsupportedProviders.join(", ")}`);
-        continue;
-      }
-
       if (file.type.startsWith("image/")) {
         const reader = new FileReader();
-        reader.onload = (event) => {
-          const dataUrl = event.target?.result as string;
-          setAttachedFiles((prev) => [
-            ...prev,
-            {
-              id: `file-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-              name: filename,
-              size: file.size,
-              type: file.type,
-              dataUrl,
-            },
-          ]);
+        reader.onload = async (event) => {
+          const base64Data = event.target?.result as string;
+          if (base64Data) {
+            try {
+              const ref = await window.orchestrator.attachments.stageClipboardImage(
+                current.project.id,
+                `msg_${Date.now()}`,
+                base64Data
+              );
+              setAttachedFiles((prev: any[]) => [...prev, ref]);
+              setStatus("Вставлено изображение из буфера обмена (Ctrl+V)");
+            } catch (err: any) {
+              setStatus(`Ошибка вставки из буфера: ${err.message}`);
+            }
+          }
         };
         reader.readAsDataURL(file);
-      } else {
-        setAttachedFiles((prev) => [
-          ...prev,
-          {
-            id: `file-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-            name: filename,
-            size: file.size,
-            type: file.type,
-          },
-        ]);
       }
     }
-    setStatus(`Вставлено из буфера обмена (Ctrl+V)`);
   }
 
   async function confirmDeleteProject(deleteRemote: boolean): Promise<void> {
@@ -385,23 +371,6 @@ function App(): React.JSX.Element {
     setTask("");
     setStreaming({});
     setRunning(true);
-    if (mode === "AUTONOMOUS_CYCLE") {
-      setStatus("Запуск Двухуровневого Цикла (ИИ-Совет Web ➔ CLI Исполнители)…");
-      try {
-        const result = await window.orchestrator.twoTier.executeStep(submittedTask);
-        setTwoTierResult(result);
-        setStatus(`Двухуровневый цикл завершен со статусом: ${result.status}`);
-        await openProject(projectId);
-      } catch (err: any) {
-        const userErr = toUserFacingError(err, "Двухуровневый цикл");
-        setActiveUserError(userErr);
-        setStatus(`Ошибка: ${userErr.title}`);
-      } finally {
-        setRunning(false);
-        setOptimisticUserTask(null);
-      }
-      return;
-    }
     setStatus("Модели обсуждают сообщение…");
     try {
       const orderedProviders = [
@@ -416,7 +385,9 @@ function App(): React.JSX.Element {
         limits: settings.defaults.limits,
         finalizerMode,
         finalResponder,
+        attachments: attachedFiles,
       });
+      setAttachedFiles([]);
       setStatus(
         output.consensusReached
           ? "Модели независимо подтвердили согласованное решение"
@@ -869,59 +840,11 @@ function App(): React.JSX.Element {
             )}
           </article>
 
-          {twoTierResult ? (
-            <div className="two-tier-result-card panel">
-              <header className="two-tier-card-header">
-                <strong>⚡ Двухуровневый Автономный Цикл (План ➔ Код ➔ Тесты)</strong>
-                <span className={`two-tier-status-badge ${twoTierResult.status === "COMPLETED" ? "success" : "warn"}`}>
-                  {twoTierResult.status}
-                </span>
-                <button className="close-two-tier-btn" onClick={() => setTwoTierResult(null)}>×</button>
-              </header>
-              <details open className="two-tier-section">
-                <summary>🏛️ План Архитектуры и UX/UI (Стратегический ИИ-Совет)</summary>
-                <div className="two-tier-markdown">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml>{twoTierResult.strategicPlanText}</ReactMarkdown>
-                </div>
-              </details>
-              <details open className="two-tier-section">
-                <summary>🛠️ Выполнение CLI Исполнителями ({twoTierResult.cliExecutionResults.length} задач)</summary>
-                {twoTierResult.cliExecutionResults.map((res, i) => (
-                  <div key={i} className="cli-execution-item">
-                    <header>
-                      <strong>Задача #{i + 1} [{res.tool.toUpperCase()}]</strong>
-                      <span className={res.success ? "text-success" : "text-error"}>
-                        {res.success ? "✅ Успешно (Exit 0)" : `❌ Ошибка (Exit ${res.exitCode})`}
-                      </span>
-                    </header>
-                    <code>{res.commandExecuted}</code>
-                    <pre className="cli-output">{res.stdout || res.stderr || "[Вывод пуст]"}</pre>
-                  </div>
-                ))}
-              </details>
-              <details className="two-tier-section">
-                <summary>📋 Финальный Отчёт QA Тестов для Совета</summary>
-                <div className="two-tier-markdown">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml>{twoTierResult.finalBoardReport}</ReactMarkdown>
-                </div>
-              </details>
-            </div>
-          ) : null}
-
-          {terminalOutput ? (
-            <div className="terminal-card panel">
-              <header className="terminal-card-header">
-                <strong>🖥️ Терминал: <code>{terminalOutput.command}</code></strong>
-                <span className={`terminal-status-badge ${terminalOutput.exitCode === 0 ? "success" : "error"}`}>
-                  Exit code: {terminalOutput.exitCode}
-                </span>
-                <button onClick={() => setTerminalOutput(null)}>×</button>
-              </header>
-              <pre className="terminal-console-output">{terminalOutput.stdout || terminalOutput.stderr || "[Вывод пуст]"}</pre>
-            </div>
-          ) : null}
-
-          <div className="composer panel composer-bottom">
+          <div
+            className="composer panel composer-bottom"
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={(e) => void handleDropFiles(e)}
+          >
             <RunSummaryBar
               viewMode={viewMode}
               setViewMode={setViewMode}
@@ -939,12 +862,16 @@ function App(): React.JSX.Element {
             />
 
             <div className="composer-input-row">
-              <label className="file-attach-btn" title="Прикрепить файл или картинку">
+              <button
+                type="button"
+                className="file-attach-btn"
+                onClick={() => void handlePickFiles()}
+                title="Прикрепить файл или картинку"
+              >
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
                 </svg>
-                <input type="file" onChange={handleFileAttach} hidden multiple />
-              </label>
+              </button>
               <textarea
                 aria-label="Сообщение для моделей"
                 value={task}

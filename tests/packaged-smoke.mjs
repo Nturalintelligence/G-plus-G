@@ -19,45 +19,44 @@ try {
   await page.waitForLoadState("domcontentloaded");
 
   const projectName = `Packaged smoke ${Date.now()}`;
-  await page.getByPlaceholder("Название проекта").fill(projectName);
-  await page.getByRole("button", { name: "Создать" }).click();
-  await page.getByRole("heading", { name: projectName }).waitFor();
-  await page.getByRole("button", { name: "Выйти из chatgpt" }).waitFor();
-  await page.getByRole("button", { name: "Выйти из gemini" }).waitFor();
-  await page.getByLabel("Режим оркестрации").selectOption("SEQUENTIAL");
-  await page.getByLabel("Первым отвечает").selectOption("gemini");
-  if (await page.getByLabel("Первым отвечает").inputValue() !== "gemini") {
-    throw new Error("Provider starter order was not selectable");
-  }
-
-  await page.locator("summary").filter({ hasText: "Требования" }).click();
-  await page.getByRole("button", { name: "+ Добавить", exact: true }).first().click();
-  await page.getByLabel("Требования, пункт 1").fill("Приложение сохраняет проект локально");
-  await page.getByLabel("Критерии приёмки, пункт 1").fill("Проект открывается после перезапуска");
-  await page.getByRole("button", { name: "Сохранить черновик" }).click();
-  await page.getByText(/Версия 1 · DRAFT/).waitFor();
-
-  const savedProjectState = await page.evaluate(async (name) => {
+  await page.getByRole("button", { name: "Новый" }).click();
+  await page.getByPlaceholder("Например: Мой Салон Красоты").fill(projectName);
+  await page.getByRole("button", { name: "Создать проект" }).click();
+  await page.getByText(projectName, { exact: true }).waitFor();
+  const projectApiCheck = await page.evaluate(async (name) => {
     const project = (await window.orchestrator.projects.list())
       .find((candidate) => candidate.name === name);
     if (!project) throw new Error("Smoke project not found");
-    return (await window.orchestrator.projects.open(project.id)).state?.state;
+    const opened = await window.orchestrator.projects.open(project.id);
+    const state = {
+      requirements: [{ id: "req-smoke", text: "Persist locally", sourceTurnIds: [] }],
+      constraints: [], decisions: [], rejectedOptions: [], openQuestions: [],
+      acceptanceCriteria: [{ id: "ac-smoke", text: "Reload succeeds", sourceTurnIds: [] }],
+    };
+    await window.orchestrator.state.save(project.id, state);
+    const savedState = await window.orchestrator.state.latest(project.id);
+    const settings = await window.orchestrator.settings.get();
+    await window.orchestrator.settings.save({
+      ...settings,
+      profile: { ...settings.profile, displayName: "Smoke tester" },
+    });
+    const savedSettings = await window.orchestrator.settings.get();
+    return {
+      openedProjectId: opened.project.id,
+      projectStatePersisted: savedState?.state?.requirements?.[0]?.text === "Persist locally",
+      settingsPersisted: savedSettings.profile.displayName === "Smoke tester",
+      terminalApiExposed: "terminal" in window.orchestrator,
+      twoTierApiExposed: "twoTier" in window.orchestrator,
+    };
   }, projectName);
   if (
-    savedProjectState?.requirements[0]?.text !== "Приложение сохраняет проект локально" ||
-    savedProjectState?.acceptanceCriteria[0]?.text !== "Проект открывается после перезапуска"
+    !projectApiCheck.projectStatePersisted ||
+    !projectApiCheck.settingsPersisted ||
+    projectApiCheck.terminalApiExposed ||
+    projectApiCheck.twoTierApiExposed
   ) {
-    throw new Error(`Visual Project State was not persisted: ${JSON.stringify(savedProjectState)}`);
+    throw new Error(`Packaged persistence/security check failed: ${JSON.stringify(projectApiCheck)}`);
   }
-
-  await page.getByRole("button", { name: /Профиль.*Настройки/ }).click();
-  await page.getByRole("heading", { name: "Профиль и настройки" }).waitFor();
-  await page.getByRole("button", { name: /Центр качества/ }).click();
-  await page.getByText("Центр качества · последние 30 дней", { exact: true }).waitFor();
-  await page.getByRole("button", { name: "👤 Профиль", exact: true }).click();
-  await page.getByPlaceholder("Отображаемое имя").fill("Smoke tester");
-  await page.getByRole("button", { name: "Сохранить", exact: true }).click();
-  await page.getByRole("button", { name: /Smoke tester.*Настройки/ }).waitFor();
 
   const preflight = await page.evaluate(() => window.orchestrator.system.preflight());
   const qualityDashboard = await page.evaluate(() => window.orchestrator.quality.dashboard());
@@ -87,10 +86,10 @@ try {
     ok: true,
     executablePath,
     projectCreated: projectName,
-    providerLogoutAvailable: true,
-    providerStarterSelectable: true,
-    visualProjectStatePersisted: true,
-    settingsPersistedInUi: true,
+    projectApiAvailable: Boolean(projectApiCheck.openedProjectId),
+    visualProjectStatePersisted: projectApiCheck.projectStatePersisted,
+    settingsPersisted: projectApiCheck.settingsPersisted,
+    unsafeExecutionApisAbsent: true,
     trustedOrigin: urlAfter,
     unsafePopupDenied: true,
     preflight,

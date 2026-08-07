@@ -1,4 +1,6 @@
 import { fingerprint } from "../fingerprint.js";
+import { TurnChannel } from "../adapters/turn-channel.js";
+import type { AttachmentRefV1 } from "../attachments/attachments.js";
 import { newId } from "../ids.js";
 import type {
   ConversationRef,
@@ -21,6 +23,9 @@ import { QualityMetrics } from "../observability/metrics.js";
 import { logEvent } from "../observability/logger.js";
 import { globalEventBus } from "../events/event-bus.js";
 import { calculateRetryDelay, isRetryableError } from "./retry-policy.js";
+import { TaskCompiler } from "./task-compiler.js";
+import { TaskFsmRepository } from "../storage/task-fsm-repository.js";
+import { dataPath } from "../paths.js";
 
 export type RunMode = "MANUAL" | "SEQUENTIAL" | "PARALLEL" | "DEBATE";
 export type RunStatus =
@@ -98,13 +103,14 @@ export class Orchestrator {
     await this.cancelActiveTurns();
   }
 
-  async run(
+  public async run(
     projectId: string,
     mode: RunMode,
     task: string,
     providerIds: string[],
     limits: OrchestrationLimits = defaultLimits,
     hooks: RunHooks = {},
+    attachments?: AttachmentRefV1[],
   ): Promise<RunOutput> {
     validateLimits(limits);
     if (providerIds.length === 0) throw new Error("At least one provider is required");
@@ -118,6 +124,22 @@ export class Orchestrator {
     this.activeRunId = runId;
     this.createRun(runId, projectId, effectiveMode, limits);
     const repository = new ProjectRepository(this.database);
+    const taskCompiler = new TaskCompiler(new TaskFsmRepository(this.database.raw));
+    const processModelText = (rawText: string): string => {
+      const processed = taskCompiler.processModelTurnResponse(rawText, {
+        workspaceRoot: dataPath("cli-workspace"),
+        expectedProjectId: projectId,
+        expectedRunId: runId,
+      });
+      if (processed.rejectedBlocks.length > 0) {
+        logEvent("WARN", "cli_task.proposal_rejected", {
+          projectId,
+          runId,
+          reasonCodes: processed.rejectedBlocks.map((block) => block.success ? "UNKNOWN" : block.reasonCode),
+        });
+      }
+      return processed.cleanPublicText;
+    };
     // Each provider web chat already owns its history. Re-sending the local
     // transcript duplicates old messages and makes every later prompt larger.
     const initialMessage = task;
@@ -157,6 +179,7 @@ export class Orchestrator {
                   initialMessage,
                   limits,
                   hooks,
+                  attachments,
                 ),
               ),
               round: 1,
@@ -165,6 +188,7 @@ export class Orchestrator {
         for (const result of independent) {
           if (result.status === "fulfilled") {
             const response = result.value;
+            response.text = processModelText(response.text);
             responses.push(response);
             repository.appendConversationEntry({
               projectId,
@@ -196,10 +220,12 @@ export class Orchestrator {
               initialMessage,
               limits,
               hooks,
+              attachments,
             ),
           ),
           round: 1,
         };
+        response.text = processModelText(response.text);
         responses.push(response);
         repository.appendConversationEntry({
           projectId,
@@ -231,10 +257,11 @@ export class Orchestrator {
             message,
             limits,
             hooks,
+            turn < providerIds.length ? attachments : undefined,
           );
           const agreed =
             effectiveMode === "DEBATE" && rawText.includes(consensusToken);
-          const text = rawText.replaceAll(consensusToken, "").trim();
+          const text = processModelText(rawText.replaceAll(consensusToken, "").trim());
           if (agreed) agreedProviders.add(providerId);
           else agreedProviders.delete(providerId);
           responses.push({ providerId, text, round: turn + 1, agreed });
@@ -275,32 +302,6 @@ export class Orchestrator {
             : buildPeerReviewPrompt(initialMessage, text);
         }
       }
-      // AUTOMATIC TWO-TIER CLI EXECUTION BRIDGE
-      const fullResponseText = responses.map((r) => r.text).join("\n");
-      if (
-        fullResponseText.includes("[[G_PLUS_G_CLI_TASK:") ||
-        initialMessage.toLowerCase().includes("змеейк") ||
-        initialMessage.toLowerCase().includes("snake") ||
-        initialMessage.toLowerCase().includes("разраб")
-      ) {
-        try {
-          const { TwoTierOrchestrator } = await import("./two-tier-orchestrator.js");
-          const twoTier = new TwoTierOrchestrator();
-          const twoTierResult = await twoTier.executeCycleStep(initialMessage, fullResponseText);
-          
-          repository.appendConversationEntry({
-            projectId,
-            runId,
-            role: "ASSISTANT",
-            providerId: "system",
-            round: responses.length + 1,
-            content: `⚡ **Автономный Двухуровневый CLI Отчёт**:\n\n${twoTierResult.finalBoardReport}`,
-          });
-        } catch (twoTierErr) {
-          logEvent("WARN", "orchestration.twotier.failed", { error: twoTierErr });
-        }
-      }
-
       const status: RunStatus = this.stopped ? "STOPPED" : "COMPLETED";
       this.setStatus(runId, status);
       runMetrics.record("orchestration.run.success", status === "COMPLETED" ? 1 : 0, {
@@ -358,6 +359,7 @@ export class Orchestrator {
     message: string,
     limits: OrchestrationLimits,
     hooks: RunHooks,
+    attachments?: AttachmentRefV1[],
   ): Promise<string> {
     const adapter = this.adapters.get(providerId);
     if (!adapter) throw new Error(`Adapter is not registered: ${providerId}`);
@@ -390,7 +392,7 @@ export class Orchestrator {
           attempt: attemptIndex + 1,
         });
         repository.updateTurnStatus(started.turn.id, "SUBMITTING");
-        turn = await adapter.sendMessage({ content: edited });
+        turn = await adapter.sendMessage(attachments ? { content: edited, attachments } : { content: edited });
         repository.updateTurnStatus(started.turn.id, "WAITING_RESPONSE");
         logEvent("INFO", "provider.turn.submitted", {
           runId: this.activeRunId,

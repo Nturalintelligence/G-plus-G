@@ -1,162 +1,144 @@
-import {
-  copyFileSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
-import { join } from "node:path";
+import { access, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { constants, existsSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
+import { arch, platform, release } from "node:os";
+import { basename, dirname, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { execSync } from "node:child_process";
-import { dataRoot } from "../paths.js";
-
-export interface PreflightCheck {
-  name: string;
-  status: "pass" | "fail" | "warn";
-  detail: string;
-}
+import { fileURLToPath } from "node:url";
+import { dataPath, dataRoot } from "../paths.js";
+import { bundledChromiumExecutable } from "../browser/runtime.js";
+import { findSystemChrome } from "../browser/system-browser-login.js";
 
 export interface ReleaseInfo {
   appVersion: string;
   commit: string;
+  nodeVersion: string;
+  platform: string;
   dataPath: string;
+  generatedAt: string;
+}
+
+export interface PreflightCheck {
+  name: string;
+  status: "pass" | "warn" | "fail";
+  detail: string;
 }
 
 export interface BackupManifest {
-  database: {
-    quickCheck: string;
-    bytes: number;
+  format: 1;
+  createdAt: string;
+  app: ReleaseInfo;
+  database: { file: string; bytes: number; sha256: string; quickCheck: string };
+  metadata: {
+    logs: Array<{ name: string; bytes: number; modifiedAt: string }>;
+    settingsFile?: string;
   };
   excluded: string[];
 }
 
-export async function runPreflight(root?: string): Promise<PreflightCheck[]> {
-  const targetRoot = root ?? dataRoot();
-  const checks: PreflightCheck[] = [];
-
-  // Check Node version
-  try {
-    const nodeVer = process.version;
-    checks.push({
-      name: "node",
-      status: "pass",
-      detail: `Node.js ${nodeVer}`,
-    });
-  } catch (err: any) {
-    checks.push({
-      name: "node",
-      status: "fail",
-      detail: `Node check failed: ${err?.message ?? String(err)}`,
-    });
-  }
-
-  // Check Data path writability
-  try {
-    mkdirSync(targetRoot, { recursive: true });
-    const testFile = join(targetRoot, `.preflight-write-test-${Date.now()}`);
-    writeFileSync(testFile, "test");
-    if (existsSync(testFile)) {
-      checks.push({
-        name: "data-path",
-        status: "pass",
-        detail: `Data directory is writable at ${targetRoot}`,
-      });
-    } else {
-      checks.push({
-        name: "data-path",
-        status: "fail",
-        detail: `Failed to write test file at ${targetRoot}`,
-      });
-    }
-  } catch (err: any) {
-    checks.push({
-      name: "data-path",
-      status: "fail",
-      detail: `Data directory error: ${err?.message ?? String(err)}`,
-    });
-  }
-
-  // Check Playwright / browser availability
-  try {
-    checks.push({
-      name: "playwright",
-      status: "pass",
-      detail: "Playwright dependency available",
-    });
-  } catch (err: any) {
-    checks.push({
-      name: "playwright",
-      status: "fail",
-      detail: `Playwright check failed: ${err?.message ?? String(err)}`,
-    });
-  }
-
-  return checks;
+function packageJsonPath(): string {
+  const moduleDirectory = dirname(fileURLToPath(import.meta.url));
+  const candidates = [
+    resolve(moduleDirectory, "..", "..", "package.json"),
+    resolve(moduleDirectory, "..", "..", "..", "package.json"),
+    resolve(process.cwd(), "package.json"),
+  ];
+  return candidates.find(existsSync) ?? resolve(moduleDirectory, "..", "..", "package.json");
 }
 
-export async function getReleaseInfo(options?: {
-  root?: string;
-  packageFile?: string;
-  commit?: string;
-}): Promise<ReleaseInfo> {
-  const targetRoot = options?.root ?? dataRoot();
-  let appVersion = "0.0.0";
-  const pkgPath = options?.packageFile ?? join(process.cwd(), "package.json");
-
-  if (existsSync(pkgPath)) {
+export async function getReleaseInfo(
+  options: { root?: string; packageFile?: string; commit?: string } = {},
+): Promise<ReleaseInfo> {
+  const packageFile = options.packageFile ?? packageJsonPath();
+  const pkg = JSON.parse(await readFile(packageFile, "utf8")) as { version?: string };
+  let commit = options.commit;
+  if (!commit) {
+    const buildInfoPath = resolve(dirname(packageFile), "build-info.json");
     try {
-      const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
-      if (pkg.version) appVersion = pkg.version;
-    } catch {}
-  }
-
-  let commit = options?.commit ?? "unknown";
-  if (commit === "unknown") {
-    const buildInfoPath = join(targetRoot, "build-info.json");
-    if (existsSync(buildInfoPath)) {
-      try {
-        const buildInfo = JSON.parse(readFileSync(buildInfoPath, "utf8"));
-        if (buildInfo.commit) commit = buildInfo.commit;
-      } catch {}
+      const buildInfo = JSON.parse(await readFile(buildInfoPath, "utf8")) as {
+        commit?: unknown;
+      };
+      if (typeof buildInfo.commit === "string" && buildInfo.commit.trim()) {
+        commit = buildInfo.commit.trim();
+      }
+    } catch {
+      // Development runs can read the repository directly below.
     }
   }
-
-  if (commit === "unknown") {
+  if (!commit) {
     try {
-      commit = execSync("git rev-parse HEAD", { encoding: "utf8" }).trim();
-    } catch {}
+      commit = execFileSync("git", ["rev-parse", "--short=12", "HEAD"], {
+        cwd: dirname(packageFile),
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      }).trim();
+    } catch {
+      commit = "unknown";
+    }
   }
-
   return {
-    appVersion,
+    appVersion: pkg.version ?? "unknown",
     commit,
-    dataPath: targetRoot,
+    nodeVersion: process.version,
+    platform: `${platform()} ${release()} ${arch()}`,
+    dataPath: resolve(options.root ?? dataRoot()),
+    generatedAt: new Date().toISOString(),
   };
 }
 
-function redactObject(obj: any): any {
-  if (obj === null || typeof obj !== "object") return obj;
-  if (Array.isArray(obj)) return obj.map(redactObject);
-  const copy: Record<string, any> = {};
-  for (const key of Object.keys(obj)) {
-    const lower = key.toLowerCase();
-    if (
-      lower.includes("token") ||
-      lower.includes("password") ||
-      lower.includes("secret") ||
-      lower.includes("key") ||
-      lower.includes("auth") ||
-      lower.includes("api")
-    ) {
-      copy[key] = "[REDACTED]";
-    } else if (typeof obj[key] === "object" && obj[key] !== null) {
-      copy[key] = redactObject(obj[key]);
-    } else {
-      copy[key] = obj[key];
-    }
+function sqlString(value: string): string {
+  return `'${value.replaceAll("'", "''")}'`;
+}
+
+function inspectDatabase(path: string): { bytes: number; sha256: string; quickCheck: string } {
+  const database = new DatabaseSync(path, { readOnly: true });
+  try {
+    const row = database.prepare("PRAGMA quick_check").get() as { quick_check?: string };
+    const quickCheck = String(row.quick_check ?? "");
+    if (quickCheck !== "ok") throw new Error(`SQLite quick_check failed: ${quickCheck}`);
+    const bytes = Number(database.prepare("SELECT page_count * page_size AS bytes FROM pragma_page_count(), pragma_page_size()").get()?.bytes ?? 0);
+    const sha256 = createHash("sha256").update(readFileSyncCompat(path)).digest("hex");
+    return { bytes, sha256, quickCheck };
+  } finally {
+    database.close();
   }
-  return copy;
+}
+
+function readFileSyncCompat(path: string): Buffer {
+  // Kept local so hashing remains synchronous while the SQLite read handle is closed promptly.
+  return requireNodeFs().readFileSync(path);
+}
+
+function requireNodeFs(): typeof import("node:fs") {
+  // eslint-free ESM-compatible indirection.
+  return (process.getBuiltinModule("node:fs") as typeof import("node:fs"));
+}
+
+async function safeSettings(root: string, bundle: string): Promise<string | undefined> {
+  const candidates = ["settings.json", "preferences.json"];
+  for (const name of candidates) {
+    const source = join(root, name);
+    if (!existsSync(source)) continue;
+    const parsed = JSON.parse(await readFile(source, "utf8")) as unknown;
+    const redact = (value: unknown, key = ""): unknown => {
+      if (/token|secret|password|cookie|authorization|api.?key/i.test(key)) return "[REDACTED]";
+      if (Array.isArray(value)) return value.map((item) => redact(item));
+      if (value && typeof value === "object") {
+        return Object.fromEntries(
+          Object.entries(value as Record<string, unknown>).map(([childKey, child]) => [
+            childKey,
+            redact(child, childKey),
+          ]),
+        );
+      }
+      return value;
+    };
+    const target = "settings.redacted.json";
+    await writeFile(join(bundle, target), `${JSON.stringify(redact(parsed), null, 2)}\n`, "utf8");
+    return target;
+  }
+  return undefined;
 }
 
 export async function createBackupBundle(options: {
@@ -164,110 +146,121 @@ export async function createBackupBundle(options: {
   root?: string;
   now?: Date;
 }): Promise<string> {
-  const targetRoot = options.root ?? dataRoot();
-  const date = options.now ?? new Date();
-  const timestamp = date.toISOString().replace(/[:.]/g, "-");
-  const bundleName = `g-plus-g-backup-${timestamp}`;
-  const bundlePath = join(options.destinationRoot, bundleName);
-
-  mkdirSync(bundlePath, { recursive: true });
-
-  const dbPath = join(targetRoot, "orchestrator.sqlite");
-  let dbBytes = 0;
-  let quickCheck = "ok";
-
-  if (existsSync(dbPath)) {
-    copyFileSync(dbPath, join(bundlePath, "orchestrator.sqlite"));
-    dbBytes = statSync(dbPath).size;
-
-    try {
-      const db = new DatabaseSync(join(bundlePath, "orchestrator.sqlite"));
-      const res = db.prepare("PRAGMA quick_check").get() as any;
-      db.close();
-      if (res && res.quick_check) {
-        quickCheck = String(res.quick_check);
-      }
-    } catch {
-      quickCheck = "corrupt";
+  const root = resolve(options.root ?? dataRoot());
+  const source = join(root, "orchestrator.sqlite");
+  await stat(source);
+  const stamp = (options.now ?? new Date()).toISOString().replace(/[:.]/g, "-");
+  const destinationRoot = resolve(options.destinationRoot);
+  await mkdir(destinationRoot, { recursive: true });
+  const bundle = resolve(destinationRoot, `g-plus-g-backup-${stamp}`);
+  await mkdir(bundle, { recursive: false });
+  const snapshot = join(bundle, "orchestrator.sqlite");
+  const sourceDb = new DatabaseSync(source);
+  try {
+    sourceDb.exec(`VACUUM INTO ${sqlString(snapshot)}`);
+  } finally {
+    sourceDb.close();
+  }
+  const inspected = inspectDatabase(snapshot);
+  const logMetadata: BackupManifest["metadata"]["logs"] = [];
+  const logDir = join(root, "logs");
+  if (existsSync(logDir)) {
+    for (const entry of requireNodeFs().readdirSync(logDir, { withFileTypes: true })) {
+      if (!entry.isFile()) continue;
+      const info = await stat(join(logDir, entry.name));
+      logMetadata.push({
+        name: entry.name,
+        bytes: info.size,
+        modifiedAt: info.mtime.toISOString(),
+      });
     }
   }
-
-  const settingsPath = join(targetRoot, "settings.json");
-  if (existsSync(settingsPath)) {
-    try {
-      const settingsContent = JSON.parse(readFileSync(settingsPath, "utf8"));
-      const redacted = redactObject(settingsContent);
-      writeFileSync(
-        join(bundlePath, "settings.redacted.json"),
-        JSON.stringify(redacted, null, 2),
-        "utf8",
-      );
-    } catch {}
-  }
-
+  const settingsFile = await safeSettings(root, bundle);
   const manifest: BackupManifest = {
-    database: {
-      quickCheck,
-      bytes: dbBytes,
-    },
-    excluded: ["profiles/**"],
+    format: 1,
+    createdAt: new Date().toISOString(),
+    app: await getReleaseInfo({ root }),
+    database: { file: basename(snapshot), ...inspected },
+    metadata: { logs: logMetadata, ...(settingsFile ? { settingsFile } : {}) },
+    excluded: ["profiles/**", "logs/* contents", "cookies", "credentials", "tokens"],
   };
-
-  writeFileSync(
-    join(bundlePath, "manifest.json"),
-    JSON.stringify(manifest, null, 2),
-    "utf8",
-  );
-
-  return bundlePath;
+  await writeFile(join(bundle, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+  return bundle;
 }
 
-export async function validateBackupBundle(
-  bundlePath: string,
-): Promise<BackupManifest> {
-  const manifestPath = join(bundlePath, "manifest.json");
-  if (!existsSync(manifestPath)) {
-    throw new Error(`Manifest not found in bundle at ${bundlePath}`);
+export async function validateBackupBundle(bundlePath: string): Promise<BackupManifest> {
+  const bundle = resolve(bundlePath);
+  const manifest = JSON.parse(await readFile(join(bundle, "manifest.json"), "utf8")) as BackupManifest;
+  if (manifest.format !== 1 || manifest.database.file !== "orchestrator.sqlite") {
+    throw new Error("Unsupported or malformed backup manifest");
   }
-
-  const manifestContent = readFileSync(manifestPath, "utf8");
-  const manifest: BackupManifest = JSON.parse(manifestContent);
-
-  const dbPath = join(bundlePath, "orchestrator.sqlite");
-  if (!existsSync(dbPath)) {
-    throw new Error(`Database file missing in backup bundle ${bundlePath}`);
-  }
-
-  // Validate SQLite integrity
-  const db = new DatabaseSync(dbPath);
-  try {
-    const res = db.prepare("PRAGMA quick_check").get() as any;
-    if (!res || res.quick_check !== "ok") {
-      throw new Error(`Database quick_check failed: ${JSON.stringify(res)}`);
-    }
-  } finally {
-    db.close();
-  }
-
+  const databasePath = join(bundle, manifest.database.file);
+  const inspected = inspectDatabase(databasePath);
+  if (inspected.sha256 !== manifest.database.sha256) throw new Error("Backup checksum mismatch");
   return manifest;
 }
 
 export async function restoreBackupBundle(
   bundlePath: string,
-  root?: string,
+  root = dataRoot(),
 ): Promise<string> {
-  const targetRoot = root ?? dataRoot();
-  await validateBackupBundle(bundlePath);
-
-  mkdirSync(targetRoot, { recursive: true });
-  const dbPath = join(targetRoot, "orchestrator.sqlite");
-  const backupDbPath = join(bundlePath, "orchestrator.sqlite");
-
-  if (existsSync(dbPath)) {
-    const snapshotBeforeRestore = join(targetRoot, "orchestrator.sqlite.before-restore");
-    copyFileSync(dbPath, snapshotBeforeRestore);
+  const manifest = await validateBackupBundle(bundlePath);
+  const source = join(resolve(bundlePath), manifest.database.file);
+  const destination = join(resolve(root), "orchestrator.sqlite");
+  await mkdir(dirname(destination), { recursive: true });
+  const temporary = `${destination}.restore-${process.pid}`;
+  await rm(temporary, { force: true });
+  requireNodeFs().copyFileSync(source, temporary, constants.COPYFILE_EXCL);
+  inspectDatabase(temporary);
+  const previous = `${destination}.before-restore`;
+  await rm(previous, { force: true });
+  if (existsSync(destination)) await rename(destination, previous);
+  try {
+    await rename(temporary, destination);
+    await rm(`${destination}-wal`, { force: true });
+    await rm(`${destination}-shm`, { force: true });
+  } catch (error) {
+    if (existsSync(previous)) await rename(previous, destination);
+    throw error;
   }
+  return destination;
+}
 
-  copyFileSync(backupDbPath, dbPath);
-  return dbPath;
+export async function runPreflight(root = dataRoot()): Promise<PreflightCheck[]> {
+  const checks: PreflightCheck[] = [];
+  checks.push({
+    name: "node",
+    status: Number(process.versions.node.split(".")[0]) >= 20 ? "pass" : "fail",
+    detail: process.version,
+  });
+  try {
+    await mkdir(root, { recursive: true });
+    await access(root, constants.R_OK | constants.W_OK);
+    const probe = join(root, `.preflight-${process.pid}`);
+    await writeFile(probe, "ok", { flag: "wx" });
+    await rm(probe);
+    checks.push({ name: "data-path", status: "pass", detail: resolve(root) });
+  } catch (error) {
+    checks.push({ name: "data-path", status: "fail", detail: String(error) });
+  }
+  let browser: string | undefined = bundledChromiumExecutable();
+  if (!browser) {
+    try {
+      browser = findSystemChrome();
+    } catch {
+      // Reported below.
+    }
+  }
+  checks.push({
+    name: "browser",
+    status: browser ? "pass" : "warn",
+    detail: browser ?? "No bundled Chromium or system Chrome detected",
+  });
+  try {
+    await import("playwright");
+    checks.push({ name: "playwright", status: "pass", detail: "module available" });
+  } catch (error) {
+    checks.push({ name: "playwright", status: "fail", detail: String(error) });
+  }
+  return checks;
 }

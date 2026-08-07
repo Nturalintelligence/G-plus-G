@@ -120,7 +120,7 @@ Renderer работает с `nodeIntegration: false`, `contextIsolation: true`,
 
 В текущей пользовательской среде это:
 
-`C:\Users\onadl\AppData\Roaming\multi-llm-orchestrator-feasibility`
+`%APPDATA%\multi-llm-orchestrator-feasibility`
 
 Ключевые данные:
 

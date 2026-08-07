@@ -54,23 +54,52 @@ interface Window {
     exports: {
       spec(projectId: string): Promise<{ directory: string; manifestHash: string }>;
     };
-    terminal: {
-      execute(command: string, cwd?: string): Promise<{ exitCode: number; stdout: string; stderr: string; elapsedMs: number }>;
-    };
-    twoTier: {
-      executeStep(userTask: string, simulatedResponse?: string): Promise<{
-        status: "COMPLETED" | "NEEDS_USER_ACTION" | "FAILED";
-        iterationsCompleted: number;
-        strategicPlanText: string;
-        cliExecutionResults: Array<{ tool: string; success: boolean; exitCode: number; stdout: string; stderr: string; elapsedMs: number; commandExecuted: string }>;
-        finalBoardReport: string;
-      }>;
-    };
     settings: {
       get(): Promise<AppSettingsView>;
       save(value: AppSettingsView): Promise<AppSettingsView>;
     };
+    cliTasks: {
+      list(projectId: string): Promise<any[]>;
+      approve(taskId: string): Promise<any>;
+      reject(taskId: string, reason: string): Promise<any>;
+      cancel(taskId: string): Promise<any>;
+      retry(taskId: string): Promise<any>;
+    };
+    memory: {
+      getBrief(projectId: string): Promise<any>;
+      createCheckpoint(projectId: string): Promise<any>;
+      rollover(projectId: string, provider: string): Promise<any>;
+    };
+    prompts: {
+      listProposals(): Promise<any[]>;
+      approveProposal(id: string): Promise<any>;
+    };
+    attachments: {
+      pickFiles(projectId: string, messageId: string): Promise<AttachmentRefView[]>;
+      stageDroppedFile(projectId: string, messageId: string, filePath: string): Promise<AttachmentRefView>;
+      stageClipboardImage(projectId: string, messageId: string, base64Data: string): Promise<AttachmentRefView>;
+      removeDraft(attachmentId: string): Promise<{ success: boolean }>;
+      open(attachmentId: string): Promise<{ success: boolean; error?: string }>;
+      saveAs(attachmentId: string): Promise<{ success: boolean; targetPath?: string }>;
+      getPreviewUrl(attachmentId: string): Promise<string | null>;
+    };
+    getPathForFile(file: File): string;
   };
+}
+
+interface AttachmentRefView {
+  id: string;
+  messageId: string;
+  projectId: string;
+  kind: "image" | "document" | "text" | "archive" | "audio" | "video" | "binary";
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  sha256: string;
+  localRelativePath: string;
+  source: "user" | "chatgpt" | "gemini" | "cli";
+  status: "STAGED" | "UPLOADING" | "READY" | "FAILED" | "QUARANTINED";
+  quarantineReason?: "EXECUTABLE_BLOCKED" | "MIME_MISMATCH" | "SIZE_LIMIT" | "UNSAFE_FILENAME" | "MANUAL_REVIEW_REQUIRED";
 }
 
 interface AppSettingsView {
@@ -81,7 +110,7 @@ interface AppSettingsView {
     greetingStyle: "display" | "real" | "generic";
   };
   defaults: {
-    mode: "MANUAL" | "SEQUENTIAL" | "PARALLEL" | "DEBATE" | "AUTONOMOUS_CYCLE";
+    mode: "MANUAL" | "SEQUENTIAL" | "PARALLEL" | "DEBATE";
     providers: Array<
       | "chatgpt"
       | "gemini"
