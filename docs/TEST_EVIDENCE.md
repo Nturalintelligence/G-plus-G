@@ -23,7 +23,11 @@ Cleanup SHA: `849f177`. Integration merge SHA: `e4723bf`.
 | Integration 2026-08-08 | `npm run desktop:build` | PASS | Vite renderer and Electron TypeScript build. |
 | Integration 2026-08-08 | `npm audit` | FINDING | Three high findings, all dev/build-only. |
 | Integration 2026-08-08 | `npm audit --omit=dev` | PASS | Zero production findings. |
+| Integration 2026-08-08 | `npm run package` at `36191d2` | PASS | Build-info contains full runtime-tested SHA; installer SHA-256 `59F6E8E5EB2EAF10B80F3572B103C5E5E0E7211A6CA964FA95300AC537F25BAF`. |
+| Integration 2026-08-08 | `npm run smoke:packaged` at `36191d2` | PASS | Persistence, unsafe-API absence, trusted origin, popup denial, preflight and backup passed. |
+| Integration 2026-08-08 | `git diff --check` and production zero-hit scan | PASS | No forbidden task/personal-path production hits. |
+| GitHub PR #2 | `CI / verify` at `36191d2` | PASS | `npm ci`, guard, check and desktop build completed in Actions run `31222824762`. |
 
-Packaging, packaged smoke, zero-hit scan and diff check must be rerun after the
-evidence update to freeze the final PR-head SHA. Do not treat historical claims
-in other documents as evidence for that SHA.
+This evidence-update commit changes documentation only. A release candidate is
+not frozen until PR review/UAT selects an exact `uat` SHA and rebuilds it per
+`docs/UAT_RUNBOOK.md`. Do not treat historical claims as evidence for that SHA.
