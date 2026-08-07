@@ -16,9 +16,12 @@ Remove task-specific Snake artifacts and restore the rule that only a validated
   and empty design prototypes were removed.
 - **CONFIRMED:** `G_PLUS_G_EXECUTION_V1` is a proposal only and is not part of
   this cleanup.
-- **CONFIRMED:** GitHub CLI access works. The private repository defaults to
-  `main`; production evidence is `prod@489303b`, `uat@b7615cf` is its ancestor,
-  and the only PR is stale draft PR #1. No remote tags or releases exist.
+- **CONFIRMED:** GitHub CLI access works. On 2026-08-08 the owner approved an
+  atomic non-force migration: `main`, `uat`, and retained rollback ref `prod`
+  now point to production SHA `489303b`.
+- **CONFIRMED:** cleanup checkpoint `849f177` was merged without rebase or
+  cherry-pick into `agent/integrate-cleanup-into-uat`; merge SHA `e4723bf`.
+- **CONFIRMED:** no remote tags or releases exist; draft PR #1 is stale.
 - **BLOCKED:** GitHub returns HTTP 403 for branch protection and rulesets on the
   current private-repository plan. GitHub Pro is required for enforcement.
 - **PLANNED:** release-only provider UI tests and the 8–12 hour soak profile
@@ -26,7 +29,5 @@ Remove task-specific Snake artifacts and restore the rule that only a validated
 
 ## Next step
 
-Confirm that `prod@489303b` is the deployed source and authorize the proposed
-non-force `main`/`uat` migration. Then integrate this cleanup from a new branch
-based on the synchronized `uat`; do not cherry-pick it without its 30 `cli-fix`
-prerequisite commits.
+Finish SHA-bound packaging/evidence, push the integration branch, and open a
+draft PR to `uat`. Do not merge until closed provider UAT and release soak pass.

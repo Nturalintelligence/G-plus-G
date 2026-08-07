@@ -12,3 +12,5 @@
   browser-context, or orphan-process growth.
 - [ ] Rollback artifact and instructions are verified.
 - [ ] Version, changelog, tag, checksums and release notes agree.
+- [ ] Evidence bundle follows `docs/UAT_RUNBOOK.md` and contains no prompts,
+  responses, cookies, credentials, tokens or signed URLs.

@@ -16,19 +16,19 @@ patch tag, then back to `uat`.
 For `main` and `uat`, configure PR-only changes, required checks, stale approval
 reset, resolved threads, CODEOWNERS, and blocked force-push/deletion.
 
-## Current migration state
+## Migration record (2026-08-08)
 
-- GitHub default is `main@b876b38`, the initial commit.
-- Factual production evidence is `prod@489303b`; `main...prod = 0/45`.
-- `uat@b7615cf` is a strict ancestor of `prod`; `prod...uat = 2/0`.
-- Cleanup starts at `cli-fix@4dd3fde`; `uat...cli-fix = 1/30`.
+- The owner confirmed `prod@489303b` as the production source.
+- `main` and `uat` were atomically non-force fast-forwarded to exact SHA
+  `489303b`; `prod` remains unchanged as a rollback ref.
+- Cleanup checkpoint `849f177` was preserved as local backup ref
+  `backup/cleanup-849f177` and merged with `--no-ff` into a new branch based on
+  synchronized `uat`. Merge SHA: `e4723bf`.
+- Three conflicts were resolved explicitly: cleanup CI retained; unsafe TwoTier
+  bridge deletion retained; the tested checksum/rollback-capable release tools
+  retained.
 
-After the owner confirms `prod@489303b` is deployed, the recommended one-time
-migration is a non-force exact-SHA fast-forward of `main` and then `uat` to
-`489303b`. Keep `prod` as a rollback ref. Create a fresh integration branch from
-the updated `uat`, merge the cleanup branch without rebase/reset/force, run all
-gates, and open a draft PR to `uat`. Promotion remains `uat -> main` by PR.
-
-No such ref mutation has been performed. Protections/rulesets cannot be enabled
-on the current private-repository plan (GitHub API HTTP 403); upgrade to GitHub
-Pro before treating governance checks as enforced.
+Promotion remains `uat -> main` by PR. `prod` must not receive new production
+work and must not be deleted until a later audited deprecation decision.
+Protections/rulesets remain unavailable on the current private-repository plan
+(GitHub API HTTP 403); governance is advisory until GitHub Pro is enabled.

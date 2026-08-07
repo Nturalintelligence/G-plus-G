@@ -19,7 +19,12 @@
   and must remain inside `allowedPaths` and outside `forbiddenPaths`.
 - **CONFIRMED:** Desktop CLI execution uses a managed application-data workspace,
   never the launcher's current working directory.
-- **PLANNED:** After deployed-SHA confirmation, migrate `prod@489303b` to `main`
-  and `uat` by non-force fast-forward as a documented one-time exception.
+- **CONFIRMED:** On 2026-08-08 the owner approved a one-time atomic non-force
+  fast-forward of `main` and `uat` to deployed `prod@489303b`; `prod` remains a
+  rollback ref and is no longer a parallel development target.
+- **CONFIRMED:** Integrate cleanup by a merge commit from preserved `849f177`
+  into a new branch based on synchronized `uat`; do not rewrite its history.
+- **CONFIRMED:** Keep dependency remediation in a separate lockfile PR because
+  all three current high advisories are dev/build-only and production audit is 0.
 - **PLANNED:** `G_PLUS_G_EXECUTION_V1` and sandboxed code execution belong to
   separate architecture and implementation PRs.

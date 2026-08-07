@@ -24,3 +24,14 @@ API. New IPC channels require schema, size, sender, and authorization review.
 **Residual risk:** the existing CLI executors run as the host user and are not a
 VM-grade sandbox. `G_PLUS_G_EXECUTION_V1` is **PLANNED**, not implemented; it must
 remain disabled until a separate threat model and sandbox review are complete.
+
+## Dependency audit (2026-08-08)
+
+`npm audit` reports three high advisories only in developer/build tooling:
+`fast-uri@3.1.4` and `js-yaml@4.3.0` through `electron-builder`, plus
+`nanoid@3.3.16` through Vite/PostCSS. The vulnerable paths process trusted build
+configuration/assets; the nanoid zero-size custom-generator path is not used by
+the application. `npm audit --omit=dev` reports zero vulnerabilities, so these
+packages are not in the packaged runtime dependency set. Upgrade them in a
+separate reviewed lockfile PR; they do not justify mixing dependency changes
+into the cleanup integration.
