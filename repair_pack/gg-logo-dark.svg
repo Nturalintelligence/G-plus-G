@@ -1,7 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title">
-  <title id="title">G+G Workspace</title>
-  <rect width="256" height="256" rx="56" fill="#0B0B0C"/>
-  <path d="M116 65H82C48 65 28 88 28 128s20 63 54 63h34v-47H79v-25h62v58c-14 20-34 30-60 30-48 0-75-32-75-79s27-79 75-79h35z" fill="#F7F6F2"/>
-  <path d="M140 65h34c34 0 54 23 54 63s-20 63-54 63h-34v-47h37v-25h-62v58c14 20 34 30 60 30 48 0 75-32 75-79s-27-79-75-79h-35z" fill="#F7F6F2"/>
-  <path d="M112 116h32v24h-32z" fill="#D8653B"/>
-</svg>

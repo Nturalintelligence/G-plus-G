@@ -1,4 +1,4 @@
-const { contextBridge, ipcRenderer } = require("electron");
+const { contextBridge, ipcRenderer, webUtils } = require("electron");
 
 const api = {
   system: {
@@ -53,17 +53,39 @@ const api = {
   exports: {
     spec: (projectId) => ipcRenderer.invoke("export:spec", projectId),
   },
-  terminal: {
-    execute: (command, cwd) => ipcRenderer.invoke("terminal:execute", { command, cwd }),
-  },
-  twoTier: {
-    executeStep: (userTask, simulatedResponse) =>
-      ipcRenderer.invoke("twoTier:executeStep", { userTask, simulatedResponse }),
-  },
   settings: {
     get: () => ipcRenderer.invoke("settings:get"),
     save: (value) => ipcRenderer.invoke("settings:save", value),
   },
+  cliTasks: {
+    list: (projectId) => ipcRenderer.invoke("cliTasks:list", projectId),
+    approve: (taskId) => ipcRenderer.invoke("cliTasks:approve", taskId),
+    reject: (taskId, reason) => ipcRenderer.invoke("cliTasks:reject", { taskId, reason }),
+    cancel: (taskId) => ipcRenderer.invoke("cliTasks:cancel", taskId),
+    retry: (taskId) => ipcRenderer.invoke("cliTasks:retry", taskId),
+  },
+  memory: {
+    getBrief: (projectId) => ipcRenderer.invoke("memory:getBrief", projectId),
+    createCheckpoint: (projectId) => ipcRenderer.invoke("memory:createCheckpoint", projectId),
+    rollover: (projectId, provider) => ipcRenderer.invoke("memory:rollover", { projectId, provider }),
+  },
+  prompts: {
+    listProposals: () => ipcRenderer.invoke("prompts:listProposals"),
+    approveProposal: (id) => ipcRenderer.invoke("prompts:approveProposal", id),
+  },
+  attachments: {
+    pickFiles: (projectId, messageId) => ipcRenderer.invoke("attachments:pickFiles", { projectId, messageId }),
+    stageDroppedFile: (projectId, messageId, fileOrPath) => {
+      const filePath = typeof fileOrPath === "string" ? fileOrPath : webUtils.getPathForFile(fileOrPath);
+      return ipcRenderer.invoke("attachments:stageDroppedFile", { projectId, messageId, filePath });
+    },
+    stageClipboardImage: (projectId, messageId, base64Data) => ipcRenderer.invoke("attachments:stageClipboardImage", { projectId, messageId, base64Data }),
+    removeDraft: (attachmentId) => ipcRenderer.invoke("attachments:removeDraft", attachmentId),
+    open: (attachmentId) => ipcRenderer.invoke("attachments:open", attachmentId),
+    saveAs: (attachmentId) => ipcRenderer.invoke("attachments:saveAs", attachmentId),
+    getPreviewUrl: (attachmentId) => ipcRenderer.invoke("attachments:getPreviewUrl", attachmentId),
+  },
+  getPathForFile: (file) => webUtils.getPathForFile(file),
 };
 
 contextBridge.exposeInMainWorld("orchestrator", api);

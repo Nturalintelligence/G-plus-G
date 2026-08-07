@@ -181,4 +181,221 @@ export const migrations: readonly Migration[] = [
       );
     `,
   },
+  {
+    version: 6,
+    name: "web_ai_board_and_cli_executors",
+    sql: `
+      CREATE TABLE cli_tasks (
+        id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL,
+        project_id TEXT NOT NULL REFERENCES projects(id),
+        run_id TEXT NOT NULL,
+        parent_turn_id TEXT NOT NULL,
+        executor TEXT NOT NULL,
+        title TEXT NOT NULL,
+        objective TEXT NOT NULL,
+        context TEXT NOT NULL,
+        risk TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (
+          status IN ('PROPOSED', 'VALIDATED', 'AWAITING_APPROVAL', 'QUEUED', 'RUNNING',
+                     'VERIFYING', 'COMPLETED', 'REJECTED', 'CANCELLED', 'FAILED',
+                     'NEEDS_FIX', 'BLOCKED', 'INTERRUPTED')
+        ),
+        task_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE (project_id, task_id)
+      );
+
+      CREATE TABLE cli_task_attempts (
+        id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL,
+        attempt_number INTEGER NOT NULL CHECK (attempt_number > 0),
+        status TEXT NOT NULL,
+        started_at TEXT NOT NULL,
+        finished_at TEXT,
+        UNIQUE (task_id, attempt_number)
+      );
+
+      CREATE TABLE cli_task_events (
+        sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+        id TEXT NOT NULL UNIQUE,
+        task_id TEXT NOT NULL,
+        attempt_id TEXT,
+        event_type TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        occurred_at TEXT NOT NULL
+      );
+
+      CREATE TABLE execution_artifacts (
+        id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL,
+        attempt_id TEXT,
+        artifact_type TEXT NOT NULL,
+        file_path TEXT NOT NULL,
+        size_bytes INTEGER NOT NULL,
+        created_at TEXT NOT NULL
+      );
+
+      CREATE TABLE memory_items (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES projects(id),
+        kind TEXT NOT NULL CHECK (
+          kind IN ('REQUIREMENT', 'CONSTRAINT', 'DECISION_ACCEPTED', 'OPTION_REJECTED',
+                  'OPEN_QUESTION', 'ARTIFACT', 'KNOWN_RISK', 'ACCEPTANCE_CRITERION')
+        ),
+        text TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('ACTIVE', 'RESOLVED', 'SUPERSEDED')),
+        supersedes_id TEXT,
+        source_message_ids_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE rolling_briefs (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES projects(id),
+        version INTEGER NOT NULL CHECK (version > 0),
+        objective TEXT NOT NULL,
+        current_state TEXT NOT NULL,
+        active_requirements_json TEXT NOT NULL,
+        active_constraints_json TEXT NOT NULL,
+        accepted_decisions_json TEXT NOT NULL,
+        rejected_options_json TEXT NOT NULL,
+        completed_work_json TEXT NOT NULL,
+        open_tasks_json TEXT NOT NULL,
+        known_failures_json TEXT NOT NULL,
+        artifacts_json TEXT NOT NULL,
+        next_action TEXT NOT NULL,
+        source_message_ids_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE (project_id, version)
+      );
+
+      CREATE TABLE context_checkpoints (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES projects(id),
+        checkpoint_id TEXT NOT NULL UNIQUE,
+        run_id TEXT NOT NULL,
+        continuation_pack_json TEXT NOT NULL,
+        checksum TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+
+      CREATE TABLE conversation_rollovers (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES projects(id),
+        provider_id TEXT NOT NULL,
+        old_conversation_id TEXT NOT NULL,
+        new_conversation_id TEXT,
+        checkpoint_id TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('PENDING', 'COMPLETED', 'FAILED')),
+        created_at TEXT NOT NULL
+      );
+
+      CREATE TABLE prompt_versions (
+        id TEXT PRIMARY KEY,
+        version TEXT NOT NULL UNIQUE,
+        template_text TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('DRAFT', 'EVALUATING', 'APPROVED', 'ACTIVE', 'RETIRED')),
+        created_at TEXT NOT NULL
+      );
+
+      CREATE TABLE prompt_change_proposals (
+        id TEXT PRIMARY KEY,
+        base_version TEXT NOT NULL,
+        observed_problem TEXT NOT NULL,
+        evidence_message_ids_json TEXT NOT NULL,
+        proposed_diff TEXT NOT NULL,
+        expected_effect TEXT NOT NULL,
+        regression_risks_json TEXT NOT NULL,
+        evaluation_cases_json TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('DRAFT', 'APPROVED', 'REJECTED')),
+        created_at TEXT NOT NULL
+      );
+
+      CREATE TABLE run_evaluations (
+        id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL UNIQUE,
+        project_id TEXT NOT NULL REFERENCES projects(id),
+        prompt_version TEXT NOT NULL,
+        total_turns INTEGER NOT NULL,
+        low_value_turns INTEGER NOT NULL,
+        cli_tasks_count INTEGER NOT NULL,
+        rejected_tasks_count INTEGER NOT NULL,
+        retries_count INTEGER NOT NULL,
+        user_interventions_count INTEGER NOT NULL,
+        cancelled_decisions_count INTEGER NOT NULL,
+        acceptance_passed INTEGER NOT NULL CHECK (acceptance_passed IN (0, 1)),
+        rollover_count INTEGER NOT NULL,
+        errors_count INTEGER NOT NULL,
+        user_rating INTEGER,
+        evaluated_at TEXT NOT NULL
+      );
+
+      CREATE INDEX cli_tasks_project_idx ON cli_tasks(project_id, status);
+      CREATE INDEX cli_tasks_run_idx ON cli_tasks(run_id);
+      CREATE INDEX memory_items_project_idx ON memory_items(project_id, kind, status);
+      CREATE INDEX rolling_briefs_project_idx ON rolling_briefs(project_id, version);
+      CREATE INDEX context_checkpoints_project_idx ON context_checkpoints(project_id);
+      CREATE INDEX run_evaluations_project_idx ON run_evaluations(project_id, prompt_version);
+    `,
+  },
+  {
+    version: 7,
+    name: "message_attachments_and_artifact_deliveries",
+    sql: `
+      CREATE TABLE message_attachments (
+        id TEXT PRIMARY KEY,
+        message_id TEXT NOT NULL,
+        project_id TEXT NOT NULL REFERENCES projects(id),
+        kind TEXT NOT NULL,
+        file_name TEXT NOT NULL,
+        mime_type TEXT NOT NULL,
+        size_bytes INTEGER NOT NULL,
+        sha256 TEXT NOT NULL,
+        local_relative_path TEXT NOT NULL,
+        source TEXT NOT NULL,
+        status TEXT NOT NULL,
+        quarantine_reason TEXT,
+        provider_metadata_json TEXT,
+        created_at TEXT NOT NULL
+      );
+
+      CREATE TABLE attachment_deliveries (
+        id TEXT PRIMARY KEY,
+        attachment_id TEXT NOT NULL REFERENCES message_attachments(id),
+        provider_id TEXT NOT NULL,
+        conversation_id TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('PENDING', 'UPLOADING', 'DELIVERED', 'UNSUPPORTED', 'FAILED')),
+        provider_file_id TEXT,
+        delivered_at TEXT
+      );
+
+      CREATE TABLE provider_submissions (
+        submission_id TEXT PRIMARY KEY,
+        message_id TEXT NOT NULL,
+        provider_id TEXT NOT NULL,
+        attachment_ids_json TEXT NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('PREPARING', 'FILES_UPLOADED', 'SUBMITTED', 'CONFIRMED', 'UNKNOWN')),
+        created_at TEXT NOT NULL
+      );
+
+      CREATE TABLE downloaded_artifacts (
+        id TEXT PRIMARY KEY,
+        message_id TEXT NOT NULL,
+        project_id TEXT NOT NULL REFERENCES projects(id),
+        provider_id TEXT NOT NULL,
+        original_url TEXT NOT NULL,
+        sha256 TEXT NOT NULL,
+        local_relative_path TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('READY', 'DOWNLOAD_EXPIRED', 'FAILED', 'QUARANTINED')),
+        downloaded_at TEXT NOT NULL
+      );
+
+      CREATE INDEX message_attachments_project_idx ON message_attachments(project_id, message_id);
+      CREATE INDEX attachment_deliveries_conv_idx ON attachment_deliveries(attachment_id, provider_id, conversation_id);
+      CREATE INDEX provider_submissions_msg_idx ON provider_submissions(message_id, provider_id);
+    `,
+  },
 ];

@@ -1,4 +1,17 @@
 import type { DiagnosticReport, SessionState, TurnResult } from "../types.js";
+import type { AttachmentRefV1 } from "../attachments/attachments.js";
+
+export interface ProviderAttachmentCapabilities {
+  supportsUpload: boolean;
+  acceptedMimeTypes: string[];
+  acceptedExtensions: string[];
+  maxFileBytes?: number;
+  maxFilesPerMessage?: number;
+  supportsImages: boolean;
+  supportsMultipleFiles: boolean;
+  supportsResponseArtifacts: boolean;
+  verifiedAt?: string;
+}
 
 export interface ConversationRef {
   id: string;
@@ -7,6 +20,7 @@ export interface ConversationRef {
 
 export interface MessageInput {
   content: string;
+  attachments?: AttachmentRefV1[];
 }
 
 export interface TurnRef {

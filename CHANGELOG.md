@@ -2,6 +2,18 @@
 
 All notable project checkpoints are recorded here.
 
+## [Unreleased]
+
+### Security and cleanup
+
+- Removed the task-specific Snake slice, duplicate repair assets, empty design
+  placeholders, renderer terminal bridge, and TwoTier command-string executor.
+- Restricted CLI task recognition to strict `G_PLUS_G_CLI_TASK_V1` envelopes,
+  explicit approval, durable FSM transitions, managed workspaces, filesystem
+  scope enforcement, and an exact read-only verification-command registry.
+- Added production TaskCompiler ingestion, security regression gates, CI,
+  CODEOWNERS, artifact audit, release checklist, and factual handoff journals.
+
 ## [0.1.0-pre.13] - 2026-08-02
 
 ### Added & Fixed
@@ -274,3 +286,11 @@ All notable project checkpoints are recorded here.
 - Desktop typecheck passed.
 - 34 Vitest tests passed.
 - Vite/Electron desktop build passed.
+# Unreleased
+
+- Removed the task-specific Snake output and live generator.
+- Removed renderer host-terminal and TwoTier command-string execution bridges.
+- Restricted CLI recognition to validated V1 envelopes outside Markdown fences,
+  with explicit legacy/unsupported rejection and approval-by-default.
+- Hardened verification process launch, task idempotency, workspace selection,
+  CI source guards, and project security/release documentation.
