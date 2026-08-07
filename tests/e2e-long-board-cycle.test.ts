@@ -1,5 +1,8 @@
-import { describe, expect, it, beforeEach } from "vitest";
+import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import path from "node:path";
+import fs from "node:fs";
+import os from "node:os";
+import { execFileSync } from "node:child_process";
 import { AppDatabase } from "../src/storage/database.js";
 import { TaskFsmRepository } from "../src/storage/task-fsm-repository.js";
 import { TaskCompiler } from "../src/orchestrator/task-compiler.js";
@@ -50,9 +53,11 @@ describe("Phase I: End-to-End Long Board Cycle Fixture Test", () => {
   let estimator: ContextBudgetEstimator;
   let gate: TurnValueGate;
   let registry: PromptRegistry;
-  const workspaceRoot = path.resolve(process.cwd());
+  let workspaceRoot: string;
 
   beforeEach(() => {
+    workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "gplusg-e2e-"));
+    execFileSync("git", ["init", "--quiet"], { cwd: workspaceRoot, windowsHide: true });
     appDb = new AppDatabase(":memory:");
     appDb.migrate();
     appDb.raw.prepare(
@@ -68,6 +73,11 @@ describe("Phase I: End-to-End Long Board Cycle Fixture Test", () => {
     estimator = new ContextBudgetEstimator(100_000);
     gate = new TurnValueGate(3);
     registry = new PromptRegistry(appDb.raw);
+  });
+
+  afterEach(() => {
+    appDb.close();
+    fs.rmSync(workspaceRoot, { recursive: true, force: true });
   });
 
   it("should complete a full 8-step long board cycle successfully", async () => {
@@ -98,7 +108,12 @@ describe("Phase I: End-to-End Long Board Cycle Fixture Test", () => {
       allowedPaths: ["package.json"],
       forbiddenPaths: [],
       acceptanceCriteria: ["Card component created"],
-      verification: [{ type: "file_exists", path: "package.json" }],
+      verification: [{
+        type: "command",
+        executable: "git",
+        args: ["status", "--porcelain"],
+        timeoutMs: 5000,
+      }],
       risk: "WORKSPACE_WRITE",
       requiresApproval: true,
       dependsOn: [],

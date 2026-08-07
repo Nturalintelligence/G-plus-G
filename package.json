@@ -26,6 +26,8 @@
     "release:info": "tsx src/cli.ts release:info",
     "preflight": "tsx src/cli.ts preflight",
     "test": "vitest run",
+    "security:guard": "node scripts/security-source-guard.mjs",
+    "test:security": "vitest run tests/cli-task-schema.test.ts tests/cli-task-fsm.test.ts tests/execution-broker.test.ts",
     "check": "npm run build && npm run desktop:typecheck && npm test"
   },
   "dependencies": {

@@ -1,4 +1,5 @@
 import path from "node:path";
+import { existsSync, lstatSync, realpathSync } from "node:fs";
 
 export type ExecutorId = "codex" | "gemini" | "antigravity";
 export type CliTaskRisk = "READ_ONLY" | "WORKSPACE_WRITE" | "COMMAND_EXECUTION";
@@ -36,8 +37,16 @@ export type ParseTaskResult =
 export const VALID_EXECUTORS: ReadonlySet<string> = new Set(["codex", "gemini", "antigravity", "auto"]);
 export const VALID_RISKS: ReadonlySet<string> = new Set(["READ_ONLY", "WORKSPACE_WRITE", "COMMAND_EXECUTION"]);
 export const ALLOWED_VERIFICATION_EXECUTABLES: ReadonlySet<string> = new Set([
-  "npm", "npx", "node", "git", "vitest", "tsc", "cargo", "python", "pytest"
+  "git",
 ]);
+
+export function isAllowedVerificationCommand(executable: string, args: readonly string[]): boolean {
+  if (executable !== "git") return false;
+  return (
+    (args.length === 2 && args[0] === "diff" && args[1] === "--check") ||
+    (args.length === 2 && args[0] === "status" && args[1] === "--porcelain")
+  );
+}
 
 export interface PathValidationOptions {
   workspaceRoot?: string;
@@ -54,8 +63,17 @@ export function isPathSafeRelativeToWorkspace(targetPath: string, workspaceRoot?
 
   const trimmed = targetPath.trim();
 
-  // Reject UNC paths or Windows device paths
-  if (trimmed.startsWith("\\\\") || trimmed.startsWith("//") || /^[a-zA-Z]:[\\/]\.[\\]/.test(trimmed)) {
+  // The protocol only accepts workspace-relative paths. Reject absolute, UNC,
+  // device, drive-relative and alternate-data-stream forms before resolution.
+  if (
+    path.isAbsolute(trimmed) ||
+    trimmed.startsWith("\\\\") ||
+    trimmed.startsWith("//") ||
+    /^[/\\]{2}[?.][/\\]/.test(trimmed) ||
+    /^[a-zA-Z]:/.test(trimmed) ||
+    trimmed.includes(":") ||
+    trimmed.includes("\0")
+  ) {
     return false;
   }
 
@@ -71,6 +89,22 @@ export function isPathSafeRelativeToWorkspace(targetPath: string, workspaceRoot?
     const relative = path.relative(canonicalRoot, resolved);
 
     if (relative.startsWith("..") || path.isAbsolute(relative)) {
+      return false;
+    }
+
+    if (existsSync(canonicalRoot)) try {
+      const realRoot = realpathSync(canonicalRoot);
+      let cursor = realRoot;
+      for (const segment of relative.split(path.sep).filter(Boolean)) {
+        cursor = path.join(cursor, segment);
+        if (!existsSync(cursor)) break;
+        const stat = lstatSync(cursor);
+        if (stat.isSymbolicLink()) return false;
+        const realCursor = realpathSync(cursor);
+        const realRelative = path.relative(realRoot, realCursor);
+        if (realRelative.startsWith("..") || path.isAbsolute(realRelative)) return false;
+      }
+    } catch {
       return false;
     }
   }
@@ -95,6 +129,22 @@ export function validateCliTaskEnvelopeV1(
   }
 
   const obj = raw as Record<string, unknown>;
+
+  const allowedKeys = new Set<keyof CliTaskEnvelopeV1>([
+    "protocol", "version", "taskId", "projectId", "runId", "parentTurnId",
+    "executor", "title", "objective", "context", "instructions", "allowedPaths",
+    "forbiddenPaths", "acceptanceCriteria", "verification", "risk",
+    "requiresApproval", "dependsOn",
+  ]);
+  const unknownKeys = Object.keys(obj).filter((key) => !allowedKeys.has(key as keyof CliTaskEnvelopeV1));
+  if (unknownKeys.length > 0) {
+    return {
+      success: false,
+      reasonCode: "UNKNOWN_FIELDS",
+      errorDetails: `Unknown task fields: ${unknownKeys.join(", ")}`,
+      rawText: JSON.stringify(raw),
+    };
+  }
 
   if (obj.protocol !== "gplusg.cli-task" || obj.version !== 1) {
     return {
@@ -135,7 +185,15 @@ export function validateCliTaskEnvelopeV1(
     }
   }
 
-  const contextVal = typeof obj.context === "string" ? obj.context : "";
+  if (typeof obj.context !== "string") {
+    return {
+      success: false,
+      reasonCode: "MISSING_REQUIRED_FIELD",
+      errorDetails: "Field 'context' is required and must be a string",
+      rawText: JSON.stringify(raw),
+    };
+  }
+  const contextVal = obj.context;
   if (contextVal.length > 4000) {
     return {
       success: false,
@@ -274,18 +332,18 @@ export function validateCliTaskEnvelopeV1(
     return cleanPaths;
   };
 
-  const allowedPathsRes = validatePaths(obj.allowedPaths ?? [], "allowedPaths");
+  const allowedPathsRes = validatePaths(obj.allowedPaths, "allowedPaths");
   if ("success" in allowedPathsRes) return allowedPathsRes;
 
-  const forbiddenPathsRes = validatePaths(obj.forbiddenPaths ?? [], "forbiddenPaths");
+  const forbiddenPathsRes = validatePaths(obj.forbiddenPaths, "forbiddenPaths");
   if ("success" in forbiddenPathsRes) return forbiddenPathsRes;
 
   // Validate verification steps
-  if (!Array.isArray(obj.verification)) {
+  if (!Array.isArray(obj.verification) || obj.verification.length === 0) {
     return {
       success: false,
       reasonCode: "INVALID_VERIFICATION",
-      errorDetails: "Field 'verification' must be an array",
+      errorDetails: "Field 'verification' must be a non-empty array",
       rawText: JSON.stringify(raw),
     };
   }
@@ -317,6 +375,14 @@ export function validateCliTaskEnvelopeV1(
           success: false,
           reasonCode: "INVALID_VERIFICATION_ARGS",
           errorDetails: `Verification step args at index ${i} must be an array of strings`,
+          rawText: JSON.stringify(raw),
+        };
+      }
+      if (!isAllowedVerificationCommand(executable, step.args as string[])) {
+        return {
+          success: false,
+          reasonCode: "DISALLOWED_VERIFICATION_ARGS",
+          errorDetails: "Verification commands must match the trusted read-only verifier registry",
           rawText: JSON.stringify(raw),
         };
       }
@@ -361,9 +427,23 @@ export function validateCliTaskEnvelopeV1(
     }
   }
 
-  const dependsOn = Array.isArray(obj.dependsOn)
-    ? obj.dependsOn.filter((d): d is string => typeof d === "string")
-    : [];
+  if (!Array.isArray(obj.dependsOn) || obj.dependsOn.some((d) => typeof d !== "string")) {
+    return {
+      success: false,
+      reasonCode: "INVALID_DEPENDS_ON",
+      errorDetails: "Field 'dependsOn' must be an array of strings",
+      rawText: JSON.stringify(raw),
+    };
+  }
+  if (typeof obj.requiresApproval !== "boolean") {
+    return {
+      success: false,
+      reasonCode: "INVALID_APPROVAL_REQUIREMENT",
+      errorDetails: "Field 'requiresApproval' must be a boolean",
+      rawText: JSON.stringify(raw),
+    };
+  }
+  const dependsOn = obj.dependsOn as string[];
 
   const envelope: CliTaskEnvelopeV1 = {
     protocol: "gplusg.cli-task",
@@ -382,7 +462,7 @@ export function validateCliTaskEnvelopeV1(
     acceptanceCriteria: obj.acceptanceCriteria as string[],
     verification: validVerificationSteps,
     risk: risk as CliTaskRisk,
-    requiresApproval: obj.requiresApproval !== false,
+    requiresApproval: obj.requiresApproval,
     dependsOn,
   };
 
@@ -408,6 +488,43 @@ export function extractCliTasksV1(
     return [];
   }
 
+  if (Buffer.byteLength(responseText, "utf8") > 256_000) {
+    return [{
+      success: false,
+      reasonCode: "RESPONSE_TOO_LARGE",
+      errorDetails: "Model response exceeds the CLI protocol recognition limit",
+      rawText: "[REDACTED: oversized response]",
+    }];
+  }
+
+  const legacyMarker = /\[\[G_PLUS_G_CLI_TASK(?::|\]\])(?!_V1)/;
+  if (legacyMarker.test(responseText)) {
+    return [{
+      success: false,
+      reasonCode: "LEGACY_UNSUPPORTED",
+      errorDetails: "Legacy CLI task tags are displayed as text and are never executable",
+      rawText: responseText,
+    }];
+  }
+
+  const unknownProtocolMarker = /\[\[G_PLUS_G_CLI_TASK_(?!V1\]\])[^\]]+\]\]/;
+  if (unknownProtocolMarker.test(responseText)) {
+    return [{
+      success: false,
+      reasonCode: "UNSUPPORTED_PROTOCOL",
+      errorDetails: "Only G_PLUS_G_CLI_TASK_V1 is supported",
+      rawText: responseText,
+    }];
+  }
+
+  // A machine block shown inside a Markdown fence is documentation, never a task.
+  const fencedRanges: Array<[number, number]> = [];
+  const fencePattern = /(^|\n)[ \t]*(```|~~~)[^\n]*\n[\s\S]*?\n[ \t]*\2(?=\n|$)/g;
+  for (const match of responseText.matchAll(fencePattern)) {
+    fencedRanges.push([match.index ?? 0, (match.index ?? 0) + match[0].length]);
+  }
+  const isFenced = (position: number) => fencedRanges.some(([start, end]) => position >= start && position < end);
+
   const maxTasks = options?.maxTasksPerTurn ?? 5;
   const results: ParseTaskResult[] = [];
 
@@ -416,6 +533,10 @@ export function extractCliTasksV1(
     const blockStartPos = responseText.indexOf(BLOCK_START, startIndex);
     if (blockStartPos === -1) {
       break;
+    }
+    if (isFenced(blockStartPos)) {
+      startIndex = blockStartPos + BLOCK_START.length;
+      continue;
     }
 
     const contentStartPos = blockStartPos + BLOCK_START.length;

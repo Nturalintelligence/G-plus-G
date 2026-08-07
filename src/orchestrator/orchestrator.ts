@@ -23,6 +23,9 @@ import { QualityMetrics } from "../observability/metrics.js";
 import { logEvent } from "../observability/logger.js";
 import { globalEventBus } from "../events/event-bus.js";
 import { calculateRetryDelay, isRetryableError } from "./retry-policy.js";
+import { TaskCompiler } from "./task-compiler.js";
+import { TaskFsmRepository } from "../storage/task-fsm-repository.js";
+import { dataPath } from "../paths.js";
 
 export type RunMode = "MANUAL" | "SEQUENTIAL" | "PARALLEL" | "DEBATE";
 export type RunStatus =
@@ -121,6 +124,22 @@ export class Orchestrator {
     this.activeRunId = runId;
     this.createRun(runId, projectId, effectiveMode, limits);
     const repository = new ProjectRepository(this.database);
+    const taskCompiler = new TaskCompiler(new TaskFsmRepository(this.database.raw));
+    const processModelText = (rawText: string): string => {
+      const processed = taskCompiler.processModelTurnResponse(rawText, {
+        workspaceRoot: dataPath("cli-workspace"),
+        expectedProjectId: projectId,
+        expectedRunId: runId,
+      });
+      if (processed.rejectedBlocks.length > 0) {
+        logEvent("WARN", "cli_task.proposal_rejected", {
+          projectId,
+          runId,
+          reasonCodes: processed.rejectedBlocks.map((block) => block.success ? "UNKNOWN" : block.reasonCode),
+        });
+      }
+      return processed.cleanPublicText;
+    };
     // Each provider web chat already owns its history. Re-sending the local
     // transcript duplicates old messages and makes every later prompt larger.
     const initialMessage = task;
@@ -169,6 +188,7 @@ export class Orchestrator {
         for (const result of independent) {
           if (result.status === "fulfilled") {
             const response = result.value;
+            response.text = processModelText(response.text);
             responses.push(response);
             repository.appendConversationEntry({
               projectId,
@@ -205,6 +225,7 @@ export class Orchestrator {
           ),
           round: 1,
         };
+        response.text = processModelText(response.text);
         responses.push(response);
         repository.appendConversationEntry({
           projectId,
@@ -240,7 +261,7 @@ export class Orchestrator {
           );
           const agreed =
             effectiveMode === "DEBATE" && rawText.includes(consensusToken);
-          const text = rawText.replaceAll(consensusToken, "").trim();
+          const text = processModelText(rawText.replaceAll(consensusToken, "").trim());
           if (agreed) agreedProviders.add(providerId);
           else agreedProviders.delete(providerId);
           responses.push({ providerId, text, round: turn + 1, agreed });
@@ -281,32 +302,6 @@ export class Orchestrator {
             : buildPeerReviewPrompt(initialMessage, text);
         }
       }
-      // AUTOMATIC TWO-TIER CLI EXECUTION BRIDGE
-      const fullResponseText = responses.map((r) => r.text).join("\n");
-      if (
-        fullResponseText.includes("[[G_PLUS_G_CLI_TASK:") ||
-        initialMessage.toLowerCase().includes("змеейк") ||
-        initialMessage.toLowerCase().includes("snake") ||
-        initialMessage.toLowerCase().includes("разраб")
-      ) {
-        try {
-          const { TwoTierOrchestrator } = await import("./two-tier-orchestrator.js");
-          const twoTier = new TwoTierOrchestrator();
-          const twoTierResult = await twoTier.executeCycleStep(initialMessage, fullResponseText);
-          
-          repository.appendConversationEntry({
-            projectId,
-            runId,
-            role: "ASSISTANT",
-            providerId: "system",
-            round: responses.length + 1,
-            content: `⚡ **Автономный Двухуровневый CLI Отчёт**:\n\n${twoTierResult.finalBoardReport}`,
-          });
-        } catch (twoTierErr) {
-          logEvent("WARN", "orchestration.twotier.failed", { error: twoTierErr });
-        }
-      }
-
       const status: RunStatus = this.stopped ? "STOPPED" : "COMPLETED";
       this.setStatus(runId, status);
       runMetrics.record("orchestration.run.success", status === "COMPLETED" ? 1 : 0, {

@@ -5,6 +5,8 @@ import { ExecutionResultV1 } from "../cli-executors/execution-broker.js";
 export interface TaskCompilerOptions {
   workspaceRoot: string;
   autoExecuteReadOnly?: boolean;
+  expectedProjectId?: string;
+  expectedRunId?: string;
 }
 
 export interface ProcessedModelResponse {
@@ -86,17 +88,25 @@ export class TaskCompiler {
       }
 
       const env = res.envelope;
+      if (
+        (options.expectedProjectId && env.projectId !== options.expectedProjectId) ||
+        (options.expectedRunId && env.runId !== options.expectedRunId)
+      ) {
+        rejectedBlocks.push({
+          success: false,
+          reasonCode: "ENVELOPE_CONTEXT_MISMATCH",
+          errorDetails: "Task projectId/runId does not match the active orchestration context",
+          rawText: res.rawJson,
+        });
+        continue;
+      }
       extractedEnvelopes.push(env);
 
       // Determine initial state based on approval policy
       let initialStatus: CliTaskState = "VALIDATED";
-      if (env.risk === "READ_ONLY") {
-        initialStatus = options.autoExecuteReadOnly ? "QUEUED" : "AWAITING_APPROVAL";
-      } else if (env.risk === "WORKSPACE_WRITE") {
-        initialStatus = env.requiresApproval ? "AWAITING_APPROVAL" : "QUEUED";
-      } else if (env.risk === "COMMAND_EXECUTION") {
-        initialStatus = "AWAITING_APPROVAL"; // Always requires approval
-      }
+      // Model fields never waive approval. Every newly proposed task starts at
+      // the human approval boundary; policy may evolve in a separate change.
+      initialStatus = "AWAITING_APPROVAL";
 
       const record = this.repository.saveTaskEnvelope(env, initialStatus);
       savedTasks.push(record);

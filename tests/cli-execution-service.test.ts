@@ -20,7 +20,7 @@ describe("CliExecutionService Queue & Scheduler Integration", () => {
       "INSERT INTO projects (id, name, status, created_at, updated_at) VALUES ('p-srv', 'Srv Project', 'ACTIVE', '2026-01-01', '2026-01-01')"
     ).run();
 
-    service = new CliExecutionService(appDb.raw, { desktopPath: tmpDir });
+    service = new CliExecutionService(appDb.raw, { workspaceRoot: tmpDir });
   });
 
   afterEach(() => {
@@ -29,13 +29,15 @@ describe("CliExecutionService Queue & Scheduler Integration", () => {
     }
   });
 
-  it("1. Registers standard CLI executors and desktop workspace capability", () => {
+  it("1. Registers standard CLI executors and only the managed project workspace", () => {
     const executors = service.getAvailableExecutors();
     expect(executors.some((e) => e.id === "codex")).toBe(true);
     expect(executors.some((e) => e.id === "gemini")).toBe(true);
 
     const workspaces = service.getWorkspaceCapabilities();
-    expect(workspaces.some((w) => w.id === "desktop")).toBe(true);
+    expect(workspaces).toEqual([
+      { id: "project", label: "Project Workspace", allowedOperations: ["read", "write", "create_dir"] },
+    ]);
   });
 
   it("2. Transition task to QUEUED on approveTask and executes attempt to completion", async () => {

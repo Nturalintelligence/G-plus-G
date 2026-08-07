@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import path from "node:path";
+import fs from "node:fs";
+import os from "node:os";
 import {
   extractCliTasksV1,
+  BLOCK_END,
+  BLOCK_START,
   isPathSafeRelativeToWorkspace,
   validateCliTaskEnvelopeV1,
   CliTaskEnvelopeV1,
@@ -27,7 +31,7 @@ describe("Phase A: CLI Task Envelope Schema V1 & Extractor", () => {
     acceptanceCriteria: ["File src/styles.css exists", "npm run check passes"],
     verification: [
       { type: "file_exists", path: "src/styles.css" },
-      { type: "command", executable: "npm", args: ["run", "check"], timeoutMs: 30000 },
+      { type: "command", executable: "git", args: ["diff", "--check"], timeoutMs: 30000 },
     ],
     risk: "WORKSPACE_WRITE",
     requiresApproval: true,
@@ -172,6 +176,64 @@ ${JSON.stringify(task2)}
     expect(res.success).toBe(false);
     if (!res.success) {
       expect(res.reasonCode).toBe("FIELD_TOO_LONG");
+    }
+  });
+
+  it("rejects interpreter flags and arbitrary verifier arguments", () => {
+    for (const verification of [
+      { type: "command", executable: "node", args: ["-e", "process.exit(0)"], timeoutMs: 1000 },
+      { type: "command", executable: "git", args: ["status", "--porcelain", "&", "calc"], timeoutMs: 1000 },
+    ]) {
+      expect(validateCliTaskEnvelopeV1({ ...validEnvelopeObject, verification }).success).toBe(false);
+    }
+  });
+
+  it("treats ordinary Markdown, code fences, and trigger words as zero executable tasks", () => {
+    const fenced = `\`\`\`json\n${BLOCK_START}\n${JSON.stringify(validEnvelopeObject)}\n${BLOCK_END}\n\`\`\``;
+    for (const text of [
+      "ordinary text",
+      "# Markdown\n\n\`npm test\`",
+      fenced,
+      "snake змейка разработка разраб",
+    ]) {
+      expect(extractCliTasksV1(text).filter((result) => result.success)).toHaveLength(0);
+    }
+  });
+
+  it("reports legacy and unknown protocol markers without creating a task", () => {
+    const legacy = extractCliTasksV1("[[G_PLUS_G_CLI_TASK:codex]]do something[[/G_PLUS_G_CLI_TASK]]");
+    expect(legacy).toHaveLength(1);
+    expect(legacy[0]).toMatchObject({ success: false, reasonCode: "LEGACY_UNSUPPORTED" });
+
+    const unknown = extractCliTasksV1("[[G_PLUS_G_CLI_TASK_V2]]{}[[/G_PLUS_G_CLI_TASK_V2]]");
+    expect(unknown).toHaveLength(1);
+    expect(unknown[0]).toMatchObject({ success: false, reasonCode: "UNSUPPORTED_PROTOCOL" });
+  });
+
+  it("rejects unknown fields and absolute, device, drive-relative, and ADS paths", () => {
+    expect(validateCliTaskEnvelopeV1({ ...validEnvelopeObject, surprise: true }).success).toBe(false);
+    for (const unsafePath of [
+      "C:\\outside.txt",
+      "C:outside.txt",
+      "/etc/passwd",
+      "\\\\?\\C:\\outside.txt",
+      "\\\\.\\PhysicalDrive0",
+      "file.txt:secret",
+    ]) {
+      expect(isPathSafeRelativeToWorkspace(unsafePath, dummyWorkspace)).toBe(false);
+    }
+  });
+
+  it("rejects a symlink or junction that escapes the workspace", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "gplusg-path-root-"));
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), "gplusg-path-outside-"));
+    const link = path.join(root, "escape");
+    try {
+      fs.symlinkSync(outside, link, process.platform === "win32" ? "junction" : "dir");
+      expect(isPathSafeRelativeToWorkspace("escape/file.txt", root)).toBe(false);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+      fs.rmSync(outside, { recursive: true, force: true });
     }
   });
 });

@@ -79,7 +79,7 @@ ${JSON.stringify(validEnvelopeObject)}
     expect(saved0?.status).toBe("AWAITING_APPROVAL");
   });
 
-  it("should auto-queue READ_ONLY task when autoExecuteReadOnly is enabled", () => {
+  it("should require approval for READ_ONLY task even when autoExecuteReadOnly is requested", () => {
     const readOnlyEnvelope: CliTaskEnvelopeV1 = {
       ...validEnvelopeObject,
       taskId: "task-d-readonly",
@@ -99,7 +99,7 @@ ${JSON.stringify(readOnlyEnvelope)}
 
     const saved0 = processed.savedTasks[0];
     expect(saved0).toBeDefined();
-    expect(saved0?.status).toBe("QUEUED");
+    expect(saved0?.status).toBe("AWAITING_APPROVAL");
   });
 
   it("should format ExecutionResultV1 into single-reviewer report prompt", () => {

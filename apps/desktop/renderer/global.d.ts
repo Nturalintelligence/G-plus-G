@@ -54,18 +54,6 @@ interface Window {
     exports: {
       spec(projectId: string): Promise<{ directory: string; manifestHash: string }>;
     };
-    terminal: {
-      execute(command: string, cwd?: string): Promise<{ exitCode: number; stdout: string; stderr: string; elapsedMs: number }>;
-    };
-    twoTier: {
-      executeStep(userTask: string, simulatedResponse?: string): Promise<{
-        status: "COMPLETED" | "NEEDS_USER_ACTION" | "FAILED";
-        iterationsCompleted: number;
-        strategicPlanText: string;
-        cliExecutionResults: Array<{ tool: string; success: boolean; exitCode: number; stdout: string; stderr: string; elapsedMs: number; commandExecuted: string }>;
-        finalBoardReport: string;
-      }>;
-    };
     settings: {
       get(): Promise<AppSettingsView>;
       save(value: AppSettingsView): Promise<AppSettingsView>;
@@ -122,7 +110,7 @@ interface AppSettingsView {
     greetingStyle: "display" | "real" | "generic";
   };
   defaults: {
-    mode: "MANUAL" | "SEQUENTIAL" | "PARALLEL" | "DEBATE" | "AUTONOMOUS_CYCLE";
+    mode: "MANUAL" | "SEQUENTIAL" | "PARALLEL" | "DEBATE";
     providers: Array<
       | "chatgpt"
       | "gemini"

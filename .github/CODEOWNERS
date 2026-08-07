@@ -1,0 +1,13 @@
+/apps/desktop/main.ts @Nturalintelligence
+/apps/desktop/preload.cjs @Nturalintelligence
+/src/cli-executors/ @Nturalintelligence
+/src/orchestrator/ @Nturalintelligence
+/src/storage/ @Nturalintelligence
+/src/adapters/ @Nturalintelligence
+/src/chatgpt-adapter.ts @Nturalintelligence
+/src/gemini-adapter.ts @Nturalintelligence
+/src/deepseek-adapter.ts @Nturalintelligence
+/src/generic-web-adapter.ts @Nturalintelligence
+/src/release/ @Nturalintelligence
+/.github/workflows/ @Nturalintelligence
+/scripts/write-build-info.mjs @Nturalintelligence

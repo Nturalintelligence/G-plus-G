@@ -76,12 +76,12 @@ export class TaskFsmRepository {
   }
 
   /**
-   * Recovers tasks left in 'RUNNING' state during a previous system crash or abnormal exit.
+   * Recovers tasks left in an active state during a previous system crash or abnormal exit.
    * Transitions them to 'INTERRUPTED' and appends a CRASH_RECOVERY event.
    */
   public recoverInterruptedTasksOnStartup(): number {
     const runningTasks = this.db.prepare(
-      "SELECT id, task_id, status FROM cli_tasks WHERE status = 'RUNNING'"
+      "SELECT id, task_id, status FROM cli_tasks WHERE status IN ('RUNNING', 'VERIFYING')"
     ).all() as Array<{ id: string; task_id: string; status: string }>;
 
     let recoveredCount = 0;
@@ -96,7 +96,7 @@ export class TaskFsmRepository {
       this.db.prepare(
         `INSERT INTO cli_task_events (id, task_id, attempt_id, event_type, payload_json, occurred_at)
          VALUES (?, ?, NULL, 'CRASH_RECOVERY', ?, ?)`
-      ).run(eventId, task.task_id, JSON.stringify({ previousStatus: "RUNNING", newStatus: "INTERRUPTED" }), now);
+      ).run(eventId, task.task_id, JSON.stringify({ previousStatus: task.status, newStatus: "INTERRUPTED" }), now);
 
       recoveredCount++;
     }
@@ -116,23 +116,14 @@ export class TaskFsmRepository {
     ).get(envelope.projectId, envelope.taskId) as Record<string, unknown> | undefined;
 
     if (existing) {
-      this.db.prepare(
-        `UPDATE cli_tasks
-         SET run_id = ?, parent_turn_id = ?, executor = ?, title = ?, objective = ?, context = ?, risk = ?, status = ?, task_json = ?, updated_at = ?
-         WHERE id = ?`
-      ).run(
-        envelope.runId,
-        envelope.parentTurnId,
-        envelope.executor,
-        envelope.title,
-        envelope.objective,
-        envelope.context,
-        envelope.risk,
-        initialStatus,
-        JSON.stringify(envelope),
-        now,
-        dbId
-      );
+      const storedEnvelope = String(existing.task_json);
+      const incomingEnvelope = JSON.stringify(envelope);
+      if (storedEnvelope !== incomingEnvelope) {
+        throw new Error(
+          `Duplicate taskId '${envelope.taskId}' has a different envelope and was rejected`,
+        );
+      }
+      return this.getTaskById(envelope.projectId, envelope.taskId)!;
     } else {
       this.db.prepare(
         `INSERT INTO cli_tasks (id, task_id, project_id, run_id, parent_turn_id, executor, title, objective, context, risk, status, task_json, created_at, updated_at)

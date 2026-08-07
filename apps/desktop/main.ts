@@ -38,8 +38,6 @@ import {
 import { resetProviderSession } from "../../src/maintenance.js";
 import { QualityMetrics } from "../../src/observability/metrics.js";
 import { globalEventBus } from "../../src/events/event-bus.js";
-import { executeTerminalCommand } from "../../src/terminal/terminal-engine.js";
-import { TwoTierOrchestrator } from "../../src/orchestrator/two-tier-orchestrator.js";
 import { TaskFsmRepository } from "../../src/storage/task-fsm-repository.js";
 import { ThreeTierMemoryManager } from "../../src/context/three-tier-memory.js";
 import { ContextRolloverManager } from "../../src/context/context-rollover.js";
@@ -71,8 +69,10 @@ let cliService: CliExecutionService | null = null;
 
 function getCliService(): CliExecutionService {
   if (!cliService) {
+    const workspaceRoot = dataPath("cli-workspace");
+    fs.mkdirSync(workspaceRoot, { recursive: true });
     cliService = new CliExecutionService(db().raw, {
-      desktopPath: app.getPath("desktop"),
+      workspaceRoot,
     });
   }
   return cliService;
@@ -387,19 +387,6 @@ function registerIpc(): void {
     return { success: true };
   });
 
-  handle("cliTasks:approve", async (_event, projectIdValue: unknown, taskIdValue: unknown) => {
-    const projectId = requireString(projectIdValue, "projectId", 200);
-    const taskId = requireString(taskIdValue, "taskId", 200);
-    return getCliService().approveTask(projectId, taskId);
-  });
-
-  handle("cliTasks:reject", async (_event, projectIdValue: unknown, taskIdValue: unknown, reasonValue?: unknown) => {
-    const projectId = requireString(projectIdValue, "projectId", 200);
-    const taskId = requireString(taskIdValue, "taskId", 200);
-    const reason = typeof reasonValue === "string" ? reasonValue : undefined;
-    return getCliService().rejectTask(projectId, taskId, reason);
-  });
-
   handle("cliTasks:executors", async () => {
     return getCliService().getAvailableExecutors();
   });
@@ -679,33 +666,22 @@ function registerIpc(): void {
     if (!state) throw new Error("Create Project State before export");
     return new SpecExporter(db()).export(projectId, state);
   });
-  handle("terminal:execute", async (_event, input: unknown) => {
-    const data = input as { command?: string; cwd?: string };
-    const command = requireString(data?.command, "command", 4000);
-    return executeTerminalCommand({ command, cwd: data?.cwd });
-  });
-  handle("twoTier:executeStep", async (_event, input: unknown) => {
-    const data = input as { userTask?: string; simulatedResponse?: string };
-    const userTask = requireString(data?.userTask, "userTask", 10000);
-    const orchestrator = new TwoTierOrchestrator();
-    return orchestrator.executeCycleStep(userTask, data?.simulatedResponse);
-  });
   handle("cliTasks:list", (_event, projectId: unknown) => {
     const pId = requireString(projectId, "projectId", 200);
     return new TaskFsmRepository(db().raw).listTasksByProject(pId);
   });
-  handle("cliTasks:approve", (_event, taskId: unknown) => {
+  handle("cliTasks:approve", async (_event, taskId: unknown) => {
     const tId = requireString(taskId, "taskId", 200);
     const row = db().raw.prepare("SELECT project_id FROM cli_tasks WHERE task_id = ?").get(tId) as { project_id: string } | undefined;
     if (!row) throw new Error(`Task ${tId} not found`);
-    return new TaskFsmRepository(db().raw).transitionState(row.project_id, tId, "QUEUED");
+    return getCliService().approveTask(row.project_id, tId);
   });
   handle("cliTasks:reject", (_event, input: unknown) => {
     const data = input as { taskId?: string; reason?: string };
     const tId = requireString(data?.taskId, "taskId", 200);
     const row = db().raw.prepare("SELECT project_id FROM cli_tasks WHERE task_id = ?").get(tId) as { project_id: string } | undefined;
     if (!row) throw new Error(`Task ${tId} not found`);
-    return new TaskFsmRepository(db().raw).transitionState(row.project_id, tId, "REJECTED", { reason: data?.reason });
+    return getCliService().rejectTask(row.project_id, tId, data?.reason);
   });
   handle("cliTasks:cancel", (_event, taskId: unknown) => {
     const tId = requireString(taskId, "taskId", 200);

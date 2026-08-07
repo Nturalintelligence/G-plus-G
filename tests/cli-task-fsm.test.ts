@@ -138,4 +138,19 @@ describe("Phase B: Storage Migrations & Task FSM Repository", () => {
 
     repo.finishAttempt(attempt2.id, "COMPLETED");
   });
+
+  it("keeps an identical duplicate idempotent and rejects changed duplicate content", () => {
+    const repo = new TaskFsmRepository(appDb.raw);
+    const first = repo.saveTaskEnvelope(dummyEnvelope, "AWAITING_APPROVAL");
+    const duplicate = repo.saveTaskEnvelope(dummyEnvelope, "QUEUED");
+    expect(duplicate.status).toBe(first.status);
+    expect(repo.getTaskEvents(dummyEnvelope.taskId)).toHaveLength(1);
+
+    expect(() => repo.saveTaskEnvelope({
+      ...dummyEnvelope,
+      objective: "Different content under the same task id",
+    })).toThrow(/different envelope/);
+    expect(repo.getTaskById(dummyEnvelope.projectId, dummyEnvelope.taskId)?.objective)
+      .toBe(dummyEnvelope.objective);
+  });
 });

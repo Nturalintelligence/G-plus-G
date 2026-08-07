@@ -41,7 +41,6 @@ export function RunSummaryBar({
     SEQUENTIAL: "По очереди",
     PARALLEL: "Параллельно",
     DEBATE: "До согласия",
-    AUTONOMOUS_CYCLE: "Автономный цикл",
   };
   const modeLabel = modeLabelMap[mode] || mode;
 
@@ -121,7 +120,6 @@ export function RunSummaryBar({
                 { id: "MANUAL", label: "Один ответ" },
                 { id: "SEQUENTIAL", label: "По очереди" },
                 { id: "DEBATE", label: "До согласия" },
-                { id: "AUTONOMOUS_CYCLE", label: "Автономный цикл" },
               ].map((m) => (
                 <button
                   key={m.id}

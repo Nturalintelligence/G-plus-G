@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 import path from "node:path";
+import fs from "node:fs";
+import os from "node:os";
+import { execFileSync } from "node:child_process";
 import {
   SafeExecutionBroker,
   maskSecrets,
@@ -38,6 +41,14 @@ class MockCliExecutor implements CliExecutor {
   }
 }
 
+class OutOfScopeExecutor extends MockCliExecutor {
+  public override async *execute(input: ExecutorInput): AsyncIterable<ExecutorEvent> {
+    fs.writeFileSync(path.join(input.workspaceRoot, "outside.txt"), "unexpected", "utf8");
+    yield { type: "STARTED", at: new Date().toISOString(), attemptId: input.attemptId };
+    yield { type: "PROCESS_EXITED", at: new Date().toISOString(), exitCode: 0 };
+  }
+}
+
 describe("Phase C: Safe Execution Broker & Executor Adapters", () => {
   const dummyWorkspace = path.resolve(process.cwd());
 
@@ -56,7 +67,7 @@ describe("Phase C: Safe Execution Broker & Executor Adapters", () => {
     allowedPaths: ["src/cli-executors/execution-broker.ts"],
     forbiddenPaths: [],
     acceptanceCriteria: ["Broker runs safely"],
-    verification: [{ type: "file_exists", path: "package.json" }],
+    verification: [{ type: "command", executable: "git", args: ["status", "--porcelain"], timeoutMs: 5000 }],
     risk: "WORKSPACE_WRITE",
     requiresApproval: false,
     dependsOn: [],
@@ -99,14 +110,20 @@ describe("Phase C: Safe Execution Broker & Executor Adapters", () => {
   });
 
   it("should execute task with registered mock executor and run verification steps", async () => {
-    const broker = new SafeExecutionBroker();
-    broker.registerExecutor(new MockCliExecutor());
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "gplusg-verifier-"));
+    try {
+      execFileSync("git", ["init", "--quiet"], { cwd: workspace, windowsHide: true });
+      const broker = new SafeExecutionBroker();
+      broker.registerExecutor(new MockCliExecutor());
 
-    const res = await broker.executeTaskEnvelope(sampleEnvelope, "att-1", dummyWorkspace);
-    expect(res.status).toBe("COMPLETED");
-    const v0 = res.verificationResults[0];
-    expect(v0).toBeDefined();
-    expect(v0?.passed).toBe(true);
+      const res = await broker.executeTaskEnvelope(sampleEnvelope, "att-1", workspace);
+      expect(res.status).toBe("COMPLETED");
+      const v0 = res.verificationResults[0];
+      expect(v0).toBeDefined();
+      expect(v0?.passed).toBe(true);
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+    }
   });
 
   it("should report UNSUPPORTED for Antigravity executor when binary is unavailable", async () => {
@@ -120,5 +137,48 @@ describe("Phase C: Safe Execution Broker & Executor Adapters", () => {
   it("should capture current git status snapshot", () => {
     const snapshot = getGitStatusSnapshot(dummyWorkspace);
     expect(Array.isArray(snapshot)).toBe(true);
+  });
+
+  it("does not infer completion from an unrelated pre-existing file", async () => {
+    const broker = new SafeExecutionBroker();
+    broker.registerExecutor(new MockCliExecutor());
+    const result = await broker.executeTaskEnvelope({
+      ...sampleEnvelope,
+      verification: [{ type: "file_exists", path: "package.json" }],
+    }, "att-preexisting", dummyWorkspace);
+    expect(result.status).toBe("NEEDS_FIX");
+    expect(result.verificationResults[0]?.summary).toContain("existed unchanged");
+  });
+
+  it("refuses untrusted verifier arguments even if schema validation was bypassed", async () => {
+    const broker = new SafeExecutionBroker();
+    broker.registerExecutor(new MockCliExecutor());
+    const result = await broker.executeTaskEnvelope({
+      ...sampleEnvelope,
+      verification: [{
+        type: "command",
+        executable: "git",
+        args: ["status", "--porcelain", "&", "calc"],
+        timeoutMs: 5000,
+      }],
+    }, "att-argv", dummyWorkspace);
+    expect(result.status).toBe("NEEDS_FIX");
+    expect(result.verificationResults[0]?.summary).toContain("trusted read-only registry");
+  });
+
+  it("fails an attempt that changes a path outside allowedPaths", async () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "gplusg-scope-"));
+    try {
+      const broker = new SafeExecutionBroker();
+      broker.registerExecutor(new OutOfScopeExecutor());
+      const result = await broker.executeTaskEnvelope({
+        ...sampleEnvelope,
+        allowedPaths: ["allowed.txt"],
+      }, "att-scope", workspace);
+      expect(result.status).toBe("FAILED");
+      expect(result.summary).toContain("outside the approved scope");
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+    }
   });
 });

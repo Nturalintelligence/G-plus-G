@@ -1,5 +1,4 @@
 import type { DatabaseSync } from "node:sqlite";
-import path from "node:path";
 import { TaskFsmRepository, type CliTaskRecord, type CliTaskState } from "../storage/task-fsm-repository.js";
 import { SafeExecutionBroker, type ExecutionResultV1 } from "./execution-broker.js";
 import { CodexCliExecutor } from "./executors/codex-executor.js";
@@ -9,19 +8,18 @@ import type { CliTaskEnvelopeV1 } from "./cli-task-schema.js";
 
 export interface CliExecutionServiceOptions {
   workspaceRoot?: string;
-  desktopPath?: string;
 }
 
 export class CliExecutionService {
   public fsmRepo: TaskFsmRepository;
   public broker: SafeExecutionBroker;
   private isProcessing = false;
-  private desktopPath: string;
+  private workspaceRoot: string;
 
   constructor(private db: DatabaseSync, options?: CliExecutionServiceOptions) {
     this.fsmRepo = new TaskFsmRepository(db);
     this.broker = new SafeExecutionBroker();
-    this.desktopPath = options?.desktopPath || path.join(process.env.USERPROFILE || "C:\\Users\\Default", "Desktop");
+    this.workspaceRoot = options?.workspaceRoot || process.cwd();
 
     // Register standard CLI executors
     this.broker.registerExecutor(new CodexCliExecutor());
@@ -43,7 +41,6 @@ export class CliExecutionService {
   public getWorkspaceCapabilities(): Array<{ id: string; label: string; allowedOperations: string[] }> {
     return [
       { id: "project", label: "Project Workspace", allowedOperations: ["read", "write", "create_dir"] },
-      { id: "desktop", label: "Desktop Capability", allowedOperations: ["create_approved_folder"] },
     ];
   }
 
@@ -103,19 +100,13 @@ export class CliExecutionService {
         this.fsmRepo.transitionState(task.projectId, task.taskId, "RUNNING", { activeAttemptId: attempt.id }, attempt.id);
 
         try {
-          this.fsmRepo.transitionState(task.projectId, task.taskId, "VERIFYING", undefined, attempt.id);
-
-          // Resolve execution workspace: if targeting desktop capability, map to actual desktopPath
-          let effectiveWorkspace = process.cwd();
-          if (envelope.instructions.some((inst: string) => inst.toLowerCase().includes("desktop"))) {
-            effectiveWorkspace = this.desktopPath;
-          }
-
           const result: ExecutionResultV1 = await this.broker.executeTaskEnvelope(
             envelope,
             attempt.id,
-            effectiveWorkspace
+            this.workspaceRoot
           );
+
+          this.fsmRepo.transitionState(task.projectId, task.taskId, "VERIFYING", undefined, attempt.id);
 
           if (result.status === "COMPLETED") {
             this.fsmRepo.transitionState(task.projectId, task.taskId, "COMPLETED", undefined, attempt.id);

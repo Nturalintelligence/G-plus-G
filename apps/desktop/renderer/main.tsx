@@ -151,14 +151,6 @@ function App(): React.JSX.Element {
   const [attachedFiles, setAttachedFiles] = useState<AttachedFileItem[]>([]);
   const [viewMode, setViewMode] = useState<"SYNTHESIZED" | "LIVE">("SYNTHESIZED");
   const [showTurnsSpoiler, setShowTurnsSpoiler] = useState(false);
-  const [terminalOutput, setTerminalOutput] = useState<{ command: string; stdout: string; stderr: string; exitCode: number } | null>(null);
-  const [terminalBusy, setTerminalBusy] = useState(false);
-  const [twoTierResult, setTwoTierResult] = useState<{
-    status: string;
-    strategicPlanText: string;
-    cliExecutionResults: Array<{ tool: string; success: boolean; exitCode: number; stdout: string; stderr: string; elapsedMs: number; commandExecuted: string }>;
-    finalBoardReport: string;
-  } | null>(null);
   const [finalizerMode, setFinalizerMode] = useState<"MANUAL" | "LEAD_SELECTS" | "PEER_AGREEMENT">("MANUAL");
   const [composerExpanded, setComposerExpanded] = useState(false);
   const [newProjectDescriptionInput, setNewProjectDescriptionInput] = useState("");
@@ -170,21 +162,6 @@ function App(): React.JSX.Element {
   const [webChatsDrawerOpen, setWebChatsDrawerOpen] = useState(false);
   const [finalResponder, setFinalResponder] = useState<string>("auto");
   const outputRef = useRef<HTMLElement>(null);
-
-  async function runTerminal(command: string) {
-    if (terminalBusy) return;
-    setTerminalBusy(true);
-    setStatus(`Исполнение терминальной команды: ${command}…`);
-    try {
-      const res = await window.orchestrator.terminal.execute(command);
-      setTerminalOutput({ command, stdout: res.stdout, stderr: res.stderr, exitCode: res.exitCode });
-      setStatus(`Команда завершена с кодом: ${res.exitCode}`);
-    } catch (err: any) {
-      setStatus(`Ошибка терминала: ${err.message}`);
-    } finally {
-      setTerminalBusy(false);
-    }
-  }
 
   async function handlePickFiles() {
     if (!current) {
@@ -394,23 +371,6 @@ function App(): React.JSX.Element {
     setTask("");
     setStreaming({});
     setRunning(true);
-    if (mode === "AUTONOMOUS_CYCLE") {
-      setStatus("Запуск Двухуровневого Цикла (ИИ-Совет Web ➔ CLI Исполнители)…");
-      try {
-        const result = await window.orchestrator.twoTier.executeStep(submittedTask);
-        setTwoTierResult(result);
-        setStatus(`Двухуровневый цикл завершен со статусом: ${result.status}`);
-        await openProject(projectId);
-      } catch (err: any) {
-        const userErr = toUserFacingError(err, "Двухуровневый цикл");
-        setActiveUserError(userErr);
-        setStatus(`Ошибка: ${userErr.title}`);
-      } finally {
-        setRunning(false);
-        setOptimisticUserTask(null);
-      }
-      return;
-    }
     setStatus("Модели обсуждают сообщение…");
     try {
       const orderedProviders = [
@@ -879,58 +839,6 @@ function App(): React.JSX.Element {
               <p className="empty">Напишите ваш первый запрос, чтобы запустить обсуждение ИИ-моделей.</p>
             )}
           </article>
-
-          {twoTierResult ? (
-            <div className="two-tier-result-card panel">
-              <header className="two-tier-card-header">
-                <strong>⚡ Двухуровневый Автономный Цикл (План ➔ Код ➔ Тесты)</strong>
-                <span className={`two-tier-status-badge ${twoTierResult.status === "COMPLETED" ? "success" : "warn"}`}>
-                  {twoTierResult.status}
-                </span>
-                <button className="close-two-tier-btn" onClick={() => setTwoTierResult(null)}>×</button>
-              </header>
-              <details open className="two-tier-section">
-                <summary>🏛️ План Архитектуры и UX/UI (Стратегический ИИ-Совет)</summary>
-                <div className="two-tier-markdown">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml>{twoTierResult.strategicPlanText}</ReactMarkdown>
-                </div>
-              </details>
-              <details open className="two-tier-section">
-                <summary>🛠️ Выполнение CLI Исполнителями ({twoTierResult.cliExecutionResults.length} задач)</summary>
-                {twoTierResult.cliExecutionResults.map((res, i) => (
-                  <div key={i} className="cli-execution-item">
-                    <header>
-                      <strong>Задача #{i + 1} [{res.tool.toUpperCase()}]</strong>
-                      <span className={res.success ? "text-success" : "text-error"}>
-                        {res.success ? "✅ Успешно (Exit 0)" : `❌ Ошибка (Exit ${res.exitCode})`}
-                      </span>
-                    </header>
-                    <code>{res.commandExecuted}</code>
-                    <pre className="cli-output">{res.stdout || res.stderr || "[Вывод пуст]"}</pre>
-                  </div>
-                ))}
-              </details>
-              <details className="two-tier-section">
-                <summary>📋 Финальный Отчёт QA Тестов для Совета</summary>
-                <div className="two-tier-markdown">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml>{twoTierResult.finalBoardReport}</ReactMarkdown>
-                </div>
-              </details>
-            </div>
-          ) : null}
-
-          {terminalOutput ? (
-            <div className="terminal-card panel">
-              <header className="terminal-card-header">
-                <strong>🖥️ Терминал: <code>{terminalOutput.command}</code></strong>
-                <span className={`terminal-status-badge ${terminalOutput.exitCode === 0 ? "success" : "error"}`}>
-                  Exit code: {terminalOutput.exitCode}
-                </span>
-                <button onClick={() => setTerminalOutput(null)}>×</button>
-              </header>
-              <pre className="terminal-console-output">{terminalOutput.stdout || terminalOutput.stderr || "[Вывод пуст]"}</pre>
-            </div>
-          ) : null}
 
           <div
             className="composer panel composer-bottom"

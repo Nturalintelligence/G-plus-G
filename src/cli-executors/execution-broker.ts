@@ -1,7 +1,8 @@
-import { spawn, execSync, ChildProcess } from "node:child_process";
+import { spawn, execFileSync, ChildProcess } from "node:child_process";
 import path from "node:path";
 import fs from "node:fs";
-import { CliTaskEnvelopeV1, ExecutorId, isPathSafeRelativeToWorkspace } from "./cli-task-schema.js";
+import { createHash } from "node:crypto";
+import { CliTaskEnvelopeV1, ExecutorId, isAllowedVerificationCommand, isPathSafeRelativeToWorkspace } from "./cli-task-schema.js";
 import { CliExecutor, ExecutorEvent, ExecutorHealth, ExecutorInput } from "./cli-executor-contract.js";
 
 export interface ExecutionResultV1 {
@@ -41,7 +42,7 @@ export function maskSecrets(text: string): string {
 
 export function getGitStatusSnapshot(workspaceRoot: string): GitFileStatus[] {
   try {
-    const output = execSync("git status --porcelain", {
+    const output = execFileSync("git", ["status", "--porcelain"], {
       cwd: workspaceRoot,
       encoding: "utf-8",
       windowsHide: true,
@@ -74,7 +75,7 @@ export function getGitStatusSnapshot(workspaceRoot: string): GitFileStatus[] {
 export function killProcessTreeWindows(pid: number): void {
   try {
     if (process.platform === "win32") {
-      execSync(`taskkill /F /T /PID ${pid}`, { windowsHide: true });
+      execFileSync("taskkill", ["/F", "/T", "/PID", String(pid)], { windowsHide: true });
     } else {
       process.kill(-pid, "SIGKILL");
     }
@@ -102,6 +103,51 @@ export function sanitizeEnv(customEnv?: Record<string, string>): Record<string, 
   }
 
   return env;
+}
+
+function fileAssertionFingerprint(filePath: string): string | null {
+  if (!fs.existsSync(filePath)) return null;
+  const stat = fs.lstatSync(filePath);
+  if (stat.isSymbolicLink()) return "SYMLINK";
+  if (stat.isDirectory()) return `DIRECTORY:${stat.mtimeMs}`;
+  if (!stat.isFile()) return `SPECIAL:${stat.mode}`;
+  return createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
+}
+
+function normalizeRelativePath(value: string): string {
+  const normalized = value.replaceAll("\\", "/").replace(/^\.\//, "").replace(/\/$/, "");
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+
+function pathIsWithinScope(filePath: string, scope: string): boolean {
+  const file = normalizeRelativePath(filePath);
+  const root = normalizeRelativePath(scope);
+  return file === root || file.startsWith(`${root}/`);
+}
+
+function snapshotWorkspace(root: string): Map<string, string> {
+  const snapshot = new Map<string, string>();
+  const excludedRoots = new Set([".git", "node_modules", "dist", "dist-electron", "release"]);
+  const visit = (directory: string, relativeDirectory = "") => {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      const relative = relativeDirectory ? `${relativeDirectory}/${entry.name}` : entry.name;
+      if (!relativeDirectory && excludedRoots.has(entry.name)) continue;
+      const fullPath = path.join(directory, entry.name);
+      const stat = fs.lstatSync(fullPath);
+      if (stat.isSymbolicLink()) {
+        snapshot.set(relative, "SYMLINK");
+      } else if (stat.isDirectory()) {
+        visit(fullPath, relative);
+      } else if (stat.isFile()) {
+        snapshot.set(relative, createHash("sha256").update(fs.readFileSync(fullPath)).digest("hex"));
+      } else {
+        snapshot.set(relative, `SPECIAL:${stat.mode}`);
+      }
+      if (snapshot.size > 20_000) throw new Error("Workspace snapshot file limit exceeded");
+    }
+  };
+  visit(root);
+  return snapshot;
 }
 
 export class SafeExecutionBroker {
@@ -150,9 +196,9 @@ export class SafeExecutionBroker {
       }
     }
 
-    const forbiddenCheck = [".git", "profiles", "AppData", "credentials"];
+    const forbiddenCheck = [".git", "profiles", "appdata", "credentials", "node_modules", "release"];
     for (const forbidden of forbiddenCheck) {
-      if (task.allowedPaths.some((p) => p.includes(forbidden))) {
+      if (task.allowedPaths.some((p) => normalizeRelativePath(p).split("/").includes(forbidden.toLowerCase()))) {
         return {
           taskId: task.taskId,
           attemptId,
@@ -194,7 +240,16 @@ export class SafeExecutionBroker {
       };
     }
 
-    const gitBefore = getGitStatusSnapshot(canonicalWorkspace);
+    const workspaceBefore = snapshotWorkspace(canonicalWorkspace);
+    const fileAssertionsBefore = new Map<string, string | null>();
+    for (const step of task.verification) {
+      if (step.type === "file_exists") {
+        fileAssertionsBefore.set(
+          step.path,
+          fileAssertionFingerprint(path.resolve(canonicalWorkspace, step.path)),
+        );
+      }
+    }
 
     const input: ExecutorInput = {
       task,
@@ -241,20 +296,31 @@ export class SafeExecutionBroker {
       failureReason = err?.message || String(err);
     }
 
-    const gitAfter = getGitStatusSnapshot(canonicalWorkspace);
+    const workspaceAfter = snapshotWorkspace(canonicalWorkspace);
     const changedFilesMap = new Map<string, "added" | "modified" | "deleted">();
 
-    for (const afterItem of gitAfter) {
-      const beforeItem = gitBefore.find((b) => b.path === afterItem.path);
-      if (!beforeItem || beforeItem.change !== afterItem.change) {
-        changedFilesMap.set(afterItem.path, afterItem.change);
-      }
+    for (const [filePath, hash] of workspaceAfter) {
+      const beforeHash = workspaceBefore.get(filePath);
+      if (beforeHash === undefined) changedFilesMap.set(filePath, "added");
+      else if (beforeHash !== hash) changedFilesMap.set(filePath, "modified");
+    }
+    for (const filePath of workspaceBefore.keys()) {
+      if (!workspaceAfter.has(filePath)) changedFilesMap.set(filePath, "deleted");
     }
 
     const changedFiles: GitFileStatus[] = Array.from(changedFilesMap.entries()).map(([p, change]) => ({
       path: p,
       change,
     }));
+
+    const unexpectedChanges = changedFiles.filter(({ path: changedPath }) =>
+      !task.allowedPaths.some((allowed) => pathIsWithinScope(changedPath, allowed)) ||
+      task.forbiddenPaths.some((forbidden) => pathIsWithinScope(changedPath, forbidden)),
+    );
+    if (unexpectedChanges.length > 0) {
+      executionSuccess = false;
+      failureReason = `Executor changed paths outside the approved scope: ${unexpectedChanges.map((item) => item.path).join(", ")}`;
+    }
 
     // Perform verification steps
     const verificationResults: ExecutionResultV1["verificationResults"] = [];
@@ -263,20 +329,31 @@ export class SafeExecutionBroker {
     for (const step of task.verification) {
       if (step.type === "file_exists") {
         const fullPath = path.resolve(canonicalWorkspace, step.path);
-        const exists = fs.existsSync(fullPath);
+        const afterFingerprint = fileAssertionFingerprint(fullPath);
+        const beforeFingerprint = fileAssertionsBefore.get(step.path) ?? null;
+        const exists = afterFingerprint !== null;
+        const producedByAttempt = exists && afterFingerprint !== beforeFingerprint;
         verificationResults.push({
           label: `File exists: ${step.path}`,
-          passed: exists,
-          summary: exists ? `File '${step.path}' exists.` : `File '${step.path}' is missing.`,
+          passed: producedByAttempt,
+          summary: !exists
+            ? `File '${step.path}' is missing.`
+            : producedByAttempt
+              ? `File '${step.path}' was created or changed by this attempt.`
+              : `File '${step.path}' existed unchanged before this attempt.`,
         });
-        if (!exists) allVerificationPassed = false;
+        if (!producedByAttempt) allVerificationPassed = false;
       } else if (step.type === "command") {
         try {
-          const res = execSync(`${step.executable} ${step.args.join(" ")}`, {
+          if (!isAllowedVerificationCommand(step.executable, step.args)) {
+            throw new Error("Verification command is not in the trusted read-only registry");
+          }
+          const res = execFileSync(step.executable, step.args, {
             cwd: canonicalWorkspace,
             encoding: "utf-8",
             windowsHide: true,
             timeout: step.timeoutMs || 30000,
+            shell: false,
           });
           verificationResults.push({
             label: `Command: ${step.executable} ${step.args.join(" ")}`,
@@ -294,11 +371,14 @@ export class SafeExecutionBroker {
           });
         }
       } else if (step.type === "git_diff") {
-        const hasDiff = changedFiles.length > 0;
+        const scopedChanges = changedFiles.filter(({ path: changedPath }) =>
+          step.allowedPaths.some((allowed) => pathIsWithinScope(changedPath, allowed)),
+        );
+        const hasDiff = scopedChanges.length > 0;
         verificationResults.push({
           label: "Git status diff check",
           passed: hasDiff,
-          summary: hasDiff ? `${changedFiles.length} files modified/added` : "No git diff detected",
+          summary: hasDiff ? `${scopedChanges.length} approved files modified/added` : "No approved-path diff detected",
         });
         if (!hasDiff) allVerificationPassed = false;
       }

@@ -6,7 +6,9 @@ import { AppDatabase } from "../src/storage/database.js";
 import { LocalArtifactStore } from "../src/attachments/artifact-store.js";
 import { AttachmentDeliveryManager, ProviderSubmissionManager } from "../src/attachments/attachment-delivery.js";
 import { ResponseArtifactDownloader, isUrlSsrfSafe } from "../src/attachments/artifact-downloader.js";
-import { parseCliTasksFromBoardResponse } from "../src/orchestrator/two-tier-orchestrator.js";
+import { extractCliTasksV1 } from "../src/cli-executors/cli-task-schema.js";
+
+const parseExecutableTasks = (text: string) => extractCliTasksV1(text).filter((result) => result.success);
 
 describe("Stage 10: Attachments & Task Envelope End-to-End Acceptance Tests", () => {
   let tmpDir: string;
@@ -55,7 +57,7 @@ npm run check должен быть 100% зелёным.
     `;
 
     // Verify parser returns 0 CLI execution tasks for plain user prompts
-    const tasks = parseCliTasksFromBoardResponse(cardUserPrompt, "gemini");
+    const tasks = parseExecutableTasks(cardUserPrompt);
     expect(tasks.length).toBe(0);
   });
 
@@ -65,7 +67,7 @@ Plan ready:
 [[G_PLUS_G_CLI_TASK:{"tool":"codex","task":"Legacy command execution"}]]
     `;
 
-    const tasks = parseCliTasksFromBoardResponse(legacyPrompt, "gemini");
+    const tasks = parseExecutableTasks(legacyPrompt);
     expect(tasks.length).toBe(0);
   });
 

@@ -24,7 +24,7 @@ describe("Production Wiring Integration Tests (Scenarios A & B)", () => {
       "INSERT INTO projects (id, name, status, created_at, updated_at) VALUES ('p-prod', 'Production Test Project', 'ACTIVE', '2026-01-01', '2026-01-01')"
     ).run();
 
-    service = new CliExecutionService(appDb.raw, { desktopPath: tmpDir });
+    service = new CliExecutionService(appDb.raw, { workspaceRoot: tmpDir });
     compiler = new TaskCompiler(service.fsmRepo);
     store = new LocalArtifactStore(tmpDir);
   });
