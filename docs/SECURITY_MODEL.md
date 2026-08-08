@@ -21,6 +21,16 @@ added, modified, or deleted path must be allowed and not forbidden.
 The renderer has context isolation, no Node integration, and a fixed preload
 API. New IPC channels require schema, size, sender, and authorization review.
 
+Attachments are untrusted bytes. Native picker/drop/paste paths terminate in a
+bounded main-process staging API. Managed blobs use safe identifiers and names,
+magic-byte MIME classification, SHA-256 integrity and content-addressed storage.
+Integrity is rechecked immediately before provider upload/open/save. ChatGPT and
+Gemini keep independent delivery/submission FSM records; an `UNKNOWN` submission
+is never retried without reconciliation. Response downloads prefer the original
+authenticated BrowserContext, require HTTPS and an allowlisted provider domain,
+validate every redirect/DNS address, and reject local/private/reserved targets
+and active HTML/SVG/archive/executable content.
+
 **Residual risk:** the existing CLI executors run as the host user and are not a
 VM-grade sandbox. `G_PLUS_G_EXECUTION_V1` is **PLANNED**, not implemented; it must
 remain disabled until a separate threat model and sandbox review are complete.
