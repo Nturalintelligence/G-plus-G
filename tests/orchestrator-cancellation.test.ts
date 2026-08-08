@@ -65,6 +65,7 @@ describe("parallel cancellation", () => {
       ]),
     );
 
+    const startedAt = Date.now();
     await expect(
       orchestrator.run(
         project.id,
@@ -74,6 +75,7 @@ describe("parallel cancellation", () => {
         limits(),
       ),
     ).rejects.toThrow(/has been closed/);
+    expect(Date.now() - startedAt).toBeLessThan(800);
     expect(failedAttempts).toBe(1);
     expect(peerCancelled).toBe(1);
     database.close();

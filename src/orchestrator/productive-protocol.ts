@@ -129,8 +129,8 @@ export function buildProductiveBoardPrompt(options: BuildBoardPromptOptions): st
   const parentTurnId = options.parentTurnId || "current-turn";
 
   const executors = options.executors || [
-    { id: "codex", healthy: true, capabilities: ["file_read", "file_write", "command_exec"] },
-    { id: "gemini", healthy: true, capabilities: ["file_read", "file_write"] },
+    { id: "codex", healthy: false, capabilities: ["file_read", "file_write", "command_exec"] },
+    { id: "gemini", healthy: false, capabilities: ["file_read", "file_write"] },
   ];
 
   const workspaces = options.workspaces || [
@@ -153,7 +153,7 @@ CLI_TASK_ENVELOPE_V1 SCHEMA SUMMARY:
 - projectId: "${projectId}"
 - runId: "${runId}"
 - parentTurnId: "${parentTurnId}"
-- executor: "codex" | "gemini" | "antigravity"
+- executor: "codex" | "gemini" | "antigravity" | "auto"
 - title: string
 - objective: string
 - context: string
@@ -161,8 +161,12 @@ CLI_TASK_ENVELOPE_V1 SCHEMA SUMMARY:
 - allowedPaths: string[]
 - forbiddenPaths: string[]
 - acceptanceCriteria: string[]
-- verification: Array<{ type: "file_exists" | "command_exit_code" | "file_contains"; path?: string; command?: string; expectedContent?: string }>
-- risk: "SAFE" | "WORKSPACE_WRITE" | "FULL_SYSTEM"
+- verification: Array<
+    | { type: "file_exists"; path: string }
+    | { type: "git_diff"; allowedPaths: string[] }
+    | { type: "command"; executable: "git"; args: ["diff", "--check"] | ["status", "--porcelain"]; timeoutMs: number }
+  >
+- risk: "READ_ONLY" | "WORKSPACE_WRITE" | "COMMAND_EXECUTION"
 - requiresApproval: boolean
 - dependsOn: string[]
 

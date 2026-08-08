@@ -33,6 +33,10 @@ class E2EMockExecutor implements CliExecutor {
     yield { type: "STARTED", at: at(), attemptId: input.attemptId };
 
     if (input.task.taskId === "task-e2e-1") {
+      const target = path.join(input.workspaceRoot, "src", "components", "card.tsx");
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, "export const Card = () => null;\n", "utf8");
+      yield { type: "FILE_CHANGED", at: at(), path: "src/components/card.tsx" };
       yield { type: "STDOUT", at: at(), chunk: "Created src/components/card.tsx" };
       yield { type: "PROCESS_EXITED", at: at(), exitCode: 0 };
     } else {
@@ -105,7 +109,7 @@ describe("Phase I: End-to-End Long Board Cycle Fixture Test", () => {
       objective: "Build card component",
       context: "Phase I test",
       instructions: ["Create card.tsx"],
-      allowedPaths: ["package.json"],
+      allowedPaths: ["src/components/card.tsx"],
       forbiddenPaths: [],
       acceptanceCriteria: ["Card component created"],
       verification: [{
@@ -185,6 +189,7 @@ NO
     // Retry Task 2 -> Fix attempt succeeds (Attempt #2)
     const att2 = taskRepo.createAttempt("task-e2e-2");
     expect(att2.attemptNumber).toBe(2);
+    taskRepo.transitionState("proj-e2e", "task-e2e-2", "AWAITING_APPROVAL");
     taskRepo.transitionState("proj-e2e", "task-e2e-2", "QUEUED");
     taskRepo.transitionState("proj-e2e", "task-e2e-2", "RUNNING");
 
