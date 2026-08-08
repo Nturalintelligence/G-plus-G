@@ -107,7 +107,8 @@ describe("Phase B: Storage Migrations & Task FSM Repository", () => {
     repo.transitionState("proj-1", "task-101", "VALIDATED");
     repo.transitionState("proj-1", "task-101", "AWAITING_APPROVAL");
     repo.transitionState("proj-1", "task-101", "QUEUED");
-    repo.transitionState("proj-1", "task-101", "RUNNING");
+    const attempt = repo.createAttempt("proj-1", "task-101");
+    repo.transitionState("proj-1", "task-101", "RUNNING", { activeAttemptId: attempt.id }, attempt.id);
 
     // Simulate crash and app restart
     const newRepo = new TaskFsmRepository(appDb.raw);
@@ -121,6 +122,10 @@ describe("Phase B: Storage Migrations & Task FSM Repository", () => {
     const events = newRepo.getTaskEvents("task-101");
     const crashEvent = events.find((e) => e.eventType === "CRASH_RECOVERY");
     expect(crashEvent).toBeDefined();
+    expect(JSON.parse(crashEvent!.payloadJson)).toMatchObject({ outcome: "UNKNOWN" });
+    expect(newRepo.listAttempts("proj-1", "task-101")).toMatchObject([
+      { status: "INTERRUPTED", finishedAt: expect.any(String) },
+    ]);
   });
 
   it("should track task attempts correctly", () => {
@@ -152,5 +157,20 @@ describe("Phase B: Storage Migrations & Task FSM Repository", () => {
     })).toThrow(/different envelope/);
     expect(repo.getTaskById(dummyEnvelope.projectId, dummyEnvelope.taskId)?.objective)
       .toBe(dummyEnvelope.objective);
+  });
+
+  it("requires project identity when the same taskId exists in multiple projects", () => {
+    appDb.raw.prepare(
+      "INSERT INTO projects (id, name, status, created_at, updated_at) VALUES ('proj-2', 'Second', 'ACTIVE', '2026-01-01', '2026-01-01')",
+    ).run();
+    const repo = new TaskFsmRepository(appDb.raw);
+    repo.saveTaskEnvelope(dummyEnvelope);
+    repo.saveTaskEnvelope({ ...dummyEnvelope, projectId: "proj-2" });
+
+    expect(() => repo.createAttempt("task-101")).toThrow(/ambiguous across projects/);
+    expect(repo.createAttempt("proj-1", "task-101").attemptNumber).toBe(1);
+    expect(repo.createAttempt("proj-2", "task-101").attemptNumber).toBe(1);
+    expect(repo.getTaskEvents("proj-1", "task-101")).toHaveLength(1);
+    expect(repo.getTaskEvents("proj-2", "task-101")).toHaveLength(1);
   });
 });

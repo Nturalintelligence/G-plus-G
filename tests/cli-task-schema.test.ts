@@ -236,4 +236,41 @@ ${JSON.stringify(task2)}
       fs.rmSync(outside, { recursive: true, force: true });
     }
   });
+
+  it("rejects protected scopes, conflicting scopes, and unbounded verifier timeouts", () => {
+    expect(validateCliTaskEnvelopeV1({
+      ...validEnvelopeObject,
+      allowedPaths: ["node_modules/generated.txt"],
+    }, { workspaceRoot: dummyWorkspace })).toMatchObject({
+      success: false,
+      reasonCode: "PROTECTED_WORKSPACE_PATH",
+    });
+    expect(validateCliTaskEnvelopeV1({
+      ...validEnvelopeObject,
+      allowedPaths: ["src"],
+      forbiddenPaths: ["src"],
+    }, { workspaceRoot: dummyWorkspace })).toMatchObject({
+      success: false,
+      reasonCode: "CONFLICTING_PATH_SCOPE",
+    });
+    expect(validateCliTaskEnvelopeV1({
+      ...validEnvelopeObject,
+      verification: [{ type: "command", executable: "git", args: ["diff", "--check"], timeoutMs: 60_000 }],
+    }, { workspaceRoot: dummyWorkspace })).toMatchObject({
+      success: false,
+      reasonCode: "INVALID_VERIFICATION_TIMEOUT",
+    });
+  });
+
+  it("rejects duplicate and self dependencies", () => {
+    for (const dependsOn of [["task-001"], ["task-000", "task-000"]]) {
+      expect(validateCliTaskEnvelopeV1({
+        ...validEnvelopeObject,
+        dependsOn,
+      }, { workspaceRoot: dummyWorkspace })).toMatchObject({
+        success: false,
+        reasonCode: "INVALID_DEPENDENCY_GRAPH",
+      });
+    }
+  });
 });

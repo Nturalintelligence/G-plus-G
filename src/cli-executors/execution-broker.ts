@@ -1,9 +1,16 @@
-import { spawn, execFileSync, ChildProcess } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import path from "node:path";
 import fs from "node:fs";
 import { createHash } from "node:crypto";
-import { CliTaskEnvelopeV1, ExecutorId, isAllowedVerificationCommand, isPathSafeRelativeToWorkspace } from "./cli-task-schema.js";
-import { CliExecutor, ExecutorEvent, ExecutorHealth, ExecutorInput } from "./cli-executor-contract.js";
+import {
+  CliTaskEnvelopeV1,
+  ExecutorId,
+  PROTECTED_WORKSPACE_SEGMENTS,
+  isAllowedVerificationCommand,
+  isPathSafeRelativeToWorkspace,
+  isProtectedWorkspacePath,
+} from "./cli-task-schema.js";
+import { CliExecutor, ExecutorHealth, ExecutorInput } from "./cli-executor-contract.js";
 
 export interface ExecutionResultV1 {
   taskId: string;
@@ -21,6 +28,14 @@ export interface ExecutionResultV1 {
   }>;
   warnings: string[];
   nextRecommendation?: string;
+  stdout?: string;
+  stderr?: string;
+  outputTruncated?: boolean;
+  objectiveEvidenceObserved?: boolean;
+  security?: {
+    hostProcessSandboxed: false;
+    enforcement: "preflight-and-postflight-audit";
+  };
 }
 
 export interface GitFileStatus {
@@ -28,16 +43,35 @@ export interface GitFileStatus {
   change: "added" | "modified" | "deleted";
 }
 
-export const SAFE_EXECUTABLES: ReadonlySet<string> = new Set([
-  "codex", "gemini", "antigravity", "npm", "npx", "node", "git", "vitest", "tsc", "cargo", "python", "pytest"
-]);
+const MAX_CAPTURED_OUTPUT_CHARS = 16 * 1024;
+const HEALTH_CHECK_TIMEOUT_MS = 6_000;
+const PROTECTED_TREE_ENTRY_LIMIT = 4_096;
+const HOST_PROCESS_WARNING = "Executor runs as the host user; path controls are audited before and after execution, not an OS sandbox.";
 
 export function maskSecrets(text: string): string {
   if (!text) return text;
   return text
-    .replace(/(api[_-]?key|secret|token|password|auth|bearer)\s*[:=]\s*['"]?([a-zA-Z0-9_\-\.]{8,})['"]?/gi, "$1: ***MASKED***")
+    .replace(/-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*?-----END [^-]*PRIVATE KEY-----/gi, "[PRIVATE KEY MASKED]")
+    .replace(/\bBearer\s+[^\s,;]+/gi, "Bearer ***MASKED***")
+    .replace(/(api[_-]?key|secret|token|password|auth(?:orization)?|cookie|session)\s*[:=]\s*['"]?([^\s'",;]{8,})['"]?/gi, "$1: ***MASKED***")
     .replace(/(sk-[a-zA-Z0-9]{20,})/gi, "sk-***MASKED***")
-    .replace(/(AIzaSy[a-zA-Z0-9_\-]{33})/gi, "AIzaSy***MASKED***");
+    .replace(/(AIzaSy[a-zA-Z0-9_\-]{33})/gi, "AIzaSy***MASKED***")
+    .replace(/\bgh[opsu]_[a-zA-Z0-9_]{20,}\b/g, "gh_***MASKED***")
+    .replace(/\bAKIA[0-9A-Z]{16}\b/g, "AKIA***MASKED***");
+}
+
+function appendBoundedOutput(
+  current: string,
+  chunk: string,
+): { value: string; truncated: boolean } {
+  if (current.length >= MAX_CAPTURED_OUTPUT_CHARS) {
+    return { value: current, truncated: chunk.length > 0 };
+  }
+  const remaining = MAX_CAPTURED_OUTPUT_CHARS - current.length;
+  return {
+    value: current + chunk.slice(0, remaining),
+    truncated: chunk.length > remaining,
+  };
 }
 
 export function getGitStatusSnapshot(workspaceRoot: string): GitFileStatus[] {
@@ -127,11 +161,10 @@ function pathIsWithinScope(filePath: string, scope: string): boolean {
 
 function snapshotWorkspace(root: string): Map<string, string> {
   const snapshot = new Map<string, string>();
-  const excludedRoots = new Set([".git", "node_modules", "dist", "dist-electron", "release"]);
   const visit = (directory: string, relativeDirectory = "") => {
     for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
       const relative = relativeDirectory ? `${relativeDirectory}/${entry.name}` : entry.name;
-      if (!relativeDirectory && excludedRoots.has(entry.name)) continue;
+      if (!relativeDirectory && PROTECTED_WORKSPACE_SEGMENTS.has(entry.name.toLowerCase())) continue;
       const fullPath = path.join(directory, entry.name);
       const stat = fs.lstatSync(fullPath);
       if (stat.isSymbolicLink()) {
@@ -150,6 +183,76 @@ function snapshotWorkspace(root: string): Map<string, string> {
   return snapshot;
 }
 
+function fingerprintProtectedTree(root: string): string | null {
+  if (!fs.existsSync(root)) return null;
+  const hash = createHash("sha256");
+  let entries = 0;
+
+  const visit = (current: string, relative = "") => {
+    if (entries >= PROTECTED_TREE_ENTRY_LIMIT) return;
+    const stat = fs.lstatSync(current);
+    entries += 1;
+    hash.update(`${relative}\0${stat.mode}\0${stat.size}\0${stat.mtimeMs}\0`);
+    if (stat.isSymbolicLink() || !stat.isDirectory()) return;
+    const children = fs.readdirSync(current).sort((left, right) => left.localeCompare(right));
+    for (const child of children) {
+      if (entries >= PROTECTED_TREE_ENTRY_LIMIT) break;
+      visit(path.join(current, child), relative ? `${relative}/${child}` : child);
+    }
+  };
+
+  visit(root);
+  hash.update(entries >= PROTECTED_TREE_ENTRY_LIMIT ? "TRUNCATED" : "COMPLETE");
+  return hash.digest("hex");
+}
+
+function snapshotProtectedRoots(workspaceRoot: string): Map<string, string | null> {
+  const rootEntries = fs.readdirSync(workspaceRoot).sort((left, right) => left.localeCompare(right));
+  return new Map(
+    Array.from(PROTECTED_WORKSPACE_SEGMENTS, (segment) => {
+      const matchingEntries = rootEntries.filter((entry) => entry.toLowerCase() === segment);
+      if (matchingEntries.length === 0) return [segment, null] as const;
+      const hash = createHash("sha256");
+      for (const entry of matchingEntries) {
+        hash.update(entry);
+        hash.update(fingerprintProtectedTree(path.join(workspaceRoot, entry)) || "MISSING");
+      }
+      return [segment, hash.digest("hex")] as const;
+    }),
+  );
+}
+
+function protectedRootChanges(
+  before: Map<string, string | null>,
+  after: Map<string, string | null>,
+): GitFileStatus[] {
+  const changes: GitFileStatus[] = [];
+  for (const segment of PROTECTED_WORKSPACE_SEGMENTS) {
+    const beforeHash = before.get(segment) ?? null;
+    const afterHash = after.get(segment) ?? null;
+    if (beforeHash === afterHash) continue;
+    changes.push({
+      path: segment,
+      change: beforeHash === null ? "added" : afterHash === null ? "deleted" : "modified",
+    });
+  }
+  return changes;
+}
+
+async function withPromiseTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs} ms`)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 export class SafeExecutionBroker {
   private executors: Map<ExecutorId, CliExecutor> = new Map();
 
@@ -161,12 +264,24 @@ export class SafeExecutionBroker {
     return this.executors.get(id);
   }
 
+  public listExecutors(): CliExecutor[] {
+    return Array.from(this.executors.values());
+  }
+
   public async getExecutorHealth(id: ExecutorId): Promise<ExecutorHealth> {
     const executor = this.executors.get(id);
     if (!executor) {
       return { healthy: false, executorId: id, reason: `Executor '${id}' is not registered` };
     }
-    return executor.healthCheck();
+    try {
+      return await withPromiseTimeout(executor.healthCheck(), HEALTH_CHECK_TIMEOUT_MS, `${id} health check`);
+    } catch (error: any) {
+      return {
+        healthy: false,
+        executorId: id,
+        reason: maskSecrets(error?.message || String(error)),
+      };
+    }
   }
 
   /**
@@ -178,127 +293,175 @@ export class SafeExecutionBroker {
     workspaceRoot: string,
     signal?: AbortSignal
   ): Promise<ExecutionResultV1> {
-    const canonicalWorkspace = path.resolve(workspaceRoot);
+    const requestedExecutor: ExecutorId = task.executor === "auto" ? "codex" : task.executor;
+    const security = {
+      hostProcessSandboxed: false as const,
+      enforcement: "preflight-and-postflight-audit" as const,
+    };
+    const earlyResult = (
+      status: ExecutionResultV1["status"],
+      summary: string,
+      warnings: string[],
+      executor: ExecutorId = requestedExecutor,
+    ): ExecutionResultV1 => ({
+      taskId: task.taskId,
+      attemptId,
+      executor,
+      status,
+      summary,
+      changedFiles: [],
+      verificationResults: [],
+      warnings: [HOST_PROCESS_WARNING, ...warnings],
+      stdout: "",
+      stderr: "",
+      outputTruncated: false,
+      objectiveEvidenceObserved: false,
+      security,
+    });
 
-    // Validate workspace path safety
-    for (const allowed of task.allowedPaths) {
-      if (!isPathSafeRelativeToWorkspace(allowed, canonicalWorkspace)) {
-        return {
-          taskId: task.taskId,
-          attemptId,
-          executor: task.executor === "auto" ? "codex" : task.executor,
-          status: "FAILED",
-          summary: `Security violation: allowed path '${allowed}' escapes workspace`,
-          changedFiles: [],
-          verificationResults: [],
-          warnings: ["Security path check failed"],
-        };
-      }
+    if (signal?.aborted) {
+      return earlyResult("CANCELLED", "Task execution was cancelled before launch", ["Execution cancelled"]);
     }
 
-    const forbiddenCheck = [".git", "profiles", "appdata", "credentials", "node_modules", "release"];
-    for (const forbidden of forbiddenCheck) {
-      if (task.allowedPaths.some((p) => normalizeRelativePath(p).split("/").includes(forbidden.toLowerCase()))) {
-        return {
-          taskId: task.taskId,
-          attemptId,
-          executor: task.executor === "auto" ? "codex" : task.executor,
-          status: "FAILED",
-          summary: `Security violation: allowed paths target forbidden system component '${forbidden}'`,
-          changedFiles: [],
-          verificationResults: [],
-          warnings: ["Target path accesses protected component"],
-        };
+    const requestedWorkspace = path.resolve(workspaceRoot);
+    if (
+      !fs.existsSync(requestedWorkspace) ||
+      !fs.lstatSync(requestedWorkspace).isDirectory() ||
+      fs.lstatSync(requestedWorkspace).isSymbolicLink()
+    ) {
+      return earlyResult("FAILED", "Workspace root must be an existing non-symlink directory", ["Workspace preflight failed"]);
+    }
+    const canonicalWorkspace = fs.realpathSync(requestedWorkspace);
+
+    const verificationPaths = task.verification.flatMap((step) =>
+      step.type === "file_exists" ? [step.path] : step.type === "git_diff" ? step.allowedPaths : [],
+    );
+    const scopedPaths = [...task.allowedPaths, ...verificationPaths];
+    for (const scopedPath of scopedPaths) {
+      if (!isPathSafeRelativeToWorkspace(scopedPath, canonicalWorkspace)) {
+        return earlyResult("FAILED", `Security violation: path '${scopedPath}' escapes workspace or crosses a link`, ["Security path check failed"]);
+      }
+      if (isProtectedWorkspacePath(scopedPath)) {
+        return earlyResult("FAILED", `Security violation: path '${scopedPath}' targets a protected workspace component`, ["Protected path rejected"]);
       }
     }
-
-    // Determine target executor
-    let selectedExecutorId: ExecutorId = task.executor === "auto" ? "codex" : task.executor;
-    let executor = this.executors.get(selectedExecutorId);
-
+    const candidateIds: ExecutorId[] = task.executor === "auto"
+      ? ["codex", "gemini", "antigravity"]
+      : [task.executor];
+    let selectedExecutorId: ExecutorId = requestedExecutor;
+    let executor: CliExecutor | undefined;
+    let selectionFailure = "No suitable executor is registered";
+    for (const candidateId of candidateIds) {
+      const candidate = this.executors.get(candidateId);
+      if (!candidate) {
+        selectionFailure = `Executor '${candidateId}' is not registered`;
+        continue;
+      }
+      const capabilities = candidate.capabilities();
+      if (!capabilities.supportedRisks.includes(task.risk)) {
+        selectionFailure = `Executor '${candidateId}' does not support risk '${task.risk}'`;
+        continue;
+      }
+      const health = await this.getExecutorHealth(candidateId);
+      if (!health.healthy) {
+        selectionFailure = `Executor '${candidateId}' is unhealthy: ${health.reason || "unknown reason"}`;
+        continue;
+      }
+      selectedExecutorId = candidateId;
+      executor = candidate;
+      break;
+    }
     if (!executor) {
-      // Fallback check
-      if (this.executors.has("codex")) {
-        selectedExecutorId = "codex";
-        executor = this.executors.get("codex");
-      } else if (this.executors.has("gemini")) {
-        selectedExecutorId = "gemini";
-        executor = this.executors.get("gemini");
-      }
+      return earlyResult("FAILED", selectionFailure, ["Executor unavailable or incompatible"]);
     }
 
-    if (!executor) {
-      return {
-        taskId: task.taskId,
-        attemptId,
-        executor: selectedExecutorId,
-        status: "FAILED",
-        summary: `No suitable executor registered for id '${selectedExecutorId}'`,
-        changedFiles: [],
-        verificationResults: [],
-        warnings: ["Executor missing"],
-      };
+    const capabilities = executor.capabilities();
+    if (!Number.isFinite(capabilities.maxTimeoutMs) || capabilities.maxTimeoutMs <= 0) {
+      return earlyResult("FAILED", `Executor '${selectedExecutorId}' advertises an invalid runtime timeout`, ["Invalid executor capabilities"], selectedExecutorId);
     }
 
     const workspaceBefore = snapshotWorkspace(canonicalWorkspace);
+    const protectedBefore = snapshotProtectedRoots(canonicalWorkspace);
     const fileAssertionsBefore = new Map<string, string | null>();
     for (const step of task.verification) {
       if (step.type === "file_exists") {
-        fileAssertionsBefore.set(
-          step.path,
-          fileAssertionFingerprint(path.resolve(canonicalWorkspace, step.path)),
-        );
+        fileAssertionsBefore.set(step.path, fileAssertionFingerprint(path.resolve(canonicalWorkspace, step.path)));
       }
     }
 
-    const input: ExecutorInput = {
-      task,
-      attemptId,
-      workspaceRoot: canonicalWorkspace,
-    };
-
+    const input: ExecutorInput = { task, attemptId, workspaceRoot: canonicalWorkspace };
+    const controller = new AbortController();
+    let cancelledByCaller = false;
+    let cancelledByExecutor = false;
+    let timedOut = false;
     let executionSuccess = true;
     let failureReason = "";
-    let exitCodeResult: number | null = 0;
-    const stdoutChunks: string[] = [];
-    const stderrChunks: string[] = [];
+    let stdout = "";
+    let stderr = "";
+    let outputTruncated = false;
+    const forwardAbort = () => {
+      cancelledByCaller = true;
+      controller.abort();
+    };
+    if (signal?.aborted) forwardAbort();
+    else signal?.addEventListener("abort", forwardAbort, { once: true });
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, capabilities.maxTimeoutMs);
+
+    const abortMarker = Symbol("executor-aborted");
+    const abortPromise = controller.signal.aborted
+      ? Promise.resolve(abortMarker)
+      : new Promise<typeof abortMarker>((resolve) => {
+          controller.signal.addEventListener("abort", () => resolve(abortMarker), { once: true });
+        });
+    const iterator = executor.execute(input, controller.signal)[Symbol.asyncIterator]();
 
     try {
-      for await (const event of executor.execute(input, signal)) {
-        if (event.type === "STDOUT") {
-          stdoutChunks.push(maskSecrets(event.chunk));
-        } else if (event.type === "STDERR") {
-          stderrChunks.push(maskSecrets(event.chunk));
-        } else if (event.type === "PROCESS_EXITED") {
-          exitCodeResult = event.exitCode;
-          if (event.exitCode !== 0) {
-            executionSuccess = false;
-            failureReason = `Process exited with code ${event.exitCode}`;
-          }
+      while (true) {
+        const item = await Promise.race([iterator.next(), abortPromise]);
+        if (item === abortMarker) break;
+        if (item.done) break;
+        const event = item.value;
+        if (event.type === "STDOUT" || event.type === "STDERR") {
+          const bounded = appendBoundedOutput(
+            event.type === "STDOUT" ? stdout : stderr,
+            maskSecrets(event.chunk),
+          );
+          if (event.type === "STDOUT") stdout = bounded.value;
+          else stderr = bounded.value;
+          outputTruncated ||= bounded.truncated;
+        } else if (event.type === "PROCESS_EXITED" && event.exitCode !== 0) {
+          executionSuccess = false;
+          failureReason = `Process exited with code ${event.exitCode}`;
         } else if (event.type === "CANCELLED") {
-          return {
-            taskId: task.taskId,
-            attemptId,
-            executor: selectedExecutorId,
-            status: "CANCELLED",
-            summary: "Task execution was cancelled by user or signal",
-            changedFiles: [],
-            verificationResults: [],
-            warnings: ["Execution cancelled"],
-          };
+          cancelledByExecutor = true;
+          break;
         } else if (event.type === "FAILED") {
           executionSuccess = false;
-          failureReason = event.code;
+          failureReason = maskSecrets(event.code);
         }
       }
-    } catch (err: any) {
+    } catch (error: any) {
       executionSuccess = false;
-      failureReason = err?.message || String(err);
+      failureReason = maskSecrets(error?.message || String(error));
+    } finally {
+      clearTimeout(timeout);
+      signal?.removeEventListener("abort", forwardAbort);
+      if (controller.signal.aborted || cancelledByExecutor) {
+        void Promise.resolve(iterator.return?.()).catch(() => undefined);
+      }
+    }
+
+    if (timedOut) {
+      executionSuccess = false;
+      failureReason = `Executor exceeded its ${capabilities.maxTimeoutMs} ms runtime limit`;
     }
 
     const workspaceAfter = snapshotWorkspace(canonicalWorkspace);
+    const protectedAfter = snapshotProtectedRoots(canonicalWorkspace);
     const changedFilesMap = new Map<string, "added" | "modified" | "deleted">();
-
     for (const [filePath, hash] of workspaceAfter) {
       const beforeHash = workspaceBefore.get(filePath);
       if (beforeHash === undefined) changedFilesMap.set(filePath, "added");
@@ -307,13 +470,23 @@ export class SafeExecutionBroker {
     for (const filePath of workspaceBefore.keys()) {
       if (!workspaceAfter.has(filePath)) changedFilesMap.set(filePath, "deleted");
     }
-
-    const changedFiles: GitFileStatus[] = Array.from(changedFilesMap.entries()).map(([p, change]) => ({
-      path: p,
+    for (const change of protectedRootChanges(protectedBefore, protectedAfter)) {
+      changedFilesMap.set(change.path, change.change);
+    }
+    const changedFiles: GitFileStatus[] = Array.from(changedFilesMap, ([changedPath, change]) => ({
+      path: changedPath,
       change,
     }));
 
+    const unsafePostflightPath = scopedPaths.find((scopedPath) =>
+      !isPathSafeRelativeToWorkspace(scopedPath, canonicalWorkspace) || isProtectedWorkspacePath(scopedPath),
+    );
+    if (unsafePostflightPath) {
+      executionSuccess = false;
+      failureReason = `Postflight security violation at '${unsafePostflightPath}'`;
+    }
     const unexpectedChanges = changedFiles.filter(({ path: changedPath }) =>
+      isProtectedWorkspacePath(changedPath) ||
       !task.allowedPaths.some((allowed) => pathIsWithinScope(changedPath, allowed)) ||
       task.forbiddenPaths.some((forbidden) => pathIsWithinScope(changedPath, forbidden)),
     );
@@ -322,96 +495,117 @@ export class SafeExecutionBroker {
       failureReason = `Executor changed paths outside the approved scope: ${unexpectedChanges.map((item) => item.path).join(", ")}`;
     }
 
-    // Perform verification steps
     const verificationResults: ExecutionResultV1["verificationResults"] = [];
-    let allVerificationPassed = true;
-
-    for (const step of task.verification) {
-      if (step.type === "file_exists") {
-        const fullPath = path.resolve(canonicalWorkspace, step.path);
-        const afterFingerprint = fileAssertionFingerprint(fullPath);
-        const beforeFingerprint = fileAssertionsBefore.get(step.path) ?? null;
-        const exists = afterFingerprint !== null;
-        const producedByAttempt = exists && afterFingerprint !== beforeFingerprint;
-        verificationResults.push({
-          label: `File exists: ${step.path}`,
-          passed: producedByAttempt,
-          summary: !exists
-            ? `File '${step.path}' is missing.`
-            : producedByAttempt
-              ? `File '${step.path}' was created or changed by this attempt.`
-              : `File '${step.path}' existed unchanged before this attempt.`,
-        });
-        if (!producedByAttempt) allVerificationPassed = false;
-      } else if (step.type === "command") {
-        try {
-          if (!isAllowedVerificationCommand(step.executable, step.args)) {
-            throw new Error("Verification command is not in the trusted read-only registry");
+    let allVerificationPassed = executionSuccess && !timedOut && !cancelledByCaller && !cancelledByExecutor;
+    if (allVerificationPassed) {
+      for (const step of task.verification) {
+        if (step.type === "file_exists") {
+          const fullPath = path.resolve(canonicalWorkspace, step.path);
+          const afterFingerprint = fileAssertionFingerprint(fullPath);
+          const beforeFingerprint = fileAssertionsBefore.get(step.path) ?? null;
+          const exists = afterFingerprint !== null;
+          const producedByAttempt = exists && afterFingerprint !== beforeFingerprint;
+          verificationResults.push({
+            label: `File exists: ${step.path}`,
+            passed: producedByAttempt,
+            summary: !exists
+              ? `File '${step.path}' is missing.`
+              : producedByAttempt
+                ? `File '${step.path}' was created or changed by this attempt.`
+                : `File '${step.path}' existed unchanged before this attempt.`,
+          });
+          if (!producedByAttempt) allVerificationPassed = false;
+        } else if (step.type === "command") {
+          try {
+            if (!isAllowedVerificationCommand(step.executable, step.args)) {
+              throw new Error("Verification command is not in the trusted read-only registry");
+            }
+            const output = execFileSync(step.executable, step.args, {
+              cwd: canonicalWorkspace,
+              encoding: "utf-8",
+              windowsHide: true,
+              timeout: step.timeoutMs,
+              shell: false,
+            });
+            verificationResults.push({
+              label: `Command: ${step.executable} ${step.args.join(" ")}`,
+              passed: true,
+              exitCode: 0,
+              summary: maskSecrets(output.slice(0, 500)) || "Command exited successfully; objective evidence is evaluated separately.",
+            });
+          } catch (error: any) {
+            allVerificationPassed = false;
+            verificationResults.push({
+              label: `Command: ${step.executable} ${step.args.join(" ")}`,
+              passed: false,
+              exitCode: typeof error?.status === "number" ? error.status : 1,
+              summary: maskSecrets(error?.stderr || error?.message || String(error)),
+            });
           }
-          const res = execFileSync(step.executable, step.args, {
-            cwd: canonicalWorkspace,
-            encoding: "utf-8",
-            windowsHide: true,
-            timeout: step.timeoutMs || 30000,
-            shell: false,
-          });
+        } else if (step.type === "git_diff") {
+          const scopedChanges = changedFiles.filter(({ path: changedPath }) =>
+            step.allowedPaths.some((allowed) => pathIsWithinScope(changedPath, allowed)),
+          );
+          const hasDiff = scopedChanges.length > 0;
           verificationResults.push({
-            label: `Command: ${step.executable} ${step.args.join(" ")}`,
-            passed: true,
-            exitCode: 0,
-            summary: maskSecrets(res.slice(0, 500)),
+            label: "Observed scoped diff",
+            passed: hasDiff,
+            summary: hasDiff ? `${scopedChanges.length} approved files changed` : "No approved-path diff detected",
           });
-        } catch (err: any) {
-          allVerificationPassed = false;
-          verificationResults.push({
-            label: `Command: ${step.executable} ${step.args.join(" ")}`,
-            passed: false,
-            exitCode: typeof err?.status === "number" ? err.status : 1,
-            summary: maskSecrets(err?.stderr || err?.message || String(err)),
-          });
+          if (!hasDiff) allVerificationPassed = false;
         }
-      } else if (step.type === "git_diff") {
-        const scopedChanges = changedFiles.filter(({ path: changedPath }) =>
-          step.allowedPaths.some((allowed) => pathIsWithinScope(changedPath, allowed)),
-        );
-        const hasDiff = scopedChanges.length > 0;
-        verificationResults.push({
-          label: "Git status diff check",
-          passed: hasDiff,
-          summary: hasDiff ? `${scopedChanges.length} approved files modified/added` : "No approved-path diff detected",
-        });
-        if (!hasDiff) allVerificationPassed = false;
       }
     }
 
-    const finalStatus: ExecutionResultV1["status"] =
-      executionSuccess && allVerificationPassed
-        ? "COMPLETED"
-        : executionSuccess && !allVerificationPassed
-        ? "NEEDS_FIX"
-        : "FAILED";
+    const objectiveEvidenceObserved = changedFiles.some(({ path: changedPath }) =>
+      !isProtectedWorkspacePath(changedPath) &&
+      task.allowedPaths.some((allowed) => pathIsWithinScope(changedPath, allowed)),
+    ) || verificationResults.some((result) => result.passed && result.label.startsWith("File exists:"));
+    if (executionSuccess && allVerificationPassed && !objectiveEvidenceObserved) {
+      allVerificationPassed = false;
+      verificationResults.push({
+        label: "Observed task effect",
+        passed: false,
+        summary: "Read-only git command success without an observed artifact or scoped change cannot prove task completion.",
+      });
+    }
 
-    const warnings: string[] = [];
-    if (!executionSuccess) warnings.push(`Execution error: ${failureReason}`);
-    if (!allVerificationPassed) warnings.push("One or more verification criteria failed");
+    const cancelled = cancelledByCaller || cancelledByExecutor;
+    const finalStatus: ExecutionResultV1["status"] = cancelled
+      ? "CANCELLED"
+      : executionSuccess && allVerificationPassed
+        ? "COMPLETED"
+        : executionSuccess
+          ? "NEEDS_FIX"
+          : "FAILED";
+    const warnings: string[] = [HOST_PROCESS_WARNING];
+    if (!executionSuccess) warnings.push(`Execution error: ${failureReason || "unknown failure"}`);
+    if (!allVerificationPassed && !cancelled) warnings.push("One or more verification criteria failed");
+    if (outputTruncated) warnings.push("Executor output was truncated to bounded in-memory limits");
 
     return {
       taskId: task.taskId,
       attemptId,
       executor: selectedExecutorId,
       status: finalStatus,
-      summary: executionSuccess
-        ? allVerificationPassed
-          ? `Task '${task.title}' completed and passed all verification checks.`
-          : `Task '${task.title}' completed execution, but verification failed.`
-        : `Task execution failed: ${failureReason}`,
+      summary: cancelled
+        ? "Task execution was cancelled by user or executor"
+        : executionSuccess
+          ? allVerificationPassed
+            ? `Task '${task.title}' completed with observed objective evidence.`
+            : `Task '${task.title}' ran, but objective evidence or verification was insufficient.`
+          : `Task execution failed: ${failureReason || "unknown failure"}`,
       changedFiles,
       verificationResults,
       warnings,
-      nextRecommendation:
-        finalStatus === "COMPLETED"
-          ? "Proceed to next architecture step"
-          : "Review errors and issue fix task envelope",
+      nextRecommendation: finalStatus === "COMPLETED"
+        ? "Proceed to reviewer validation"
+        : "Review execution evidence before retrying",
+      stdout,
+      stderr,
+      outputTruncated,
+      objectiveEvidenceObserved,
+      security,
     };
   }
 }

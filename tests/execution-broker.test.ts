@@ -10,7 +10,6 @@ import {
 } from "../src/cli-executors/execution-broker.js";
 import { CliExecutor, ExecutorCapabilities, ExecutorEvent, ExecutorHealth, ExecutorInput } from "../src/cli-executors/cli-executor-contract.js";
 import { CliTaskEnvelopeV1 } from "../src/cli-executors/cli-task-schema.js";
-import { AntigravityCliExecutor } from "../src/cli-executors/executors/antigravity-executor.js";
 
 class MockCliExecutor implements CliExecutor {
   readonly id = "codex" as const;
@@ -106,10 +105,10 @@ describe("Phase C: Safe Execution Broker & Executor Adapters", () => {
 
     const res = await broker.executeTaskEnvelope(dangerousEnvelope, "att-1", dummyWorkspace);
     expect(res.status).toBe("FAILED");
-    expect(res.summary).toContain("forbidden system component");
+    expect(res.summary).toContain("protected workspace component");
   });
 
-  it("should execute task with registered mock executor and run verification steps", async () => {
+  it("does not claim COMPLETED for a no-op git status verifier", async () => {
     const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "gplusg-verifier-"));
     try {
       execFileSync("git", ["init", "--quiet"], { cwd: workspace, windowsHide: true });
@@ -117,21 +116,36 @@ describe("Phase C: Safe Execution Broker & Executor Adapters", () => {
       broker.registerExecutor(new MockCliExecutor());
 
       const res = await broker.executeTaskEnvelope(sampleEnvelope, "att-1", workspace);
-      expect(res.status).toBe("COMPLETED");
+      expect(res.status).toBe("NEEDS_FIX");
       const v0 = res.verificationResults[0];
       expect(v0).toBeDefined();
       expect(v0?.passed).toBe(true);
+      expect(res.verificationResults.some((item) => item.label === "Observed task effect" && !item.passed)).toBe(true);
     } finally {
       fs.rmSync(workspace, { recursive: true, force: true });
     }
   });
 
-  it("should report UNSUPPORTED for Antigravity executor when binary is unavailable", async () => {
-    const antigravity = new AntigravityCliExecutor();
-    const health = await antigravity.healthCheck();
-
-    expect(health.healthy).toBe(false);
-    expect(health.reason).toContain("UNSUPPORTED");
+  it("refuses an unhealthy executor without invoking it", async () => {
+    const broker = new SafeExecutionBroker();
+    let invoked = false;
+    broker.registerExecutor({
+      id: "codex",
+      capabilities: () => ({ supportsStreaming: true, supportedRisks: ["WORKSPACE_WRITE"], maxTimeoutMs: 5000 }),
+      healthCheck: async () => ({ healthy: false, executorId: "codex", reason: "unavailable" }),
+      execute: async function* () {
+        invoked = true;
+      },
+    });
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "gplusg-unhealthy-"));
+    try {
+      const result = await broker.executeTaskEnvelope(sampleEnvelope, "att-health", workspace);
+      expect(result.status).toBe("FAILED");
+      expect(result.summary).toContain("unhealthy");
+      expect(invoked).toBe(false);
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+    }
   });
 
   it("should capture current git status snapshot", () => {
@@ -153,17 +167,22 @@ describe("Phase C: Safe Execution Broker & Executor Adapters", () => {
   it("refuses untrusted verifier arguments even if schema validation was bypassed", async () => {
     const broker = new SafeExecutionBroker();
     broker.registerExecutor(new MockCliExecutor());
-    const result = await broker.executeTaskEnvelope({
-      ...sampleEnvelope,
-      verification: [{
-        type: "command",
-        executable: "git",
-        args: ["status", "--porcelain", "&", "calc"],
-        timeoutMs: 5000,
-      }],
-    }, "att-argv", dummyWorkspace);
-    expect(result.status).toBe("NEEDS_FIX");
-    expect(result.verificationResults[0]?.summary).toContain("trusted read-only registry");
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "gplusg-untrusted-verifier-"));
+    try {
+      const result = await broker.executeTaskEnvelope({
+        ...sampleEnvelope,
+        verification: [{
+          type: "command",
+          executable: "git",
+          args: ["status", "--porcelain", "&", "calc"],
+          timeoutMs: 5000,
+        }],
+      }, "att-argv", workspace);
+      expect(result.status).toBe("NEEDS_FIX");
+      expect(result.verificationResults[0]?.summary).toContain("trusted read-only registry");
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+    }
   });
 
   it("fails an attempt that changes a path outside allowedPaths", async () => {
@@ -177,6 +196,109 @@ describe("Phase C: Safe Execution Broker & Executor Adapters", () => {
       }, "att-scope", workspace);
       expect(result.status).toBe("FAILED");
       expect(result.summary).toContain("outside the approved scope");
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  it("enforces executor risk capabilities", async () => {
+    const broker = new SafeExecutionBroker();
+    broker.registerExecutor({
+      id: "codex",
+      capabilities: () => ({ supportsStreaming: true, supportedRisks: ["READ_ONLY"], maxTimeoutMs: 5000 }),
+      healthCheck: async () => ({ healthy: true, executorId: "codex" }),
+      execute: async function* () {
+        throw new Error("must not execute");
+      },
+    });
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "gplusg-risk-"));
+    try {
+      const result = await broker.executeTaskEnvelope(sampleEnvelope, "att-risk", workspace);
+      expect(result.status).toBe("FAILED");
+      expect(result.summary).toContain("does not support risk");
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  it("aborts an executor at its advertised maximum runtime", async () => {
+    const broker = new SafeExecutionBroker();
+    let observedAbort = false;
+    broker.registerExecutor({
+      id: "codex",
+      capabilities: () => ({ supportsStreaming: true, supportedRisks: ["WORKSPACE_WRITE"], maxTimeoutMs: 20 }),
+      healthCheck: async () => ({ healthy: true, executorId: "codex" }),
+      execute: async function* (_input, signal) {
+        await new Promise<void>((resolve) => signal?.addEventListener("abort", () => {
+          observedAbort = true;
+          resolve();
+        }, { once: true }));
+        yield { type: "CANCELLED", at: new Date().toISOString() };
+      },
+    });
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "gplusg-timeout-"));
+    try {
+      const result = await broker.executeTaskEnvelope(sampleEnvelope, "att-timeout", workspace);
+      expect(result.status).toBe("FAILED");
+      expect(result.summary).toContain("runtime limit");
+      expect(observedAbort).toBe(true);
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  it("detects writes to protected roots that the normal workspace snapshot excludes", async () => {
+    const broker = new SafeExecutionBroker();
+    broker.registerExecutor({
+      id: "codex",
+      capabilities: () => ({ supportsStreaming: true, supportedRisks: ["WORKSPACE_WRITE"], maxTimeoutMs: 5000 }),
+      healthCheck: async () => ({ healthy: true, executorId: "codex" }),
+      execute: async function* (input) {
+        fs.writeFileSync(path.join(input.workspaceRoot, "allowed.txt"), "ok");
+        fs.mkdirSync(path.join(input.workspaceRoot, "node_modules"), { recursive: true });
+        fs.writeFileSync(path.join(input.workspaceRoot, "node_modules", "hidden.txt"), "blocked");
+        yield { type: "PROCESS_EXITED", at: new Date().toISOString(), exitCode: 0 };
+      },
+    });
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "gplusg-protected-"));
+    try {
+      const result = await broker.executeTaskEnvelope({
+        ...sampleEnvelope,
+        allowedPaths: ["allowed.txt"],
+        verification: [{ type: "file_exists", path: "allowed.txt" }],
+      }, "att-protected", workspace);
+      expect(result.status).toBe("FAILED");
+      expect(result.changedFiles).toContainEqual({ path: "node_modules", change: "added" });
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  it("bounds and redacts captured stdout/stderr in the structured result", async () => {
+    const broker = new SafeExecutionBroker();
+    broker.registerExecutor({
+      id: "codex",
+      capabilities: () => ({ supportsStreaming: true, supportedRisks: ["WORKSPACE_WRITE"], maxTimeoutMs: 5000 }),
+      healthCheck: async () => ({ healthy: true, executorId: "codex" }),
+      execute: async function* (input) {
+        fs.writeFileSync(path.join(input.workspaceRoot, "allowed.txt"), "ok");
+        yield { type: "STDOUT", at: new Date().toISOString(), chunk: "token=supersecretvalue" };
+        yield { type: "STDOUT", at: new Date().toISOString(), chunk: "x".repeat(40_000) };
+        yield { type: "PROCESS_EXITED", at: new Date().toISOString(), exitCode: 0 };
+      },
+    });
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "gplusg-output-"));
+    try {
+      const result = await broker.executeTaskEnvelope({
+        ...sampleEnvelope,
+        allowedPaths: ["allowed.txt"],
+        verification: [{ type: "file_exists", path: "allowed.txt" }],
+      }, "att-output", workspace);
+      expect(result.status).toBe("COMPLETED");
+      expect(result.stdout?.length).toBeLessThanOrEqual(16 * 1024);
+      expect(result.stdout).not.toContain("supersecretvalue");
+      expect(result.outputTruncated).toBe(true);
+      expect(result.security).toMatchObject({ hostProcessSandboxed: false });
     } finally {
       fs.rmSync(workspace, { recursive: true, force: true });
     }

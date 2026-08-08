@@ -39,6 +39,27 @@ export const VALID_RISKS: ReadonlySet<string> = new Set(["READ_ONLY", "WORKSPACE
 export const ALLOWED_VERIFICATION_EXECUTABLES: ReadonlySet<string> = new Set([
   "git",
 ]);
+export const PROTECTED_WORKSPACE_SEGMENTS: ReadonlySet<string> = new Set([
+  ".git",
+  "node_modules",
+  "dist",
+  "dist-electron",
+  "release",
+  "profiles",
+  "appdata",
+  "credentials",
+]);
+export const MAX_VERIFICATION_STEPS = 20;
+export const MAX_VERIFICATION_TIMEOUT_MS = 30_000;
+
+export function isProtectedWorkspacePath(targetPath: string): boolean {
+  return targetPath
+    .trim()
+    .replaceAll("\\", "/")
+    .split("/")
+    .filter(Boolean)
+    .some((segment) => PROTECTED_WORKSPACE_SEGMENTS.has(segment.toLowerCase()));
+}
 
 export function isAllowedVerificationCommand(executable: string, args: readonly string[]): boolean {
   if (executable !== "git") return false;
@@ -335,8 +356,42 @@ export function validateCliTaskEnvelopeV1(
   const allowedPathsRes = validatePaths(obj.allowedPaths, "allowedPaths");
   if ("success" in allowedPathsRes) return allowedPathsRes;
 
+  if (allowedPathsRes.length === 0) {
+    return {
+      success: false,
+      reasonCode: "EMPTY_ALLOWED_PATHS",
+      errorDetails: "Tasks must declare at least one workspace-relative allowed path",
+      rawText: JSON.stringify(raw),
+    };
+  }
+  const protectedAllowedPath = allowedPathsRes.find(isProtectedWorkspacePath);
+  if (protectedAllowedPath) {
+    return {
+      success: false,
+      reasonCode: "PROTECTED_WORKSPACE_PATH",
+      errorDetails: `Allowed path '${protectedAllowedPath}' targets a protected workspace component`,
+      rawText: JSON.stringify(raw),
+    };
+  }
+
   const forbiddenPathsRes = validatePaths(obj.forbiddenPaths, "forbiddenPaths");
   if ("success" in forbiddenPathsRes) return forbiddenPathsRes;
+
+  const overlappingPath = allowedPathsRes.find((allowed) => {
+    const normalizedAllowed = allowed.replaceAll("\\", "/").replace(/^\.\//, "").replace(/\/$/, "");
+    return forbiddenPathsRes.some((forbidden) => {
+      const normalizedForbidden = forbidden.replaceAll("\\", "/").replace(/^\.\//, "").replace(/\/$/, "");
+      return normalizedAllowed === normalizedForbidden || normalizedAllowed.startsWith(`${normalizedForbidden}/`);
+    });
+  });
+  if (overlappingPath) {
+    return {
+      success: false,
+      reasonCode: "CONFLICTING_PATH_SCOPE",
+      errorDetails: `Allowed path '${overlappingPath}' is also covered by forbiddenPaths`,
+      rawText: JSON.stringify(raw),
+    };
+  }
 
   // Validate verification steps
   if (!Array.isArray(obj.verification) || obj.verification.length === 0) {
@@ -344,6 +399,14 @@ export function validateCliTaskEnvelopeV1(
       success: false,
       reasonCode: "INVALID_VERIFICATION",
       errorDetails: "Field 'verification' must be a non-empty array",
+      rawText: JSON.stringify(raw),
+    };
+  }
+  if (obj.verification.length > MAX_VERIFICATION_STEPS) {
+    return {
+      success: false,
+      reasonCode: "TOO_MANY_VERIFICATION_STEPS",
+      errorDetails: `Verification exceeds the maximum of ${MAX_VERIFICATION_STEPS} steps`,
       rawText: JSON.stringify(raw),
     };
   }
@@ -386,7 +449,17 @@ export function validateCliTaskEnvelopeV1(
           rawText: JSON.stringify(raw),
         };
       }
-      const timeoutMs = typeof step.timeoutMs === "number" && step.timeoutMs > 0 ? step.timeoutMs : 60_000;
+      const timeoutMs = typeof step.timeoutMs === "number" && Number.isInteger(step.timeoutMs)
+        ? step.timeoutMs
+        : 30_000;
+      if (timeoutMs <= 0 || timeoutMs > MAX_VERIFICATION_TIMEOUT_MS) {
+        return {
+          success: false,
+          reasonCode: "INVALID_VERIFICATION_TIMEOUT",
+          errorDetails: `Verification timeout must be an integer between 1 and ${MAX_VERIFICATION_TIMEOUT_MS} ms`,
+          rawText: JSON.stringify(raw),
+        };
+      }
       validVerificationSteps.push({
         type: "command",
         executable,
@@ -395,7 +468,7 @@ export function validateCliTaskEnvelopeV1(
       });
     } else if (step.type === "file_exists") {
       const p = String(step.path || "").trim();
-      if (!p || !isPathSafeRelativeToWorkspace(p, options?.workspaceRoot)) {
+      if (!p || !isPathSafeRelativeToWorkspace(p, options?.workspaceRoot) || isProtectedWorkspacePath(p)) {
         return {
           success: false,
           reasonCode: "SECURITY_PATH_VIOLATION",
@@ -406,8 +479,16 @@ export function validateCliTaskEnvelopeV1(
       validVerificationSteps.push({ type: "file_exists", path: p });
     } else if (step.type === "git_diff") {
       const paths = Array.isArray(step.allowedPaths) ? (step.allowedPaths as string[]) : [];
+      if (paths.length === 0) {
+        return {
+          success: false,
+          reasonCode: "INVALID_GIT_DIFF_SCOPE",
+          errorDetails: "git_diff verification must declare at least one allowed path",
+          rawText: JSON.stringify(raw),
+        };
+      }
       for (const p of paths) {
-        if (!isPathSafeRelativeToWorkspace(p, options?.workspaceRoot)) {
+        if (!isPathSafeRelativeToWorkspace(p, options?.workspaceRoot) || isProtectedWorkspacePath(p)) {
           return {
             success: false,
             reasonCode: "SECURITY_PATH_VIOLATION",
@@ -427,11 +508,15 @@ export function validateCliTaskEnvelopeV1(
     }
   }
 
-  if (!Array.isArray(obj.dependsOn) || obj.dependsOn.some((d) => typeof d !== "string")) {
+  if (
+    !Array.isArray(obj.dependsOn) ||
+    obj.dependsOn.length > 20 ||
+    obj.dependsOn.some((d) => typeof d !== "string" || d.trim().length === 0 || d.length > 100)
+  ) {
     return {
       success: false,
       reasonCode: "INVALID_DEPENDS_ON",
-      errorDetails: "Field 'dependsOn' must be an array of strings",
+      errorDetails: "Field 'dependsOn' must contain at most 20 non-empty task IDs of at most 100 characters",
       rawText: JSON.stringify(raw),
     };
   }
@@ -443,7 +528,15 @@ export function validateCliTaskEnvelopeV1(
       rawText: JSON.stringify(raw),
     };
   }
-  const dependsOn = obj.dependsOn as string[];
+  const dependsOn = (obj.dependsOn as string[]).map((dependency) => dependency.trim());
+  if (new Set(dependsOn).size !== dependsOn.length || dependsOn.includes(String(obj.taskId))) {
+    return {
+      success: false,
+      reasonCode: "INVALID_DEPENDENCY_GRAPH",
+      errorDetails: "Dependencies must be unique and a task cannot depend on itself",
+      rawText: JSON.stringify(raw),
+    };
+  }
 
   const envelope: CliTaskEnvelopeV1 = {
     protocol: "gplusg.cli-task",
