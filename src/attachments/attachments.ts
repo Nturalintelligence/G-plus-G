@@ -46,6 +46,8 @@ export interface AttachmentRefV1 {
   previewRelativePath?: string;
   providerMetadata?: ProviderArtifactMetadata;
   quarantineReason?: QuarantineReason;
+  /** True when the content-addressed blob already existed in managed storage. */
+  deduplicated?: boolean;
 }
 
 export interface MessageInputV1 {

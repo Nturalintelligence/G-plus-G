@@ -105,6 +105,7 @@ Plan ready:
     const delivery = deliveryMgr.getOrCreateDelivery("att-acc-1", "chatgpt", "conv-chat-1");
     expect(delivery.status).toBe("PENDING");
 
+    deliveryMgr.updateDeliveryStatus(delivery.id, "UPLOADING");
     deliveryMgr.updateDeliveryStatus(delivery.id, "DELIVERED", "prov-file-123");
     const updated = deliveryMgr.getOrCreateDelivery("att-acc-1", "chatgpt", "conv-chat-1");
     expect(updated.status).toBe("DELIVERED");
@@ -112,6 +113,8 @@ Plan ready:
     const sub = subMgr.createSubmission("msg-acc-1", "chatgpt", ["att-acc-1"]);
     expect(sub.state).toBe("PREPARING");
 
+    subMgr.updateState(sub.submissionId, "FILES_UPLOADED");
+    subMgr.updateState(sub.submissionId, "SUBMITTED");
     subMgr.updateState(sub.submissionId, "CONFIRMED");
     const confirmedSub = subMgr.getSubmission("msg-acc-1", "chatgpt");
     expect(confirmedSub?.state).toBe("CONFIRMED");
