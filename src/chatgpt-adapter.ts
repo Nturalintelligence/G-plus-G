@@ -13,6 +13,7 @@ import type {
 import { LocalArtifactStore } from "./attachments/artifact-store.js";
 import { ResponseArtifactDownloader } from "./attachments/artifact-downloader.js";
 import type { AttachmentRefV1 } from "./attachments/attachments.js";
+import { prepareProviderUpload, uploadFilesAndVerifyAcceptance } from "./attachments/provider-upload.js";
 import { TurnChannel } from "./adapters/turn-channel.js";
 import { ProfileLock } from "./browser/profile-lock.js";
 import { bundledChromiumExecutable } from "./browser/runtime.js";
@@ -376,34 +377,18 @@ export class ChatGptAdapter implements ModelAdapter {
     await this.installMutationObserver();
 
     if (attachments && attachments.length > 0) {
-      const store = new LocalArtifactStore();
-      const validPaths: string[] = [];
-      for (const att of attachments) {
-        if (att.status !== "QUARANTINED" && att.localRelativePath) {
-          try {
-            validPaths.push(store.resolveAbsolutePath(att.localRelativePath));
-          } catch {
-            // Ignore path violation
-          }
+      const upload = prepareProviderUpload(attachments, this.getCapabilities(), new LocalArtifactStore());
+      let fileInput = page.locator('input[type="file"]');
+      if ((await fileInput.count().catch(() => 0)) === 0) {
+        const attachButtons = page.locator('button[aria-label*="Attach"], button[aria-label*="Прикрепить"], button[data-testid="attach-button"]:visible');
+        if ((await attachButtons.count()) !== 1) {
+          throw new Error("ChatGPT attachment control is unavailable or ambiguous");
         }
+        await attachButtons.click();
+        await page.waitForTimeout(300);
+        fileInput = page.locator('input[type="file"]');
       }
-
-      if (validPaths.length > 0) {
-        let fileInput = page.locator('input[type="file"]').first();
-        if ((await fileInput.count().catch(() => 0)) === 0) {
-          const attachBtn = page.locator('button[aria-label*="Attach"], button[aria-label*="Прикрепить"], button[data-testid="attach-button"]').first();
-          if (await attachBtn.isVisible().catch(() => false)) {
-            await attachBtn.click().catch(() => undefined);
-            await page.waitForTimeout(300);
-            fileInput = page.locator('input[type="file"]').first();
-          }
-        }
-
-        if ((await fileInput.count().catch(() => 0)) > 0) {
-          await fileInput.setInputFiles(validPaths).catch(() => undefined);
-          await page.waitForTimeout(1000);
-        }
-      }
+      await uploadFilesAndVerifyAcceptance(page, fileInput, upload.paths, upload.fileNames, "ChatGPT");
     }
 
     const before = await this.captureResponses();
@@ -894,6 +879,6 @@ export class ChatGptAdapter implements ModelAdapter {
         }
       }
     }
-    return true;
+    return false;
   }
 }

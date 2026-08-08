@@ -119,6 +119,7 @@ export function RunSummaryBar({
               {[
                 { id: "MANUAL", label: "Один ответ" },
                 { id: "SEQUENTIAL", label: "По очереди" },
+                { id: "PARALLEL", label: "Параллельно" },
                 { id: "DEBATE", label: "До согласия" },
               ].map((m) => (
                 <button

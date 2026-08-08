@@ -18,12 +18,15 @@ type SqlValue = string | number | null;
 export class ProjectRepository {
   constructor(private readonly database: AppDatabase) {}
 
-  createProject(name: string, providers?: string[]): Project {
+  createProject(name: string, providers?: string[], description = ""): Project {
     const cleanName = name.trim();
     if (!cleanName) throw new Error("Project name cannot be empty");
+    const cleanDescription = description.trim();
+    if (cleanDescription.length > 2_000) throw new Error("Project description cannot exceed 2000 characters");
     const project: Project = {
       id: newId("prj"),
       name: cleanName,
+      description: cleanDescription,
       status: "ACTIVE",
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
@@ -32,10 +35,10 @@ export class ProjectRepository {
     this.database.transaction(() => {
       this.database.raw
         .prepare(
-          `INSERT INTO projects(id, name, status, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?)`,
+          `INSERT INTO projects(id, name, description, status, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?)`,
         )
-        .run(project.id, project.name, project.status, project.createdAt, project.updatedAt);
+        .run(project.id, project.name, project.description ?? "", project.status, project.createdAt, project.updatedAt);
       if (providers && providers.length > 0) {
         const stmt = this.database.raw.prepare(
           `INSERT INTO project_providers(project_id, provider_id) VALUES (?, ?)`
@@ -46,6 +49,7 @@ export class ProjectRepository {
       }
       this.appendEventInternal("Project", project.id, "PROJECT_CREATED", {
         name: project.name,
+        description: project.description,
         providers: project.providers,
       });
     });
@@ -55,7 +59,7 @@ export class ProjectRepository {
   listProjects(): Project[] {
     const projects = this.database.raw
       .prepare(
-        `SELECT id, name, status, created_at, updated_at
+        `SELECT id, name, description, status, created_at, updated_at
          FROM projects ORDER BY created_at DESC`,
       )
       .all()
@@ -69,7 +73,7 @@ export class ProjectRepository {
   openProject(id: string): Project | null {
     const row = this.database.raw
       .prepare(
-        `SELECT id, name, status, created_at, updated_at FROM projects WHERE id = ?`,
+        `SELECT id, name, description, status, created_at, updated_at FROM projects WHERE id = ?`,
       )
       .get(id);
     if (!row) return null;
@@ -86,6 +90,7 @@ export class ProjectRepository {
   }
 
   appendConversationEntry(input: {
+    id?: string;
     projectId: string;
     runId?: string | null;
     role: MessageRole;
@@ -94,7 +99,7 @@ export class ProjectRepository {
     content: string;
   }): ConversationEntry {
     const entry: ConversationEntry = {
-      id: newId("entry"),
+      id: input.id ?? newId("entry"),
       projectId: input.projectId,
       runId: input.runId ?? null,
       role: input.role,
@@ -164,6 +169,50 @@ export class ProjectRepository {
 
   deleteProject(projectId: string): void {
     this.database.transaction(() => {
+      const project = this.openProject(projectId);
+      if (!project) throw new Error(`Project not found: ${projectId}`);
+
+      this.appendEventInternal("Project", projectId, "PROJECT_DELETED", { projectId });
+
+      this.database.raw
+        .prepare(
+          `DELETE FROM attachment_deliveries
+           WHERE attachment_id IN (
+             SELECT id FROM message_attachments WHERE project_id = ?
+           )`,
+        )
+        .run(projectId);
+      this.database.raw
+        .prepare(
+          `DELETE FROM provider_submissions
+           WHERE message_id IN (
+             SELECT message_id FROM message_attachments WHERE project_id = ?
+           )`,
+        )
+        .run(projectId);
+      this.database.raw.prepare("DELETE FROM message_attachments WHERE project_id = ?").run(projectId);
+      this.database.raw.prepare("DELETE FROM downloaded_artifacts WHERE project_id = ?").run(projectId);
+
+      this.database.raw
+        .prepare(
+          `DELETE FROM execution_artifacts
+           WHERE task_id IN (SELECT task_id FROM cli_tasks WHERE project_id = ?)`,
+        )
+        .run(projectId);
+      this.database.raw
+        .prepare(
+          `DELETE FROM cli_task_events
+           WHERE task_id IN (SELECT task_id FROM cli_tasks WHERE project_id = ?)`,
+        )
+        .run(projectId);
+      this.database.raw
+        .prepare(
+          `DELETE FROM cli_task_attempts
+           WHERE task_id IN (SELECT task_id FROM cli_tasks WHERE project_id = ?)`,
+        )
+        .run(projectId);
+      this.database.raw.prepare("DELETE FROM cli_tasks WHERE project_id = ?").run(projectId);
+
       const conversations = this.getConversationsForProject(projectId);
       for (const conversation of conversations) {
         const turns = this.database.raw
@@ -176,11 +225,17 @@ export class ProjectRepository {
         this.database.raw.prepare("DELETE FROM turns WHERE conversation_id = ?").run(conversation.id);
       }
       this.database.raw.prepare("DELETE FROM conversation_entries WHERE project_id = ?").run(projectId);
+      this.database.raw.prepare("DELETE FROM conversation_rollovers WHERE project_id = ?").run(projectId);
+      this.database.raw.prepare("DELETE FROM context_checkpoints WHERE project_id = ?").run(projectId);
+      this.database.raw.prepare("DELETE FROM rolling_briefs WHERE project_id = ?").run(projectId);
+      this.database.raw.prepare("DELETE FROM memory_items WHERE project_id = ?").run(projectId);
+      this.database.raw.prepare("DELETE FROM run_evaluations WHERE project_id = ?").run(projectId);
       this.database.raw.prepare("DELETE FROM conversations WHERE project_id = ?").run(projectId);
       this.database.raw.prepare("DELETE FROM orchestration_runs WHERE project_id = ?").run(projectId);
       this.database.raw.prepare("DELETE FROM project_state_versions WHERE project_id = ?").run(projectId);
+      this.database.raw.prepare("DELETE FROM exports WHERE project_id = ?").run(projectId);
+      this.database.raw.prepare("DELETE FROM project_providers WHERE project_id = ?").run(projectId);
       this.database.raw.prepare("DELETE FROM projects WHERE id = ?").run(projectId);
-      this.appendEventInternal("Project", projectId, "PROJECT_DELETED", { projectId });
     });
   }
 
@@ -563,6 +618,7 @@ function mapProject(row: Record<string, unknown>): Project {
   return {
     id: String(row.id),
     name: String(row.name),
+    description: row.description === undefined || row.description === null ? "" : String(row.description),
     status: String(row.status) as Project["status"],
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),

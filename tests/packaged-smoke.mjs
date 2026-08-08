@@ -13,6 +13,7 @@ try {
     env: {
       ...process.env,
       G_PLUS_G_USER_DATA: dataRoot,
+      G_PLUS_G_SKIP_PROVIDER_STATUS: "1",
     },
   });
   const page = await application.firstWindow();

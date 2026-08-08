@@ -35,8 +35,15 @@ export function ModelStatusRow({
     <div
       className={`model-status-row ${onClick ? "interactive" : ""} ${className}`}
       onClick={onClick}
+      onKeyDown={onClick ? (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onClick();
+        }
+      } : undefined}
       role={onClick ? "button" : undefined}
       tabIndex={onClick ? 0 : undefined}
+      aria-label={onClick ? `Открыть настройки ${displayName}` : undefined}
     >
       <div className="model-status-icon-wrapper">
         <ProviderLogoIcon providerId={meta.id} size={20} />

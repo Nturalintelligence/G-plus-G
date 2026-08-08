@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { getProviderDisplayName, PROVIDER_METADATA_MAP } from "../provider-metadata.js";
 import { ChevronDownIcon, ChevronUpIcon, CloseIcon, ProfileIcon, ProviderLogoIcon, RefreshIcon, SettingsIcon, TrashIcon } from "./Icon.js";
 
@@ -6,8 +6,9 @@ export interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
   settings: any;
-  setSettings: React.Dispatch<React.SetStateAction<any>>;
-  onSave: () => void;
+  onSave: (settings: any) => Promise<boolean>;
+  onReset: () => Promise<any>;
+  initialTab?: "profile" | "models" | "behavior" | "appearance" | "quality" | "diagnostics";
   login: (provider: string) => Promise<void>;
   resetSession: (provider: string) => Promise<void>;
   qualityDashboard: any;
@@ -15,6 +16,14 @@ export interface SettingsModalProps {
   runPreflight: () => void;
   maintenanceBusy: boolean;
   createBackup: () => Promise<void>;
+  releaseInfo?: {
+    appVersion: string;
+    commit: string;
+    nodeVersion: string;
+    platform: string;
+    dataPath: string;
+  } | null;
+  openDataFolder: () => Promise<void>;
   providerStatuses?: Record<string, { session: string; ready: boolean }>;
 }
 
@@ -22,8 +31,9 @@ export function SettingsModal({
   isOpen,
   onClose,
   settings,
-  setSettings,
   onSave,
+  onReset,
+  initialTab = "profile",
   login,
   resetSession,
   qualityDashboard,
@@ -31,6 +41,8 @@ export function SettingsModal({
   runPreflight,
   maintenanceBusy,
   createBackup,
+  releaseInfo,
+  openDataFolder,
   providerStatuses,
 }: SettingsModalProps) {
   const [activeTab, setActiveTab] = useState<
@@ -39,6 +51,17 @@ export function SettingsModal({
   const [modelFilter, setModelFilter] = useState<"all" | "supported" | "experimental">("all");
   const [searchQuery, setSearchQuery] = useState("");
   const [expandedModelId, setExpandedModelId] = useState<string | null>(null);
+  const [draft, setDraft] = useState<any>(() => structuredClone(settings));
+  const [saveBusy, setSaveBusy] = useState(false);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    setDraft(structuredClone(settings));
+    setActiveTab(initialTab);
+    const timer = window.setTimeout(() => closeButtonRef.current?.focus(), 0);
+    return () => window.clearTimeout(timer);
+  }, [isOpen, initialTab, settings]);
 
   if (!isOpen) return null;
 
@@ -50,6 +73,12 @@ export function SettingsModal({
         aria-modal="true"
         aria-labelledby="settings-dialog-title"
         onMouseDown={(e) => e.stopPropagation()}
+        onKeyDown={(event) => {
+          if (event.key === "Escape") {
+            event.preventDefault();
+            onClose();
+          }
+        }}
       >
         {/* Row 1: Header */}
         <header className="settings-dialog-header">
@@ -60,6 +89,7 @@ export function SettingsModal({
             </p>
           </div>
           <button
+            ref={closeButtonRef}
             type="button"
             className="icon-header-btn close-btn"
             aria-label="Закрыть настройки"
@@ -103,9 +133,9 @@ export function SettingsModal({
                     <input
                       type="text"
                       maxLength={80}
-                      value={settings.profile.displayName}
+                      value={draft.profile.displayName}
                       onChange={(e) =>
-                        setSettings((prev: any) => ({
+                        setDraft((prev: any) => ({
                           ...prev,
                           profile: { ...prev.profile, displayName: e.target.value },
                         }))
@@ -118,9 +148,9 @@ export function SettingsModal({
                     <input
                       type="text"
                       maxLength={80}
-                      value={settings.profile.realName ?? ""}
+                      value={draft.profile.realName ?? ""}
                       onChange={(e) =>
-                        setSettings((prev: any) => ({
+                        setDraft((prev: any) => ({
                           ...prev,
                           profile: { ...prev.profile, realName: e.target.value },
                         }))
@@ -182,7 +212,7 @@ export function SettingsModal({
                     })
                     .map((pId) => {
                       const meta = PROVIDER_METADATA_MAP[pId];
-                      const currentCustom = settings.models?.[pId] || { role: "Автоматически", customPrompt: "" };
+                      const currentCustom = draft.models?.[pId] || { role: "Автоматически", customPrompt: "" };
                       const isExpanded = expandedModelId === pId;
 
                       return (
@@ -256,7 +286,7 @@ export function SettingsModal({
                                   value={currentCustom.role}
                                   onChange={(e) => {
                                     const role = e.target.value;
-                                    setSettings((val: any) => ({
+                                    setDraft((val: any) => ({
                                       ...val,
                                       models: {
                                         ...val.models,
@@ -278,7 +308,7 @@ export function SettingsModal({
                                   value={currentCustom.customPrompt}
                                   onChange={(e) => {
                                     const customPrompt = e.target.value;
-                                    setSettings((val: any) => ({
+                                    setDraft((val: any) => ({
                                       ...val,
                                       models: {
                                         ...val.models,
@@ -309,9 +339,9 @@ export function SettingsModal({
                       type="number"
                       min={1}
                       max={20}
-                      value={settings.defaults.limits.maxTurns}
+                      value={draft.defaults.limits.maxTurns}
                       onChange={(e) =>
-                        setSettings((val: any) => ({
+                        setDraft((val: any) => ({
                           ...val,
                           defaults: {
                             ...val.defaults,
@@ -327,13 +357,13 @@ export function SettingsModal({
                       type="number"
                       min={0}
                       max={5}
-                      value={settings.defaults.limits.maxRetriesPerTurn}
+                      value={draft.defaults.limits.maxRetries}
                       onChange={(e) =>
-                        setSettings((val: any) => ({
+                        setDraft((val: any) => ({
                           ...val,
                           defaults: {
                             ...val.defaults,
-                            limits: { ...val.defaults.limits, maxRetriesPerTurn: parseInt(e.target.value, 10) || 0 },
+                            limits: { ...val.defaults.limits, maxRetries: parseInt(e.target.value, 10) || 0 },
                           },
                         }))
                       }
@@ -350,9 +380,9 @@ export function SettingsModal({
                 <label className="form-field">
                   <span className="field-label">Цветовая тема</span>
                   <select
-                    value={settings.appearance.theme}
+                    value={draft.appearance.theme}
                     onChange={(e) =>
-                      setSettings((val: any) => ({
+                      setDraft((val: any) => ({
                         ...val,
                         appearance: { ...val.appearance, theme: e.target.value },
                       }))
@@ -374,15 +404,25 @@ export function SettingsModal({
                   <div className="quality-summary-grid">
                     <div className="kpi-card">
                       <span className="kpi-label">Всего запусков</span>
-                      <strong className="kpi-value">{qualityDashboard.totalRuns || 0}</strong>
+                      <strong className="kpi-value">{
+                        qualityDashboard.overall?.find((metric: any) => metric.name === "orchestration.run.success")?.count
+                          ?? qualityDashboard.totalSamples
+                          ?? 0
+                      }</strong>
                     </div>
                     <div className="kpi-card">
                       <span className="kpi-label">Успешные раунды</span>
-                      <strong className="kpi-value text-success">{qualityDashboard.successfulRuns || 0}</strong>
+                      <strong className="kpi-value text-success">{(() => {
+                        const metric = qualityDashboard.overall?.find((item: any) => item.name === "orchestration.run.success");
+                        return metric ? Math.round(metric.count * metric.average) : 0;
+                      })()}</strong>
                     </div>
                     <div className="kpi-card">
                       <span className="kpi-label">Средняя длительность</span>
-                      <strong className="kpi-value">{qualityDashboard.avgDuration || "—"}</strong>
+                      <strong className="kpi-value">{(() => {
+                        const metric = qualityDashboard.overall?.find((item: any) => item.name === "orchestration.run.elapsed_ms");
+                        return metric ? `${(metric.average / 1000).toFixed(1)} сек` : "—";
+                      })()}</strong>
                     </div>
                   </div>
                 ) : (
@@ -413,7 +453,24 @@ export function SettingsModal({
                   >
                     <span>Создать резервную копию (Backup)</span>
                   </button>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => void openDataFolder()}
+                  >
+                    <span>Открыть папку данных</span>
+                  </button>
                 </div>
+
+                {releaseInfo ? (
+                  <dl className="release-info-list">
+                    <div><dt>Версия</dt><dd>{releaseInfo.appVersion}</dd></div>
+                    <div><dt>Commit</dt><dd><code>{releaseInfo.commit}</code></dd></div>
+                    <div><dt>Node</dt><dd>{releaseInfo.nodeVersion}</dd></div>
+                    <div><dt>Платформа</dt><dd>{releaseInfo.platform}</dd></div>
+                    <div><dt>Папка данных</dt><dd><code>{releaseInfo.dataPath}</code></dd></div>
+                  </dl>
+                ) : null}
 
                 {preflight.length > 0 && (
                   <div className="preflight-results">
@@ -437,9 +494,13 @@ export function SettingsModal({
           <button
             type="button"
             className="btn btn-danger-subtle"
+            disabled={saveBusy}
             onClick={() => {
               if (window.confirm("Сбросить все настройки до заводских значений по умолчанию?")) {
-                // Reset settings action
+                setSaveBusy(true);
+                void onReset()
+                  .then((value) => setDraft(structuredClone(value)))
+                  .finally(() => setSaveBusy(false));
               }
             }}
           >
@@ -447,15 +508,20 @@ export function SettingsModal({
           </button>
 
           <div className="footer-actions">
-            <button type="button" className="btn btn-secondary" onClick={onClose}>
+            <button type="button" className="btn btn-secondary" disabled={saveBusy} onClick={onClose}>
               Отмена
             </button>
             <button
               type="button"
               className="btn btn-primary"
+              disabled={saveBusy}
               onClick={() => {
-                onSave();
-                onClose();
+                setSaveBusy(true);
+                void onSave(draft)
+                  .then((saved) => {
+                    if (saved) onClose();
+                  })
+                  .finally(() => setSaveBusy(false));
               }}
             >
               Сохранить изменения

@@ -27,9 +27,13 @@ interface Window {
     };
     projects: {
       list(): Promise<ProjectView[]>;
-      create(name: string, providers: string[]): Promise<ProjectView>;
+      create(name: string, providers: string[], description?: string): Promise<ProjectView>;
       open(id: string): Promise<ProjectDetails>;
-      delete(id: string, deleteRemote?: boolean): Promise<{ success: boolean }>;
+      delete(id: string, deleteRemote?: boolean): Promise<{
+        success: boolean;
+        localDeleted?: boolean;
+        remoteResults?: Array<{ providerId: string; conversationId: string; deleted: boolean; error?: string }>;
+      }>;
     };
     provider: {
       login(provider: string): Promise<string>;
@@ -60,10 +64,12 @@ interface Window {
     };
     cliTasks: {
       list(projectId: string): Promise<any[]>;
-      approve(taskId: string): Promise<any>;
-      reject(taskId: string, reason: string): Promise<any>;
-      cancel(taskId: string): Promise<any>;
-      retry(taskId: string): Promise<any>;
+      approve(projectId: string, taskId: string): Promise<any>;
+      reject(projectId: string, taskId: string, reason: string): Promise<any>;
+      cancel(projectId: string, taskId: string): Promise<any>;
+      retry(projectId: string, taskId: string): Promise<any>;
+      executors(): Promise<Array<{ id: string; healthy: boolean; reason?: string; capabilities: string[]; hostProcessSandboxed: false }>>;
+      workspaceCapabilities(): Promise<Array<{ id: string; label: string; allowedOperations: string[]; hostProcessSandboxed: false }>>;
     };
     memory: {
       getBrief(projectId: string): Promise<any>;
@@ -76,14 +82,13 @@ interface Window {
     };
     attachments: {
       pickFiles(projectId: string, messageId: string): Promise<AttachmentRefView[]>;
-      stageDroppedFile(projectId: string, messageId: string, filePath: string): Promise<AttachmentRefView>;
+      stageDroppedFile(projectId: string, messageId: string, file: File): Promise<AttachmentRefView>;
       stageClipboardImage(projectId: string, messageId: string, base64Data: string): Promise<AttachmentRefView>;
       removeDraft(attachmentId: string): Promise<{ success: boolean }>;
       open(attachmentId: string): Promise<{ success: boolean; error?: string }>;
       saveAs(attachmentId: string): Promise<{ success: boolean; targetPath?: string }>;
       getPreviewUrl(attachmentId: string): Promise<string | null>;
     };
-    getPathForFile(file: File): string;
   };
 }
 
@@ -168,6 +173,7 @@ interface QualityDashboardView {
 interface ProjectView {
   id: string;
   name: string;
+  description?: string;
   status: string;
   updatedAt: string;
   providers?: string[];

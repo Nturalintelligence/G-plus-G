@@ -398,4 +398,35 @@ export const migrations: readonly Migration[] = [
       CREATE INDEX provider_submissions_msg_idx ON provider_submissions(message_id, provider_id);
     `,
   },
+  {
+    version: 8,
+    name: "project_description",
+    sql: `
+      ALTER TABLE projects ADD COLUMN description TEXT NOT NULL DEFAULT '';
+    `,
+  },
+  {
+    version: 9,
+    name: "attachment_delivery_idempotency",
+    sql: `
+      DELETE FROM attachment_deliveries
+      WHERE rowid NOT IN (
+        SELECT MIN(rowid)
+        FROM attachment_deliveries
+        GROUP BY attachment_id, provider_id, conversation_id
+      );
+
+      DELETE FROM provider_submissions
+      WHERE rowid NOT IN (
+        SELECT MIN(rowid)
+        FROM provider_submissions
+        GROUP BY message_id, provider_id
+      );
+
+      CREATE UNIQUE INDEX attachment_deliveries_unique_idx
+        ON attachment_deliveries(attachment_id, provider_id, conversation_id);
+      CREATE UNIQUE INDEX provider_submissions_unique_idx
+        ON provider_submissions(message_id, provider_id);
+    `,
+  },
 ];
