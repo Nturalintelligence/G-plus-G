@@ -50,10 +50,14 @@ Gemini adapter upload changes, Settings/login UI, destructive migration 9, and
 the expanded destructive project cascade. Automated evidence for the local
 variant is 42 test files / 192 tests plus a successful desktop production build.
 Live provider login and delivery remain manual owner UAT, not an automated PASS.
+Runtime checkpoint `54a03e7` also removes the duplicate
+`cliTasks:executors` registration that prevented the packaged main process from
+creating its first window. The rebuilt installer and isolated packaged smoke
+both pass; see `docs/TEST_EVIDENCE.md` for the artifact hash.
 
 ## Next step
 
-Build and hash a test artifact from the local protected variant, then let the
-owner run the short manual smoke in `docs/FEATURE_MATRIX.md`. Do not publish or
-merge this variant, change authentication, start the experimental branch, or
-run the full soak before the owner confirms the local provider gate.
+The owner should install the runtime-`54a03e7` artifact and run the short manual
+provider smoke in `docs/FEATURE_MATRIX.md`. Do not publish or merge this
+variant, change authentication, start the experimental branch, or run the full
+soak before the owner confirms the local provider gate.

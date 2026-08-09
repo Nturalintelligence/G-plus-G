@@ -195,6 +195,7 @@ upgrade/rollback, перезапуск, сохранение проектов, �
 | 5D | safe subset `337abb0` | CLI IPC, typed preload и task panel | `VERIFIED_AUTOMATED` | desktop typecheck и полный gate 192/192 passed; host CLI не запускались |
 | 5E | safe subset `337abb0` | local attachment IPC/preview/quarantine renderer wiring | `VERIFIED_AUTOMATED` | attachment suites 30/30, desktop build и полный gate 192/192 passed; adapter upload/auth не менялись |
 | 5F | safe subset `337abb0` | final transcript, PARALLEL UI и project description bridge | `VERIFIED_AUTOMATED` | полный `npm run check`: 192/192 passed; settings/login/status UI не менялись |
+| 5G | local runtime `54a03e7` | удаление дублирующего `cliTasks:executors` IPC handler | `VERIFIED_PACKAGED` | duplicate scan: none; полный gate 192/192; package и isolated packaged smoke passed без provider-вызовов |
 | 6 | docs-only subset `aa0486e` | документация pre-auth checkpoint | `VERIFIED_REVIEWED` | применены только документы; код из checkpoint не переносился |
 
 Последующие auth-коммиты `425deaa`, `d04bba7` и их revert `ab92ae4` в этот

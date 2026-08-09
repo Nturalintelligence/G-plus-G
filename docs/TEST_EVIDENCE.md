@@ -53,6 +53,10 @@ subsets from `337abb0` and documentation-only content from `aa0486e`.
 | focused attachment suites | PASS | 30/30 tests; local staging, preview and quarantine paths. |
 | `npm run desktop:build` | PASS | Renderer and Electron production build. |
 | auth-block comparison to `c562ade` | PASS | Provider login/status and adapter launch/login/session methods unchanged. |
+| duplicate IPC scan | PASS | One imported duplicate `cliTasks:executors` handler was removed; no duplicate IPC channels remain. |
+| `npm run package` | PASS | Windows NSIS artifact embeds runtime commit `54a03e7f586a8c57ce11e32537624868c1e3d97d`. |
+| `npm run smoke:packaged` | PASS | First window, project/state/settings persistence, preflight, trusted origin, popup denial and backup; no provider calls. |
+| installer SHA-256 | PASS | `C57C4A0EBE276471AB3DA33822CC161ED91D8A43ABF4786F6649FB771EA0683F`, 245,931,415 bytes. |
 | live ChatGPT/Gemini login and delivery | `UNVERIFIED_MANUAL` | Requires owner UAT; no automated claim is made. |
 
 Explicitly excluded and frozen: provider login/session/status handling,
