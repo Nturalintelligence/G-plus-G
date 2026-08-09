@@ -24,10 +24,15 @@ command. The application does not bypass service protections.
 
 ## Google says the browser is unsafe
 
-Gemini login must happen in ordinary installed Google Chrome. The login command
-temporarily closes Playwright, opens Chrome with the dedicated Gemini profile, and
-waits until you close that Chrome window. If an older experimental profile causes
-problems, reset only Gemini and retry:
+G+G открывает Gemini в собственном видимом browser context с отдельным persistent
+profile — так же, как ChatGPT. Приложение не должно самовольно переключать вход на
+обычный системный Chrome.
+
+Google может распознать управляемый Chromium и показать challenge, CAPTCHA или
+сообщение о небезопасном браузере. G+G не обходит такую защиту и не повторяет вход
+автоматически. Закройте окно и повторяйте попытку только вручную. Сброс профиля
+используйте лишь по явному решению владельца, поскольку он удаляет сохранённую
+Gemini-сессию:
 
 ```powershell
 npm start -- session:reset --provider gemini
