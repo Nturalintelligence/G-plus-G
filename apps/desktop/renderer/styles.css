@@ -1452,11 +1452,16 @@ fieldset label textarea {
 }
 
 .settings-dialog-header {
+  height: auto;
   padding: 18px 24px;
   border-bottom: 1px solid var(--border-color);
   display: flex;
   align-items: center;
   justify-content: space-between;
+}
+
+.settings-dialog-subtitle {
+  margin: 4px 0 0;
 }
 
 .settings-dialog-body {
