@@ -1439,7 +1439,7 @@ fieldset label textarea {
 .status-dot.status-offline { background: #6b7280; }
 
 /* Settings Modal 3-Row Grid */
-.settings-dialog-dialog {
+.settings-modal-dialog {
   width: min(1040px, calc(100vw - 48px));
   height: min(760px, calc(100vh - 48px));
   background: var(--bg-modal);
