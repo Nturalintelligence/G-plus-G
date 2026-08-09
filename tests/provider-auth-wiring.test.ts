@@ -7,10 +7,11 @@ const rendererSource = readFileSync(
 );
 
 describe("provider authentication wiring", () => {
-  it("does not probe providers automatically on application startup", () => {
-    expect(rendererSource).not.toContain("refreshAllSupportedStatuses");
-    expect(rendererSource).not.toContain("void refreshProviderStatus(provider)");
-    expect(rendererSource).not.toContain("window.orchestrator.provider.status(");
+  it("checks supported providers once and sequentially on application startup", () => {
+    expect(rendererSource).toContain('await checkProviderStatus("chatgpt")');
+    expect(rendererSource).toContain('await checkProviderStatus("gemini")');
+    expect(rendererSource).toContain("window.setTimeout(resolve, 1_500)");
+    expect(rendererSource.match(/window\.orchestrator\.provider\.status\(/g)).toHaveLength(1);
   });
 
   it("uses the explicit login result as the provider status", () => {

@@ -332,7 +332,7 @@ describe("Orchestrator", () => {
     });
 
     expect(result.consensusReached).toBe(false);
-    expect(result.outcome).toBe("LIMIT_REACHED");
+    expect(result.outcome).toBe("NO_CONSENSUS");
     expect(result.responses.filter((response) => response.phase === "DISCUSSION"))
       .toHaveLength(2);
   });
