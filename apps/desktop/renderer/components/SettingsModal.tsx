@@ -350,7 +350,7 @@ export function SettingsModal({
             {activeTab === "appearance" && (
               <section className="settings-section">
                 <h2>Внешний вид и тема оформления</h2>
-                <label className="form-field">
+                <label className="form-field appearance-theme-field">
                   <span className="field-label">Цветовая тема</span>
                   <select
                     value={settings.appearance.theme}

@@ -1464,6 +1464,12 @@ fieldset label textarea {
   margin: 4px 0 0;
 }
 
+.appearance-theme-field {
+  display: grid;
+  width: fit-content;
+  gap: 6px;
+}
+
 .settings-dialog-body {
   display: grid;
   grid-template-columns: 220px minmax(0, 1fr);
