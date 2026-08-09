@@ -1470,6 +1470,104 @@ fieldset label textarea {
   gap: 6px;
 }
 
+.settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.section-description {
+  margin: 0;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.form-grid,
+.model-card-body {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 16px;
+}
+
+.form-field {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.field-label {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.form-field > input,
+.form-field > select,
+.form-field > textarea {
+  width: 100%;
+}
+
+.form-field > textarea {
+  min-height: 96px;
+  resize: vertical;
+}
+
+.actions-row,
+.footer-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.quality-center-header,
+.quality-model-card .card-top {
+  height: auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.quality-center-header h3,
+.quality-center-header .subtitle {
+  margin: 0;
+}
+
+.quality-center-header .title-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.quality-center-header .subtitle {
+  color: var(--text-secondary);
+}
+
+.quality-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+}
+
+.kpi-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px;
+  border: 1px solid var(--border-color-card);
+  border-radius: 10px;
+  background: var(--bg-panel);
+}
+
+.quality-model-card .provider-name-row,
+.quality-model-card .success-badge {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .settings-dialog-body {
   display: grid;
   grid-template-columns: 220px minmax(0, 1fr);
