@@ -144,9 +144,9 @@ function App(): React.JSX.Element {
   const [projects, setProjects] = useState<ProjectView[]>([]);
   const [current, setCurrent] = useState<ProjectDetails | null>(null);
   const [providerStatuses, setProviderStatuses] = useState<Record<string, { session: string; ready: boolean }>>({
-    chatgpt: { session: "CHECKING", ready: false },
-    gemini: { session: "CHECKING", ready: false },
-    deepseek: { session: "CHECKING", ready: false },
+    chatgpt: { session: "UNKNOWN", ready: false },
+    gemini: { session: "UNKNOWN", ready: false },
+    deepseek: { session: "UNKNOWN", ready: false },
   });
   const [name, setName] = useState("");
   const [task, setTask] = useState("");
@@ -358,32 +358,6 @@ function App(): React.JSX.Element {
     return () => window.clearInterval(timer);
   }, [current?.project.id, hasActiveCliTask]);
 
-  const refreshProviderStatus = useCallback(async (providerId: string) => {
-    try {
-      const res = await window.orchestrator.provider.status(providerId);
-      setProviderStatuses((prev) => ({
-        ...prev,
-        [providerId]: { session: res.session, ready: res.ready },
-      }));
-    } catch {
-      setProviderStatuses((prev) => ({
-        ...prev,
-        [providerId]: { session: "UNKNOWN", ready: false },
-      }));
-    }
-  }, []);
-
-  const refreshAllSupportedStatuses = useCallback(async () => {
-    const targets = ["chatgpt", "gemini"];
-    for (const id of targets) {
-      await refreshProviderStatus(id);
-    }
-  }, [refreshProviderStatus]);
-
-  useEffect(() => {
-    void refreshAllSupportedStatuses();
-  }, [refreshAllSupportedStatuses]);
-
   const refresh = async (): Promise<void> => setProjects(await window.orchestrator.projects.list());
   useEffect(() => {
     void refresh();
@@ -493,6 +467,10 @@ function App(): React.JSX.Element {
     setStatus(`Войдите в ${getProviderDisplayName(provider)} в открывшемся окне…`);
     try {
       const session = await window.orchestrator.provider.login(provider);
+      setProviderStatuses((prev) => ({
+        ...prev,
+        [provider]: { session, ready: session === "AUTHENTICATED" },
+      }));
       setStatus(`Сессия ${getProviderDisplayName(provider)} активна: ${session}`);
     } catch (error: any) {
       if (error?.code === "LOGIN_ALREADY_ACTIVE" || String(error).includes("LOGIN_ALREADY_ACTIVE")) {
@@ -500,10 +478,14 @@ function App(): React.JSX.Element {
         return;
       }
       const userErr = toUserFacingError(error, `Авторизация ${provider}`);
+      if (userErr.code === "PROVIDER_TRAFFIC_BLOCKED" || userErr.code === "CHALLENGE_REQUIRED") {
+        setProviderStatuses((prev) => ({
+          ...prev,
+          [provider]: { session: "CHALLENGE_REQUIRED", ready: false },
+        }));
+      }
       setActiveUserError(userErr);
       setStatus(userErr.message);
-    } finally {
-      void refreshProviderStatus(provider);
     }
   }
 
@@ -636,12 +618,17 @@ function App(): React.JSX.Element {
     setMaintenanceBusy(true);
     try {
       const result = await window.orchestrator.maintenance.resetSession(provider);
+      if (result.reset) {
+        setProviderStatuses((prev) => ({
+          ...prev,
+          [provider]: { session: "UNAUTHENTICATED", ready: false },
+        }));
+      }
       setStatus(result.reset ? `Сессия ${provider} сброшена` : "Сброс сессии отменён");
     } catch (error) {
       setStatus(`Сессия не сброшена: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
       setMaintenanceBusy(false);
-      void refreshProviderStatus(provider);
     }
   }
 

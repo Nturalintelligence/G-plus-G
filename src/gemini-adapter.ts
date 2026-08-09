@@ -31,7 +31,10 @@ import { fillComposerSafely } from "./adapters/dom-utils.js";
 import { newId } from "./ids.js";
 import { dataPath } from "./paths.js";
 import { inferSessionState } from "./adapters/session-inference.js";
-import { inferChallengePage } from "./adapters/challenge-inference.js";
+import {
+  inferChallengePage,
+  isGoogleTrafficBlockUrl,
+} from "./adapters/challenge-inference.js";
 import type {
   DiagnosticReport,
   ResponseSnapshot,
@@ -111,7 +114,7 @@ export class GeminiAdapter implements ModelAdapter {
   }
 
   async checkSession(): Promise<SessionState> {
-    const page = await this.ensurePage();
+    const page = await this.ensurePage(false);
     const body = await page.locator("body").innerText().catch(() => "");
     const loginControls = page.getByRole("button", { name: /^(sign in|войти)$/i });
     let visibleLoginControls = 0;
@@ -135,8 +138,15 @@ export class GeminiAdapter implements ModelAdapter {
   }
 
   async openLoginMode(): Promise<void> {
-    const page = await this.ensurePage();
-    await page.goto(GEMINI_URL, { waitUntil: "domcontentloaded" });
+    const page = await this.ensurePage(false);
+    if (isGoogleTrafficBlockUrl(page.url())) {
+      throw new ChallengeRequiredError(
+        "PROVIDER_TRAFFIC_BLOCKED: Google временно ограничил доступ из-за подозрительного трафика. Не повторяйте вход сразу; дождитесь снятия ограничения и проверьте стабильность сети.",
+      );
+    }
+    if (page.url() === "about:blank") {
+      await page.goto(GEMINI_URL, { waitUntil: "domcontentloaded" });
+    }
     const deadline = Date.now() + 10 * 60_000;
     let consecutiveAuthCount = 0;
     while (Date.now() < deadline) {
@@ -144,6 +154,11 @@ export class GeminiAdapter implements ModelAdapter {
         throw new LoginCancelledError("Пользователь закрыл окно Gemini до завершения входа");
       }
       const state = await this.checkSession().catch(() => "UNKNOWN");
+      if (state === "CHALLENGE_REQUIRED" && isGoogleTrafficBlockUrl(page.url())) {
+        throw new ChallengeRequiredError(
+          "PROVIDER_TRAFFIC_BLOCKED: Google временно ограничил доступ из-за подозрительного трафика. Не повторяйте вход сразу; дождитесь снятия ограничения и проверьте стабильность сети.",
+        );
+      }
       if (state === "AUTHENTICATED") {
         consecutiveAuthCount += 1;
         if (consecutiveAuthCount >= 2) return;
@@ -571,7 +586,7 @@ export class GeminiAdapter implements ModelAdapter {
   }
 
   private async hasChallenge(): Promise<boolean> {
-    const page = await this.ensurePage();
+    const page = await this.ensurePage(false);
     const title = await page.title().catch(() => "");
     const structuralSignals = await page
       .locator(
@@ -586,13 +601,17 @@ export class GeminiAdapter implements ModelAdapter {
     });
   }
 
-  private async ensurePage(): Promise<Page> {
+  private async ensurePage(navigateIfNeeded = true): Promise<Page> {
     if (!this.context) throw new Error("Gemini adapter is not launched");
     if (this.page && !this.page.isClosed()) return this.page;
     this.page =
       this.context.pages().find((candidate) => !candidate.isClosed()) ??
       (await this.context.newPage());
-    if (!this.page.url().includes("gemini.google.com")) {
+    if (
+      navigateIfNeeded &&
+      !this.page.url().includes("gemini.google.com") &&
+      !isGoogleTrafficBlockUrl(this.page.url())
+    ) {
       await this.navigateToGemini(this.page);
     }
     return this.page;
@@ -603,9 +622,6 @@ export class GeminiAdapter implements ModelAdapter {
     this.context = await chromium.launchPersistentContext(this.profileDir, {
       headless: this.headless,
       viewport: { width: 1440, height: 1000 },
-      userAgent:
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-      args: ["--disable-blink-features=AutomationControlled"],
       ...(executablePath ? { executablePath } : {}),
     });
     this.page = this.context.pages()[0] ?? (await this.context.newPage());

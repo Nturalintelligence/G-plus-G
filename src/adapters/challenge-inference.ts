@@ -8,7 +8,7 @@ export function inferChallengePage(input: {
   if (
     url.includes("/cdn-cgi/challenge") ||
     url.includes("challenges.cloudflare.com") ||
-    url.includes("/sorry/") ||
+    isGoogleTrafficBlockUrl(url) ||
     url.includes("/challenge/")
   ) {
     return true;
@@ -16,4 +16,16 @@ export function inferChallengePage(input: {
   return /^(just a moment|attention required|captcha|verify you are human|one moment|один момент|подтвердите,? что вы человек)$/i.test(
     input.title.trim(),
   );
+}
+
+export function isGoogleTrafficBlockUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return (
+      (parsed.hostname === "google.com" || parsed.hostname.endsWith(".google.com")) &&
+      parsed.pathname.startsWith("/sorry/")
+    );
+  } catch {
+    return false;
+  }
 }
