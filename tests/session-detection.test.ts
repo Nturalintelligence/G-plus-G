@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { inferSessionState } from "../src/adapters/session-inference.js";
-import {
-  inferChallengePage,
-  isGoogleTrafficBlockUrl,
-} from "../src/adapters/challenge-inference.js";
+import { inferChallengePage } from "../src/adapters/challenge-inference.js";
 
 describe("session detection precedence", () => {
   it("does not mistake the anonymous composer for an authenticated session", () => {
@@ -32,14 +29,6 @@ describe("session detection precedence", () => {
 });
 
 describe("challenge page inference", () => {
-  it("recognizes Google unusual-traffic URLs without matching lookalike hosts", () => {
-    expect(
-      isGoogleTrafficBlockUrl("https://www.google.com/sorry/index?continue=https://gemini.google.com/app"),
-    ).toBe(true);
-    expect(isGoogleTrafficBlockUrl("https://google.example/sorry/index")).toBe(false);
-    expect(isGoogleTrafficBlockUrl("not a url")).toBe(false);
-  });
-
   it("does not treat model discussion of CAPTCHA or Cloudflare as a challenge", () => {
     expect(inferChallengePage({
       url: "https://chatgpt.com/c/example",

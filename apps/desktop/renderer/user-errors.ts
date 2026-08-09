@@ -28,16 +28,6 @@ export function toUserFacingError(error: unknown, context?: string): UserFacingE
     };
   }
 
-  if (rawMessage.includes("PROVIDER_TRAFFIC_BLOCKED")) {
-    return {
-      code: "PROVIDER_TRAFFIC_BLOCKED",
-      severity: "warning",
-      title: "Google временно ограничил доступ",
-      message: "Google обнаружил подозрительный трафик. Закройте окно входа и не повторяйте попытки подряд. Дождитесь снятия ограничения; если используется VPN, прокси или меняется маршрут IPv4/IPv6 — стабилизируйте подключение перед следующей попыткой.",
-      rawStack,
-    };
-  }
-
   if (rawMessage.includes("CHALLENGE_REQUIRED")) {
     return {
       code: "CHALLENGE_REQUIRED",
