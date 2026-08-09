@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -105,9 +105,9 @@ function App(): React.JSX.Element {
   const [projects, setProjects] = useState<ProjectView[]>([]);
   const [current, setCurrent] = useState<ProjectDetails | null>(null);
   const [providerStatuses, setProviderStatuses] = useState<Record<string, { session: string; ready: boolean }>>({
-    chatgpt: { session: "CHECKING", ready: false },
-    gemini: { session: "CHECKING", ready: false },
-    deepseek: { session: "CHECKING", ready: false },
+    chatgpt: { session: "UNKNOWN", ready: false },
+    gemini: { session: "UNKNOWN", ready: false },
+    deepseek: { session: "UNKNOWN", ready: false },
   });
   const [name, setName] = useState("");
   const [task, setTask] = useState("");
@@ -298,32 +298,6 @@ function App(): React.JSX.Element {
     });
   }, []);
 
-  const refreshProviderStatus = useCallback(async (providerId: string) => {
-    try {
-      const res = await window.orchestrator.provider.status(providerId);
-      setProviderStatuses((prev) => ({
-        ...prev,
-        [providerId]: { session: res.session, ready: res.ready },
-      }));
-    } catch {
-      setProviderStatuses((prev) => ({
-        ...prev,
-        [providerId]: { session: "UNKNOWN", ready: false },
-      }));
-    }
-  }, []);
-
-  const refreshAllSupportedStatuses = useCallback(async () => {
-    const targets = ["chatgpt", "gemini"];
-    for (const id of targets) {
-      await refreshProviderStatus(id);
-    }
-  }, [refreshProviderStatus]);
-
-  useEffect(() => {
-    void refreshAllSupportedStatuses();
-  }, [refreshAllSupportedStatuses]);
-
   const refresh = async (): Promise<void> => setProjects(await window.orchestrator.projects.list());
   useEffect(() => {
     void refresh();
@@ -444,10 +418,26 @@ function App(): React.JSX.Element {
 
   async function login(provider: string): Promise<void> {
     setStatus(`Войдите в ${getProviderDisplayName(provider)} в открывшемся окне…`);
+    setProviderStatuses((previous) => ({
+      ...previous,
+      [provider]: { session: "BUSY", ready: false },
+    }));
     try {
       const session = await window.orchestrator.provider.login(provider);
+      setProviderStatuses((previous) => ({
+        ...previous,
+        [provider]: { session, ready: session === "AUTHENTICATED" },
+      }));
       setStatus(`Сессия ${getProviderDisplayName(provider)} активна: ${session}`);
     } catch (error: any) {
+      const errorText = String(error?.message ?? error);
+      const failedSession = /challenge|captcha|капч|traffic_blocked/i.test(errorText)
+        ? "CHALLENGE_REQUIRED"
+        : "UNKNOWN";
+      setProviderStatuses((previous) => ({
+        ...previous,
+        [provider]: { session: failedSession, ready: false },
+      }));
       if (error?.code === "LOGIN_ALREADY_ACTIVE" || String(error).includes("LOGIN_ALREADY_ACTIVE")) {
         setStatus(error.message || "Уже выполняется вход в другой браузер.");
         return;
@@ -455,8 +445,6 @@ function App(): React.JSX.Element {
       const userErr = toUserFacingError(error, `Авторизация ${provider}`);
       setActiveUserError(userErr);
       setStatus(userErr.message);
-    } finally {
-      void refreshProviderStatus(provider);
     }
   }
 
@@ -579,12 +567,17 @@ function App(): React.JSX.Element {
     setMaintenanceBusy(true);
     try {
       const result = await window.orchestrator.maintenance.resetSession(provider);
+      if (result.reset) {
+        setProviderStatuses((previous) => ({
+          ...previous,
+          [provider]: { session: "UNKNOWN", ready: false },
+        }));
+      }
       setStatus(result.reset ? `Сессия ${provider} сброшена` : "Сброс сессии отменён");
     } catch (error) {
       setStatus(`Сессия не сброшена: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
       setMaintenanceBusy(false);
-      void refreshProviderStatus(provider);
     }
   }
 

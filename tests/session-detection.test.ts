@@ -11,8 +11,10 @@ describe("session detection precedence", () => {
     expect(inferSessionState("gemini", "Try Gemini  Sign in", 1)).toBe("LOGIN_REQUIRED");
   });
 
-  it("accepts a composer when login actions are absent", () => {
-    expect(inferSessionState("chatgpt", "New chat", 1)).toBe("AUTHENTICATED");
+  it("requires an explicit account control even when an anonymous composer is visible", () => {
+    expect(inferSessionState("chatgpt", "New chat", 1, 0, { hasUserMenu: false })).toBe("UNKNOWN");
+    expect(inferSessionState("gemini", "Try Gemini", 1, 0, { hasUserMenu: false })).toBe("UNKNOWN");
+    expect(inferSessionState("chatgpt", "New chat", 1, 0, { hasUserMenu: true })).toBe("AUTHENTICATED");
   });
 
   it("detects rate limiting before accepting the composer", () => {
@@ -23,7 +25,7 @@ describe("session detection precedence", () => {
 
   it("does not treat conversation text mentioning login as an auth control", () => {
     expect(
-      inferSessionState("chatgpt", "The solution says: log in to continue", 1, 0),
+      inferSessionState("chatgpt", "The solution says: log in to continue", 1, 0, { hasUserMenu: true }),
     ).toBe("AUTHENTICATED");
   });
 });

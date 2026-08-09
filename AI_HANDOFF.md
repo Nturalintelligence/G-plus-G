@@ -44,20 +44,33 @@ The only working copy is `C:\Users\onadl\OneDrive\Рабочий стол\G-plus
 It remains based on `c562ade` and contains only verified, non-authentication
 subsets selected from `337abb0`, plus documentation from `aa0486e`.
 
-The following areas are deliberately frozen and were not imported: provider
-login/session/status handling, project-delete authentication calls, ChatGPT and
-Gemini adapter upload changes, Settings/login UI, destructive migration 9, and
-the expanded destructive project cascade. Automated evidence for the local
-variant is 42 test files / 192 tests plus a successful desktop production build.
-Live provider login and delivery remain manual owner UAT, not an automated PASS.
+The following areas were deliberately excluded from the earlier import:
+provider login/session/status handling, project-delete authentication calls,
+ChatGPT and Gemini adapter upload changes, Settings/login UI, destructive
+migration 9, and the expanded destructive project cascade. That exclusion was
+superseded only for the narrow login defect described below; upload and the
+remaining destructive/settings areas stay frozen.
 Runtime checkpoint `54a03e7` also removes the duplicate
 `cliTasks:executors` registration that prevented the packaged main process from
 creating its first window. The rebuilt installer and isolated packaged smoke
 both pass; see `docs/TEST_EVIDENCE.md` for the artifact hash.
 
+## Owner-authorized login correction (2026-08-09)
+
+After the owner reproduced premature ChatGPT OAuth-window closure, the login
+freeze received an explicit narrow exception. Root cause: an anonymous composer
+was accepted as authentication whenever the visible login control temporarily
+disappeared. Completion now requires a stable explicit account control and no
+open external OAuth page. Message readiness can no longer bypass that check.
+
+Passive provider probes at application startup and after login/reset were also
+removed. Gemini received the same code-level protection but was intentionally
+not opened because of the active CAPTCHA/traffic-block risk. Automated gate:
+44 test files / 197 tests. Status remains `PENDING_OWNER_CHATGPT_UAT` and
+`GEMINI_NOT_LIVE_TESTED`.
+
 ## Next step
 
-The owner should install the runtime-`54a03e7` artifact and run the short manual
-provider smoke in `docs/FEATURE_MATRIX.md`. Do not publish or merge this
-variant, change authentication, start the experimental branch, or run the full
-soak before the owner confirms the local provider gate.
+Build the owner-authorized auth-fix artifact, then let the owner test ChatGPT
+login first. Do not open Gemini, publish/merge the public variant, start the
+experimental branch, or run the full soak before ChatGPT UAT succeeds.

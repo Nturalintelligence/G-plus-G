@@ -4,6 +4,15 @@ All notable project checkpoints are recorded here.
 
 ## [Unreleased]
 
+### Provider login reliability
+
+- Prevented anonymous ChatGPT/Gemini composers from being accepted as proof of
+  an authenticated session.
+- Manual login now remains open while an external OAuth page is active and
+  completes only after an explicit provider account control is stable.
+- Removed automatic provider status probes at application startup and the
+  redundant post-login probe, so Gemini is never contacted without a user action.
+
 ### Base functionality stabilization
 
 - Hardened TXT/MD/PDF/PNG/JPEG staging with magic MIME checks, SHA-256 integrity,

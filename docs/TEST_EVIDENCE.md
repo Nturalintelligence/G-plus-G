@@ -63,3 +63,19 @@ Explicitly excluded and frozen: provider login/session/status handling,
 project-delete authentication calls, ChatGPT/Gemini adapter upload changes,
 Settings/login UI, destructive migration 9, and the expanded destructive
 project cascade. These exclusions are intentional, not missing verification.
+
+## Owner-authorized login correction — 2026-08-09
+
+The earlier auth freeze received a narrow explicit exception after premature
+ChatGPT OAuth-window closure was reproduced by the owner.
+
+| Command / check | Result | Boundary |
+|---|---|---|
+| auth-focused Vitest | PASS | 4 files / 20 tests: anonymous composer, pending OAuth page, explicit account control and no-auto-probe wiring. |
+| `npm run check` | PASS | Build, desktop typecheck, 44 files and 197/197 tests. |
+| ChatGPT live login | `PENDING_OWNER_UAT` | No automated PASS is claimed. |
+| Gemini live login | `NOT_RUN` | Deliberately avoided because of CAPTCHA/traffic-block risk. |
+
+The code now requires explicit account UI before closing the manual-login
+browser, refuses to send through an anonymous composer, and performs no provider
+status request on application startup or immediately after login/reset.

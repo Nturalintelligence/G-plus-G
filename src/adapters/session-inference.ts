@@ -25,9 +25,12 @@ export function inferSessionState(
     return "RATE_LIMITED";
   }
 
+  const requiresExplicitAccountControl = providerId === "chatgpt" || providerId === "gemini";
+
   if (loginControlCount !== undefined) {
     if (loginControlCount > 0) return "LOGIN_REQUIRED";
-    if (evidence.hasUserMenu || composerCount >= 1) return "AUTHENTICATED";
+    if (evidence.hasUserMenu) return "AUTHENTICATED";
+    if (!requiresExplicitAccountControl && composerCount >= 1) return "AUTHENTICATED";
     return "UNKNOWN";
   }
 
@@ -39,6 +42,7 @@ export function inferSessionState(
       : /log in|sign in|войти|регистрац/i;
 
   if (loginPattern.test(body) && !evidence.hasUserMenu) return "LOGIN_REQUIRED";
-  if (evidence.hasUserMenu || composerCount >= 1) return "AUTHENTICATED";
+  if (evidence.hasUserMenu) return "AUTHENTICATED";
+  if (!requiresExplicitAccountControl && composerCount >= 1) return "AUTHENTICATED";
   return "UNKNOWN";
 }

@@ -31,6 +31,10 @@ import { newId } from "./ids.js";
 import { dataPath } from "./paths.js";
 import { inferSessionState } from "./adapters/session-inference.js";
 import { inferChallengePage } from "./adapters/challenge-inference.js";
+import {
+  canFinalizeManualLogin,
+  hasPendingExternalLoginPage,
+} from "./adapters/manual-login.js";
 import type {
   DiagnosticReport,
   ResponseSnapshot,
@@ -110,7 +114,7 @@ export class GeminiAdapter implements ModelAdapter {
   }
 
   async checkSession(): Promise<SessionState> {
-    const page = await this.ensurePage();
+    const page = await this.ensurePage(false);
     const body = await page.locator("body").innerText().catch(() => "");
     const loginControls = page.getByRole("button", { name: /^(sign in|войти)$/i });
     let visibleLoginControls = 0;
@@ -120,13 +124,15 @@ export class GeminiAdapter implements ModelAdapter {
       }
     }
     const composers = (await this.visibleComposers()).length;
-    const challenge = composers >= 1 ? false : await this.hasChallenge();
+    const userMenu = await this.hasUserMenu();
+    const challenge = userMenu ? false : await this.hasChallenge();
     return inferSessionState(
       "gemini",
       body,
       composers,
       visibleLoginControls,
       {
+        hasUserMenu: userMenu,
         hasChallenge: challenge,
         url: page.url(),
       },
@@ -134,7 +140,7 @@ export class GeminiAdapter implements ModelAdapter {
   }
 
   async openLoginMode(): Promise<void> {
-    const page = await this.ensurePage();
+    const page = await this.ensurePage(false);
     await page.goto(GEMINI_URL, { waitUntil: "domcontentloaded" });
     const deadline = Date.now() + 10 * 60_000;
     let consecutiveAuthCount = 0;
@@ -142,10 +148,18 @@ export class GeminiAdapter implements ModelAdapter {
       if (page.isClosed()) {
         throw new LoginCancelledError("Пользователь закрыл окно Gemini до завершения входа");
       }
-      const state = await this.checkSession().catch(() => "UNKNOWN");
-      if (state === "AUTHENTICATED") {
+      const state = await this.checkSession().catch(() => "UNKNOWN" as SessionState);
+      const openPageUrls = this.context?.pages()
+        .filter((candidate) => !candidate.isClosed())
+        .map((candidate) => candidate.url()) ?? [];
+      const canFinalize = canFinalizeManualLogin({
+        session: state,
+        hasExplicitAccountControl: await this.hasUserMenu().catch(() => false),
+        hasPendingExternalPage: hasPendingExternalLoginPage("gemini", openPageUrls),
+      });
+      if (canFinalize) {
         consecutiveAuthCount += 1;
-        if (consecutiveAuthCount >= 2) return;
+        if (consecutiveAuthCount >= 4) return;
       } else {
         consecutiveAuthCount = 0;
       }
@@ -352,8 +366,7 @@ export class GeminiAdapter implements ModelAdapter {
     let state: SessionState = "UNKNOWN";
     while (Date.now() < deadline) {
       state = await this.checkSession();
-      const composers = await this.visibleComposers();
-      if (state === "AUTHENTICATED" || composers.length === 1) {
+      if (state === "AUTHENTICATED") {
         await this.waitUntilStableResponses();
         return state;
       }
@@ -366,7 +379,7 @@ export class GeminiAdapter implements ModelAdapter {
   }
 
   private async waitUntilStableResponses(): Promise<void> {
-    const page = await this.ensurePage();
+    const page = await this.ensurePage(false);
     let lastCount = -1;
     let stableSince = Date.now();
     const deadline = Date.now() + 5_000;
@@ -601,16 +614,33 @@ export class GeminiAdapter implements ModelAdapter {
     });
   }
 
-  private async ensurePage(): Promise<Page> {
+  private async ensurePage(navigateIfNeeded = true): Promise<Page> {
     if (!this.context) throw new Error("Gemini adapter is not launched");
     if (this.page && !this.page.isClosed()) return this.page;
     this.page =
       this.context.pages().find((candidate) => !candidate.isClosed()) ??
       (await this.context.newPage());
-    if (!this.page.url().includes("gemini.google.com")) {
+    if (navigateIfNeeded && !this.page.url().includes("gemini.google.com")) {
       await this.navigateToGemini(this.page);
     }
     return this.page;
+  }
+
+  private async hasUserMenu(): Promise<boolean> {
+    const page = await this.ensurePage(false);
+    const selectors = [
+      'a[aria-label*="Google Account" i]',
+      'button[aria-label*="Google Account" i]',
+      '[aria-label*="Аккаунт Google" i]',
+      '[data-test-id="account-menu-button"]',
+      '[data-testid="account-menu-button"]',
+    ];
+    for (const selector of selectors) {
+      if (await page.locator(selector).first().isVisible().catch(() => false)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private async launchAutomatedBrowser(): Promise<void> {
@@ -624,7 +654,10 @@ export class GeminiAdapter implements ModelAdapter {
       ...(executablePath ? { executablePath } : {}),
     });
     this.page = this.context.pages()[0] ?? (await this.context.newPage());
-    await this.navigateToGemini(this.page);
+    await this.page.goto(GEMINI_URL, {
+      waitUntil: "domcontentloaded",
+      timeout: 30_000,
+    });
   }
 
   private async navigateToGemini(page: Page): Promise<void> {

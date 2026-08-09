@@ -19,6 +19,10 @@ import { bundledChromiumExecutable } from "./browser/runtime.js";
 import { dataPath } from "./paths.js";
 import { inferSessionState } from "./adapters/session-inference.js";
 import { inferChallengePage } from "./adapters/challenge-inference.js";
+import {
+  canFinalizeManualLogin,
+  hasPendingExternalLoginPage,
+} from "./adapters/manual-login.js";
 import { newId } from "./ids.js";
 import {
   AmbiguousElementError,
@@ -262,7 +266,7 @@ export class ChatGptAdapter implements ModelAdapter {
     const loginControls = await this.visibleLoginControlCount();
     const userMenu = await this.hasUserMenu();
     const composers = (await this.findVisibleComposers()).length;
-    const challenge = userMenu || composers >= 1 ? false : await this.hasChallenge();
+    const challenge = userMenu ? false : await this.hasChallenge();
 
     return inferSessionState(
       "chatgpt",
@@ -282,9 +286,11 @@ export class ChatGptAdapter implements ModelAdapter {
     const selectors = [
       '[data-testid="user-menu"]',
       '[data-testid="profile-button"]',
-      'button[aria-label*="Profile"]',
-      'button[aria-label*="Профиль"]',
-      'button[aria-label*="User"]',
+      '[data-testid="accounts-profile-button"]',
+      '[data-testid*="user-menu" i]',
+      'button[aria-label*="profile" i]',
+      'button[aria-label*="профил" i]',
+      'button[aria-label*="user menu" i]',
     ];
     for (const selector of selectors) {
       if (await page.locator(selector).first().isVisible().catch(() => false)) {
@@ -324,9 +330,17 @@ export class ChatGptAdapter implements ModelAdapter {
       }
 
       const state = await this.checkSession().catch(() => "UNKNOWN" as SessionState);
-      if (state === "AUTHENTICATED") {
+      const openPageUrls = this.context?.pages()
+        .filter((candidate) => !candidate.isClosed())
+        .map((candidate) => candidate.url()) ?? [];
+      const canFinalize = canFinalizeManualLogin({
+        session: state,
+        hasExplicitAccountControl: await this.hasUserMenu().catch(() => false),
+        hasPendingExternalPage: hasPendingExternalLoginPage("chatgpt", openPageUrls),
+      });
+      if (canFinalize) {
         consecutiveAuthCount += 1;
-        if (consecutiveAuthCount >= 2) {
+        if (consecutiveAuthCount >= 4) {
           return "AUTHENTICATED";
         }
       } else {
@@ -365,9 +379,11 @@ export class ChatGptAdapter implements ModelAdapter {
   private async assertReady(): Promise<void> {
     const state = await this.checkSession();
     if (state === "CHALLENGE_REQUIRED") throw new ChallengeRequiredError();
-    const composers = await this.findVisibleComposers();
-    if (composers.length === 1) return; // Usable
     if (state !== "AUTHENTICATED") throw new LoginRequiredError(`ChatGPT state: ${state}`);
+    const composers = await this.findVisibleComposers();
+    if (composers.length !== 1) {
+      throw new AmbiguousElementError(`Expected one authenticated ChatGPT composer, found ${composers.length}`);
+    }
   }
 
   private async sendAndWait(message: string, attachments?: AttachmentRefV1[], channel?: TurnChannel): Promise<TurnResult> {
@@ -447,13 +463,12 @@ export class ChatGptAdapter implements ModelAdapter {
 
     while (Date.now() < deadline) {
       state = await this.checkSession();
-      const composers = await this.findVisibleComposers();
-      if (state === "AUTHENTICATED" || composers.length === 1) {
+      if (state === "AUTHENTICATED") {
         await this.waitUntilStableResponses();
         return;
       }
       if (state === "CHALLENGE_REQUIRED") throw new ChallengeRequiredError();
-      if (state === "LOGIN_REQUIRED" && composers.length === 0) {
+      if (state === "LOGIN_REQUIRED") {
         throw new LoginRequiredError(`ChatGPT state: ${state}`);
       }
       await page.waitForTimeout(500);
