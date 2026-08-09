@@ -35,6 +35,10 @@ import {
   inferChallengePage,
   isGoogleTrafficBlockUrl,
 } from "./adapters/challenge-inference.js";
+import {
+  canFinalizeManualLogin,
+  hasPendingExternalLoginPage,
+} from "./adapters/manual-login.js";
 import type {
   DiagnosticReport,
   ResponseSnapshot,
@@ -124,13 +128,15 @@ export class GeminiAdapter implements ModelAdapter {
       }
     }
     const composers = (await this.visibleComposers()).length;
-    const challenge = composers >= 1 ? false : await this.hasChallenge();
+    const userMenu = await this.hasUserMenu();
+    const challenge = userMenu || composers >= 1 ? false : await this.hasChallenge();
     return inferSessionState(
       "gemini",
       body,
       composers,
       visibleLoginControls,
       {
+        hasUserMenu: userMenu,
         hasChallenge: challenge,
         url: page.url(),
       },
@@ -153,13 +159,21 @@ export class GeminiAdapter implements ModelAdapter {
       if (page.isClosed()) {
         throw new LoginCancelledError("Пользователь закрыл окно Gemini до завершения входа");
       }
-      const state = await this.checkSession().catch(() => "UNKNOWN");
+      const state = await this.checkSession().catch(() => "UNKNOWN" as SessionState);
       if (state === "CHALLENGE_REQUIRED" && isGoogleTrafficBlockUrl(page.url())) {
         throw new ChallengeRequiredError(
           "PROVIDER_TRAFFIC_BLOCKED: Google временно ограничил доступ из-за подозрительного трафика. Не повторяйте вход сразу; дождитесь снятия ограничения и проверьте стабильность сети.",
         );
       }
-      if (state === "AUTHENTICATED") {
+      const openPageUrls = this.context?.pages()
+        .filter((candidate) => !candidate.isClosed())
+        .map((candidate) => candidate.url()) ?? [];
+      const canFinalize = canFinalizeManualLogin({
+        session: state,
+        hasExplicitAccountControl: await this.hasUserMenu().catch(() => false),
+        hasPendingExternalPage: hasPendingExternalLoginPage("gemini", openPageUrls),
+      });
+      if (canFinalize) {
         consecutiveAuthCount += 1;
         if (consecutiveAuthCount >= 2) return;
       } else {
@@ -617,6 +631,23 @@ export class GeminiAdapter implements ModelAdapter {
     return this.page;
   }
 
+  private async hasUserMenu(): Promise<boolean> {
+    const page = await this.ensurePage(false);
+    const selectors = [
+      'a[aria-label*="Google Account" i]',
+      'button[aria-label*="Google Account" i]',
+      '[aria-label*="Аккаунт Google" i]',
+      '[data-test-id="account-menu-button"]',
+      '[data-testid="account-menu-button"]',
+    ];
+    for (const selector of selectors) {
+      if (await page.locator(selector).first().isVisible().catch(() => false)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   private async launchAutomatedBrowser(): Promise<void> {
     const executablePath = bundledChromiumExecutable();
     this.context = await chromium.launchPersistentContext(this.profileDir, {
@@ -625,7 +656,10 @@ export class GeminiAdapter implements ModelAdapter {
       ...(executablePath ? { executablePath } : {}),
     });
     this.page = this.context.pages()[0] ?? (await this.context.newPage());
-    await this.navigateToGemini(this.page);
+    await this.page.goto(GEMINI_URL, {
+      waitUntil: "domcontentloaded",
+      timeout: 30_000,
+    });
   }
 
   private async navigateToGemini(page: Page): Promise<void> {

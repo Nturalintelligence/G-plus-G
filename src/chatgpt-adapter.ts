@@ -20,6 +20,10 @@ import { bundledChromiumExecutable } from "./browser/runtime.js";
 import { dataPath } from "./paths.js";
 import { inferSessionState } from "./adapters/session-inference.js";
 import { inferChallengePage } from "./adapters/challenge-inference.js";
+import {
+  canFinalizeManualLogin,
+  hasPendingExternalLoginPage,
+} from "./adapters/manual-login.js";
 import { newId } from "./ids.js";
 import {
   AmbiguousElementError,
@@ -283,9 +287,12 @@ export class ChatGptAdapter implements ModelAdapter {
     const selectors = [
       '[data-testid="user-menu"]',
       '[data-testid="profile-button"]',
+      '[data-testid="accounts-profile-button"]',
       'button[aria-label*="Profile"]',
       'button[aria-label*="Профиль"]',
       'button[aria-label*="User"]',
+      'button[aria-label*="Open profile menu" i]',
+      'button[aria-label*="Account" i]',
     ];
     for (const selector of selectors) {
       if (await page.locator(selector).first().isVisible().catch(() => false)) {
@@ -325,7 +332,15 @@ export class ChatGptAdapter implements ModelAdapter {
       }
 
       const state = await this.checkSession().catch(() => "UNKNOWN" as SessionState);
-      if (state === "AUTHENTICATED") {
+      const openPageUrls = this.context?.pages()
+        .filter((candidate) => !candidate.isClosed())
+        .map((candidate) => candidate.url()) ?? [];
+      const canFinalize = canFinalizeManualLogin({
+        session: state,
+        hasExplicitAccountControl: await this.hasUserMenu().catch(() => false),
+        hasPendingExternalPage: hasPendingExternalLoginPage("chatgpt", openPageUrls),
+      });
+      if (canFinalize) {
         consecutiveAuthCount += 1;
         if (consecutiveAuthCount >= 2) {
           return "AUTHENTICATED";
