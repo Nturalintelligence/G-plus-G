@@ -310,6 +310,41 @@ function App(): React.JSX.Element {
     const timer = setTimeout(() => setShowSplash(false), 2500);
     return () => clearTimeout(timer);
   }, []);
+  useEffect(() => {
+    let cancelled = false;
+
+    const checkProviderStatus = async (provider: "chatgpt" | "gemini"): Promise<void> => {
+      if (cancelled) return;
+      setProviderStatuses((previous) => ({
+        ...previous,
+        [provider]: { session: "CHECKING", ready: false },
+      }));
+      try {
+        const result = await window.orchestrator.provider.status(provider);
+        if (cancelled) return;
+        setProviderStatuses((previous) => ({
+          ...previous,
+          [provider]: { session: result.session, ready: result.ready },
+        }));
+      } catch {
+        if (cancelled) return;
+        setProviderStatuses((previous) => ({
+          ...previous,
+          [provider]: { session: "UNKNOWN", ready: false },
+        }));
+      }
+    };
+
+    void (async () => {
+      await checkProviderStatus("chatgpt");
+      await new Promise((resolve) => window.setTimeout(resolve, 1_500));
+      await checkProviderStatus("gemini");
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   const hasActiveCliTask = cliTasks.some((item) =>
     ["QUEUED", "RUNNING", "VERIFYING"].includes(item.status),
   );
