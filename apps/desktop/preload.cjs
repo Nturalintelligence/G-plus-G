@@ -16,7 +16,7 @@ const api = {
   },
   projects: {
     list: () => ipcRenderer.invoke("projects:list"),
-    create: (name, providers) => ipcRenderer.invoke("projects:create", name, providers),
+    create: (name, providers, description = "") => ipcRenderer.invoke("projects:create", { name, providers, description }),
     open: (id) => ipcRenderer.invoke("projects:open", id),
     delete: (id, deleteRemote) => ipcRenderer.invoke("projects:delete", { projectId: id, deleteRemote }),
   },
@@ -59,10 +59,12 @@ const api = {
   },
   cliTasks: {
     list: (projectId) => ipcRenderer.invoke("cliTasks:list", projectId),
-    approve: (taskId) => ipcRenderer.invoke("cliTasks:approve", taskId),
-    reject: (taskId, reason) => ipcRenderer.invoke("cliTasks:reject", { taskId, reason }),
-    cancel: (taskId) => ipcRenderer.invoke("cliTasks:cancel", taskId),
-    retry: (taskId) => ipcRenderer.invoke("cliTasks:retry", taskId),
+    approve: (projectId, taskId) => ipcRenderer.invoke("cliTasks:approve", { projectId, taskId }),
+    reject: (projectId, taskId, reason) => ipcRenderer.invoke("cliTasks:reject", { projectId, taskId, reason }),
+    cancel: (projectId, taskId) => ipcRenderer.invoke("cliTasks:cancel", { projectId, taskId }),
+    retry: (projectId, taskId) => ipcRenderer.invoke("cliTasks:retry", { projectId, taskId }),
+    executors: () => ipcRenderer.invoke("cliTasks:executors"),
+    workspaceCapabilities: () => ipcRenderer.invoke("cliTasks:workspaceCapabilities"),
   },
   memory: {
     getBrief: (projectId) => ipcRenderer.invoke("memory:getBrief", projectId),
@@ -75,8 +77,9 @@ const api = {
   },
   attachments: {
     pickFiles: (projectId, messageId) => ipcRenderer.invoke("attachments:pickFiles", { projectId, messageId }),
-    stageDroppedFile: (projectId, messageId, fileOrPath) => {
-      const filePath = typeof fileOrPath === "string" ? fileOrPath : webUtils.getPathForFile(fileOrPath);
+    stageDroppedFile: (projectId, messageId, file) => {
+      const filePath = webUtils.getPathForFile(file);
+      if (!filePath) throw new Error("Dropped file has no trusted local path");
       return ipcRenderer.invoke("attachments:stageDroppedFile", { projectId, messageId, filePath });
     },
     stageClipboardImage: (projectId, messageId, base64Data) => ipcRenderer.invoke("attachments:stageClipboardImage", { projectId, messageId, base64Data }),
@@ -85,7 +88,6 @@ const api = {
     saveAs: (attachmentId) => ipcRenderer.invoke("attachments:saveAs", attachmentId),
     getPreviewUrl: (attachmentId) => ipcRenderer.invoke("attachments:getPreviewUrl", attachmentId),
   },
-  getPathForFile: (file) => webUtils.getPathForFile(file),
 };
 
 contextBridge.exposeInMainWorld("orchestrator", api);

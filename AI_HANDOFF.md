@@ -2,8 +2,8 @@
 
 ## Goal
 
-Remove task-specific Snake artifacts and restore the rule that only a validated
-`G_PLUS_G_CLI_TASK_V1` envelope can enter approval and execution.
+Stabilize the 0.1 base application after the completed Snake cleanup, without
+starting the experimental protocol router or Secure Code Runtime.
 
 ## Current state
 
@@ -24,12 +24,36 @@ Remove task-specific Snake artifacts and restore the rule that only a validated
 - **CONFIRMED:** no remote tags or releases exist; draft PR #1 is stale.
 - **CONFIRMED:** draft PR #2 targets `uat`; runtime-tested head `36191d2`
   passed local packaging/smoke and GitHub `CI / verify`.
+- **CONFIRMED:** PR #2 was merged into `uat` as `b215a5e`; all base fixes are
+  being developed on `fix/core-functionality-0.1`.
+- **IMPLEMENTED:** attachment staging/storage/provider-delivery safety,
+  explicit finalization and READY/STREAMING separation, prompt lifecycle,
+  project/settings corrections, and project-scoped CLI V1 controls.
+- **TESTED:** current local gate passes build, Electron typecheck, 42 files / 192
+  tests, 37 security tests, and the 86-file production source guard.
+- **BLOCKED_BY_AUTH:** current-SHA ChatGPT/Gemini text, attachment, response-file,
+  conversation-reopen and orchestration smoke remains manual.
 - **BLOCKED:** GitHub returns HTTP 403 for branch protection and rulesets on the
   current private-repository plan. GitHub Pro is required for enforcement.
 - **PLANNED:** release-only provider UI tests and the 8–12 hour soak profile
   remain outside normal PR CI.
 
+## Local protected integration (2026-08-09)
+
+The only working copy is `C:\Users\onadl\OneDrive\Рабочий стол\G-plus-G`.
+It remains based on `c562ade` and contains only verified, non-authentication
+subsets selected from `337abb0`, plus documentation from `aa0486e`.
+
+The following areas are deliberately frozen and were not imported: provider
+login/session/status handling, project-delete authentication calls, ChatGPT and
+Gemini adapter upload changes, Settings/login UI, destructive migration 9, and
+the expanded destructive project cascade. Automated evidence for the local
+variant is 42 test files / 192 tests plus a successful desktop production build.
+Live provider login and delivery remain manual owner UAT, not an automated PASS.
+
 ## Next step
 
-Review draft PR #2 and execute `docs/UAT_RUNBOOK.md` on a frozen candidate. Do
-not merge until closed provider UAT and release soak pass.
+Build and hash a test artifact from the local protected variant, then let the
+owner run the short manual smoke in `docs/FEATURE_MATRIX.md`. Do not publish or
+merge this variant, change authentication, start the experimental branch, or
+run the full soak before the owner confirms the local provider gate.

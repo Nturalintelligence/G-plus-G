@@ -34,6 +34,7 @@ describe("SQLite project state", () => {
       { version: 5 },
       { version: 6 },
       { version: 7 },
+      { version: 8 },
     ]);
   });
 
@@ -64,13 +65,20 @@ describe("SQLite project state", () => {
     const path = join(directory, "test.sqlite");
     const first = new AppDatabase(path);
     first.migrate();
-    const created = new ProjectRepository(first).createProject("Durable project");
+    const created = new ProjectRepository(first).createProject(
+      "Durable project",
+      undefined,
+      "Persistent description",
+    );
     first.close();
 
     const second = new AppDatabase(path);
     databases.push(second);
     second.migrate();
-    expect(new ProjectRepository(second).openProject(created.id)?.name).toBe("Durable project");
+    expect(new ProjectRepository(second).openProject(created.id)).toMatchObject({
+      name: "Durable project",
+      description: "Persistent description",
+    });
   });
 
   it("makes events append-only at the database boundary", () => {

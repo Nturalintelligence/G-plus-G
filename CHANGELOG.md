@@ -4,6 +4,22 @@ All notable project checkpoints are recorded here.
 
 ## [Unreleased]
 
+### Base functionality stabilization
+
+- Hardened TXT/MD/PDF/PNG/JPEG staging with magic MIME checks, SHA-256 integrity,
+  safe filenames, content dedupe, quarantine, provider capability validation,
+  independent delivery/submission FSMs, and strict authenticated download policy.
+- Made READY mode render only the explicit final answer while STREAMING receives
+  correlated, sanitized progress; final transcript rows now use `providerId=final`.
+- Added bounded prompt lifecycle, provider role/custom prompt support, untrusted
+  peer-data framing, exact consensus markers, fail-fast cancellation and typed outcomes.
+- Completed project-scoped CLI V1 approval/reject/cancel/retry UI and strengthened
+  broker health, timeout, process, filesystem, output and verification boundaries.
+- Corrected settings draft/reset behavior, project description persistence,
+  truthful remote deletion, comprehensive local cleanup and keyboard accessibility.
+- Added factual feature, prompt and known-issue documentation with explicit
+  `BLOCKED_BY_AUTH`, `PARTIAL`, and experimental boundaries.
+
 ### Security and cleanup
 
 - Removed the task-specific Snake slice, duplicate repair assets, empty design

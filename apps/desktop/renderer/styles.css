@@ -1936,3 +1936,75 @@ fieldset label textarea {
   font-weight: 700;
   color: var(--text-primary);
 }
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+.cli-task-panel {
+  margin: 0 16px 12px;
+  padding: 12px;
+  border: 1px solid var(--border-color-card);
+  border-radius: 12px;
+  background: var(--bg-panel);
+}
+
+.cli-task-panel > header small {
+  display: block;
+  margin-top: 4px;
+  color: var(--text-muted);
+}
+
+.cli-task-card {
+  margin-top: 10px;
+  padding: 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--bg-card);
+}
+
+.cli-task-heading,
+.cli-task-actions,
+.cli-task-card dl > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cli-task-heading {
+  justify-content: space-between;
+}
+
+.cli-task-status {
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--bg-selected);
+  color: var(--accent);
+  font-size: 11px;
+}
+
+.cli-task-card dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 12px;
+}
+
+.cli-task-card dt {
+  color: var(--text-muted);
+}
+
+.cli-task-card dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.cli-task-error {
+  color: #ff8e8e;
+}

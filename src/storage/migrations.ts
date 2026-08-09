@@ -398,4 +398,11 @@ export const migrations: readonly Migration[] = [
       CREATE INDEX provider_submissions_msg_idx ON provider_submissions(message_id, provider_id);
     `,
   },
+  {
+    version: 8,
+    name: "project_description",
+    sql: `
+      ALTER TABLE projects ADD COLUMN description TEXT NOT NULL DEFAULT '';
+    `,
+  },
 ];

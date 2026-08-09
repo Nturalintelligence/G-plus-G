@@ -27,7 +27,35 @@ Cleanup SHA: `849f177`. Integration merge SHA: `e4723bf`.
 | Integration 2026-08-08 | `npm run smoke:packaged` at `36191d2` | PASS | Persistence, unsafe-API absence, trusted origin, popup denial, preflight and backup passed. |
 | Integration 2026-08-08 | `git diff --check` and production zero-hit scan | PASS | No forbidden task/personal-path production hits. |
 | GitHub PR #2 | `CI / verify` at `36191d2` | PASS | `npm ci`, guard, check and desktop build completed in Actions run `31222824762`. |
+| Core fix 2026-08-08 | `npm run check` | PASS | Runtime code SHA `337abb01fd0c`; TypeScript, Electron typecheck, 42 files and 192/192 tests. |
+| Core fix 2026-08-08 | focused attachment/orchestration tests | PASS | 8 files, 58/58 tests. |
+| Core fix 2026-08-08 | `npm run test:security` | PASS | 3 files, 37/37 tests. No host CLI was executed. |
+| Core fix 2026-08-08 | `npm run security:guard` | PASS | 86 production source files scanned. |
+| Core fix 2026-08-08 | `git diff --check` and production zero-hit scan | PASS | Only Git line-ending advisories; zero Snake/personal-path/experimental-runtime hits. |
+| Core fix 2026-08-08 | `npm run package` | PASS | NSIS x64 installer embeds runtime commit `337abb01fd0cfd559102becfc93e238bd59e1ced`. |
+| Core fix 2026-08-08 | packaged smoke | PASS | Explicit `G_PLUS_G_SKIP_PROVIDER_STATUS=1`; temporary profile, no provider/network probe. Project/state/settings, trusted origin, unsafe API absence, popup denial, preflight, quality dashboard and backup passed. |
+| Core fix 2026-08-08 | installer SHA-256 | PASS | `FE3E6C74BDB949DBED82054761F81754F52F62F3272094E54E86A1462848B717`, 245,930,241 bytes. |
+| Core fix 2026-08-08 | live ChatGPT/Gemini smoke | BLOCKED_BY_AUTH | Requires user installation and manual login in the two isolated profiles. |
 
-This evidence-update commit changes documentation only. A release candidate is
-not frozen until PR review/UAT selects an exact `uat` SHA and rebuilds it per
-`docs/UAT_RUNBOOK.md`. Do not treat historical claims as evidence for that SHA.
+The packaged test artifact is bound to runtime code SHA `337abb01fd0c`; later
+documentation-only commits do not alter its executable contents. This is not a
+frozen release candidate until the short authenticated provider smoke passes.
+The full release soak remains deferred until feature freeze.
+
+## Local protected integration — 2026-08-09
+
+This local test variant is based on `c562ade` with selected non-authentication
+subsets from `337abb0` and documentation-only content from `aa0486e`.
+
+| Command / check | Result | Boundary |
+|---|---|---|
+| `npm run check` | PASS | Build, desktop typecheck, 42 files and 192/192 tests. |
+| focused attachment suites | PASS | 30/30 tests; local staging, preview and quarantine paths. |
+| `npm run desktop:build` | PASS | Renderer and Electron production build. |
+| auth-block comparison to `c562ade` | PASS | Provider login/status and adapter launch/login/session methods unchanged. |
+| live ChatGPT/Gemini login and delivery | `UNVERIFIED_MANUAL` | Requires owner UAT; no automated claim is made. |
+
+Explicitly excluded and frozen: provider login/session/status handling,
+project-delete authentication calls, ChatGPT/Gemini adapter upload changes,
+Settings/login UI, destructive migration 9, and the expanded destructive
+project cascade. These exclusions are intentional, not missing verification.

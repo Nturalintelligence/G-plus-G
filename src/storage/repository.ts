@@ -18,12 +18,15 @@ type SqlValue = string | number | null;
 export class ProjectRepository {
   constructor(private readonly database: AppDatabase) {}
 
-  createProject(name: string, providers?: string[]): Project {
+  createProject(name: string, providers?: string[], description = ""): Project {
     const cleanName = name.trim();
     if (!cleanName) throw new Error("Project name cannot be empty");
+    const cleanDescription = description.trim();
+    if (cleanDescription.length > 2_000) throw new Error("Project description cannot exceed 2000 characters");
     const project: Project = {
       id: newId("prj"),
       name: cleanName,
+      description: cleanDescription,
       status: "ACTIVE",
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
@@ -32,10 +35,10 @@ export class ProjectRepository {
     this.database.transaction(() => {
       this.database.raw
         .prepare(
-          `INSERT INTO projects(id, name, status, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?)`,
+          `INSERT INTO projects(id, name, description, status, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?)`,
         )
-        .run(project.id, project.name, project.status, project.createdAt, project.updatedAt);
+        .run(project.id, project.name, project.description ?? "", project.status, project.createdAt, project.updatedAt);
       if (providers && providers.length > 0) {
         const stmt = this.database.raw.prepare(
           `INSERT INTO project_providers(project_id, provider_id) VALUES (?, ?)`
@@ -46,6 +49,7 @@ export class ProjectRepository {
       }
       this.appendEventInternal("Project", project.id, "PROJECT_CREATED", {
         name: project.name,
+        description: project.description,
         providers: project.providers,
       });
     });
@@ -55,7 +59,7 @@ export class ProjectRepository {
   listProjects(): Project[] {
     const projects = this.database.raw
       .prepare(
-        `SELECT id, name, status, created_at, updated_at
+        `SELECT id, name, description, status, created_at, updated_at
          FROM projects ORDER BY created_at DESC`,
       )
       .all()
@@ -69,7 +73,7 @@ export class ProjectRepository {
   openProject(id: string): Project | null {
     const row = this.database.raw
       .prepare(
-        `SELECT id, name, status, created_at, updated_at FROM projects WHERE id = ?`,
+        `SELECT id, name, description, status, created_at, updated_at FROM projects WHERE id = ?`,
       )
       .get(id);
     if (!row) return null;
@@ -86,6 +90,7 @@ export class ProjectRepository {
   }
 
   appendConversationEntry(input: {
+    id?: string;
     projectId: string;
     runId?: string | null;
     role: MessageRole;
@@ -94,7 +99,7 @@ export class ProjectRepository {
     content: string;
   }): ConversationEntry {
     const entry: ConversationEntry = {
-      id: newId("entry"),
+      id: input.id ?? newId("entry"),
       projectId: input.projectId,
       runId: input.runId ?? null,
       role: input.role,
@@ -563,6 +568,7 @@ function mapProject(row: Record<string, unknown>): Project {
   return {
     id: String(row.id),
     name: String(row.name),
+    description: row.description === undefined || row.description === null ? "" : String(row.description),
     status: String(row.status) as Project["status"],
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),

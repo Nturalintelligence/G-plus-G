@@ -16,6 +16,7 @@ import { ProjectRequiredToast } from "./components/ProjectRequiredToast.js";
 import { QualityCenterView } from "./components/QualityCenterView.js";
 import { RunSummaryBar } from "./components/RunSummaryBar.js";
 import { SettingsModal } from "./components/SettingsModal.js";
+import { CliTaskPanel, type CliTaskView } from "./components/CliTaskPanel.js";
 import { formatProviderList, getProviderDisplayName, getProviderMetadata } from "./provider-metadata.js";
 import { toUserFacingError, UserFacingError } from "./user-errors.js";
 
@@ -63,13 +64,7 @@ function metricValue(metric: MetricSummaryView): string {
   return metric.average.toFixed(metric.average % 1 === 0 ? 0 : 1);
 }
 
-export interface AttachedFileItem {
-  id: string;
-  name: string;
-  size: number;
-  type: string;
-  dataUrl?: string;
-}
+export type AttachedFileItem = AttachmentRefView & { previewUrl?: string };
 
 const fallbackSettings: AppSettingsView = {
   schemaVersion: 1,
@@ -149,6 +144,9 @@ function App(): React.JSX.Element {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [attachedFiles, setAttachedFiles] = useState<AttachedFileItem[]>([]);
+  const [draftMessageId, setDraftMessageId] = useState(
+    () => `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+  );
   const [viewMode, setViewMode] = useState<"SYNTHESIZED" | "LIVE">("SYNTHESIZED");
   const [showTurnsSpoiler, setShowTurnsSpoiler] = useState(false);
   const [finalizerMode, setFinalizerMode] = useState<"MANUAL" | "LEAD_SELECTS" | "PEER_AGREEMENT">("MANUAL");
@@ -161,7 +159,31 @@ function App(): React.JSX.Element {
   const [previewImageModalUrl, setPreviewImageModalUrl] = useState<string | null>(null);
   const [webChatsDrawerOpen, setWebChatsDrawerOpen] = useState(false);
   const [finalResponder, setFinalResponder] = useState<string>("auto");
+  const [cliTasks, setCliTasks] = useState<CliTaskView[]>([]);
+  const [busyCliTaskId, setBusyCliTaskId] = useState<string | null>(null);
   const outputRef = useRef<HTMLElement>(null);
+
+  async function addAttachmentRefs(refs: AttachmentRefView[]): Promise<void> {
+    const accepted: AttachedFileItem[] = [];
+    const rejected: AttachmentRefView[] = [];
+    for (const ref of refs) {
+      if (ref.status === "QUARANTINED" || ref.status === "FAILED") {
+        rejected.push(ref);
+        continue;
+      }
+      const previewUrl = ref.kind === "image"
+        ? await window.orchestrator.attachments.getPreviewUrl(ref.id)
+        : null;
+      accepted.push({ ...ref, ...(previewUrl ? { previewUrl } : {}) });
+    }
+    if (accepted.length > 0) {
+      setAttachedFiles((previous) => [...previous, ...accepted]);
+      setStatus(`Прикреплено файлов: ${accepted.length}`);
+    }
+    if (rejected.length > 0) {
+      setStatus(`Отклонено вложений: ${rejected.map((item) => item.fileName).join(", ")}`);
+    }
+  }
 
   async function handlePickFiles() {
     if (!current) {
@@ -169,11 +191,8 @@ function App(): React.JSX.Element {
       return;
     }
     try {
-      const refs = await window.orchestrator.attachments.pickFiles(current.project.id, `msg_${Date.now()}`);
-      if (refs && refs.length > 0) {
-        setAttachedFiles((prev: any[]) => [...prev, ...refs]);
-        setStatus(`Прикреплено файлов: ${refs.length}`);
-      }
+      const refs = await window.orchestrator.attachments.pickFiles(current.project.id, draftMessageId);
+      await addAttachmentRefs(refs);
     } catch (err: any) {
       setStatus(`Ошибка выбора файла: ${err.message}`);
     }
@@ -183,24 +202,20 @@ function App(): React.JSX.Element {
     e.preventDefault();
     if (!current || !e.dataTransfer.files.length) return;
     const projectId = current.project.id;
-    const messageId = `msg_${Date.now()}`;
+    const messageId = draftMessageId;
     const newRefs: AttachmentRefView[] = [];
 
     for (const file of Array.from(e.dataTransfer.files)) {
       try {
-        const filePath = window.orchestrator.getPathForFile(file);
-        if (filePath) {
-          const ref = await window.orchestrator.attachments.stageDroppedFile(projectId, messageId, filePath);
-          newRefs.push(ref);
-        }
+        const ref = await window.orchestrator.attachments.stageDroppedFile(projectId, messageId, file);
+        newRefs.push(ref);
       } catch (err: any) {
         setStatus(`Ошибка прикрепления файла: ${err.message}`);
       }
     }
 
     if (newRefs.length > 0) {
-      setAttachedFiles((prev: any[]) => [...prev, ...newRefs]);
-      setStatus(`Прикреплено файлов перетаскиванием: ${newRefs.length}`);
+      await addAttachmentRefs(newRefs);
     }
   }
 
@@ -231,11 +246,10 @@ function App(): React.JSX.Element {
             try {
               const ref = await window.orchestrator.attachments.stageClipboardImage(
                 current.project.id,
-                `msg_${Date.now()}`,
+                draftMessageId,
                 base64Data
               );
-              setAttachedFiles((prev: any[]) => [...prev, ref]);
-              setStatus("Вставлено изображение из буфера обмена (Ctrl+V)");
+              await addAttachmentRefs([ref]);
             } catch (err: any) {
               setStatus(`Ошибка вставки из буфера: ${err.message}`);
             }
@@ -316,6 +330,19 @@ function App(): React.JSX.Element {
     const timer = setTimeout(() => setShowSplash(false), 2500);
     return () => clearTimeout(timer);
   }, []);
+  const hasActiveCliTask = cliTasks.some((item) =>
+    ["QUEUED", "RUNNING", "VERIFYING"].includes(item.status),
+  );
+  useEffect(() => {
+    const projectId = current?.project.id;
+    if (!projectId || !hasActiveCliTask) return;
+    const timer = window.setInterval(() => {
+      void refreshCliTasks(projectId).catch((error) => {
+        setStatus(`Не удалось обновить CLI-задачи: ${error instanceof Error ? error.message : String(error)}`);
+      });
+    }, 1_000);
+    return () => window.clearInterval(timer);
+  }, [current?.project.id, hasActiveCliTask]);
   useEffect(() => {
     void window.orchestrator.settings.get().then((value) => {
       setSettings(value);
@@ -349,8 +376,14 @@ function App(): React.JSX.Element {
   }, [settingsOpen]);
 
   async function openProject(id: string): Promise<void> {
-    const details = await window.orchestrator.projects.open(id);
+    const [details, tasks] = await Promise.all([
+      window.orchestrator.projects.open(id),
+      window.orchestrator.cliTasks.list(id),
+    ]);
     setCurrent(details);
+    setCliTasks(tasks);
+    setAttachedFiles([]);
+    setDraftMessageId(`msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`);
     const nextState = details.state?.state ?? structuredClone(initialState);
     setProjectState(nextState);
     setStateText(JSON.stringify(nextState, null, 2));
@@ -385,9 +418,12 @@ function App(): React.JSX.Element {
         limits: settings.defaults.limits,
         finalizerMode,
         finalResponder,
+        userMessageId: draftMessageId,
         attachments: attachedFiles,
+        promptCustomizations: settings.models,
       });
       setAttachedFiles([]);
+      setDraftMessageId(`msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`);
       setStatus(
         output.consensusReached
           ? "Модели независимо подтвердили согласованное решение"
@@ -434,6 +470,67 @@ function App(): React.JSX.Element {
       setStatus("Настройки сохранены");
     } catch (error) {
       setStatus(`Настройки не сохранены: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  async function refreshCliTasks(projectId = current?.project.id): Promise<void> {
+    if (!projectId) {
+      setCliTasks([]);
+      return;
+    }
+    setCliTasks(await window.orchestrator.cliTasks.list(projectId));
+  }
+
+  async function approveCliTask(taskRecord: CliTaskView): Promise<void> {
+    const approved = window.confirm(
+      `Запустить локальный CLI executor '${taskRecord.executor}'?\n\n${taskRecord.title}\nRisk: ${taskRecord.risk}\n\n` +
+      "CLI работает как текущий пользователь Windows. Подтверждайте только полностью понятные задачи и пути.",
+    );
+    if (!approved) return;
+    setBusyCliTaskId(taskRecord.taskId);
+    try {
+      await window.orchestrator.cliTasks.approve(taskRecord.projectId, taskRecord.taskId);
+      setStatus(`CLI-задача ${taskRecord.taskId} поставлена в очередь`);
+    } catch (error) {
+      setStatus(`CLI-задача не одобрена: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setBusyCliTaskId(null);
+      await refreshCliTasks(taskRecord.projectId);
+    }
+  }
+
+  async function rejectCliTask(taskRecord: CliTaskView): Promise<void> {
+    const reason = window.prompt("Причина отклонения CLI-задачи:", "Отклонено пользователем");
+    if (reason === null) return;
+    setBusyCliTaskId(taskRecord.taskId);
+    try {
+      await window.orchestrator.cliTasks.reject(taskRecord.projectId, taskRecord.taskId, reason);
+      setStatus(`CLI-задача ${taskRecord.taskId} отклонена`);
+    } finally {
+      setBusyCliTaskId(null);
+      await refreshCliTasks(taskRecord.projectId);
+    }
+  }
+
+  async function cancelCliTask(taskRecord: CliTaskView): Promise<void> {
+    setBusyCliTaskId(taskRecord.taskId);
+    try {
+      await window.orchestrator.cliTasks.cancel(taskRecord.projectId, taskRecord.taskId);
+      setStatus(`Остановка CLI-задачи ${taskRecord.taskId} запрошена`);
+    } finally {
+      setBusyCliTaskId(null);
+      await refreshCliTasks(taskRecord.projectId);
+    }
+  }
+
+  async function retryCliTask(taskRecord: CliTaskView): Promise<void> {
+    setBusyCliTaskId(taskRecord.taskId);
+    try {
+      await window.orchestrator.cliTasks.retry(taskRecord.projectId, taskRecord.taskId);
+      setStatus(`CLI-задача ${taskRecord.taskId} ожидает нового подтверждения`);
+    } finally {
+      setBusyCliTaskId(null);
+      await refreshCliTasks(taskRecord.projectId);
     }
   }
 
@@ -607,6 +704,10 @@ function App(): React.JSX.Element {
     );
   }
 
+  const assistantTranscript = (current?.transcript ?? []).filter((entry) => entry.role === "ASSISTANT");
+  const explicitFinalEntry = assistantTranscript.slice().reverse().find((entry) => entry.providerId === "final");
+  const synthesizedFinalEntry = explicitFinalEntry ?? assistantTranscript[assistantTranscript.length - 1];
+
   return (
     <main>
       <header>
@@ -749,6 +850,14 @@ function App(): React.JSX.Element {
               ))}
             </div>
           ) : null}
+          <CliTaskPanel
+            tasks={cliTasks}
+            busyTaskId={busyCliTaskId}
+            onApprove={approveCliTask}
+            onReject={rejectCliTask}
+            onCancel={cancelCliTask}
+            onRetry={retryCliTask}
+          />
           <article className="panel output" ref={outputRef}>
             {current?.transcript.length || optimisticUserTask || Object.values(streaming).some(t => t.trim()) ? (
               <>
@@ -759,7 +868,7 @@ function App(): React.JSX.Element {
                         🔍 {showTurnsSpoiler ? "Скрыть ход обсуждения ИИ-моделей" : "Показать ход обсуждения ИИ-моделей"} ({(current?.transcript || []).filter(t => t.role === "ASSISTANT").length} ходов)
                       </summary>
                       <div className="turns-spoiler-content">
-                        {(current?.transcript || []).filter(t => t.role === "ASSISTANT").map((entry) => (
+                        {assistantTranscript.filter((entry) => entry.id !== explicitFinalEntry?.id).map((entry) => (
                           <section className={`message assistant ${entry.providerId ?? ""}`} key={`spoiler-${entry.id}`}>
                             <header>
                               <strong>{entry.providerId ?? "ASSISTANT"}</strong>
@@ -770,7 +879,7 @@ function App(): React.JSX.Element {
                         ))}
                       </div>
                     </details>
-                    {(current?.transcript || []).filter(t => t.role === "USER" || t.providerId === "system" || (t.role === "ASSISTANT" && current?.transcript && t.id === current.transcript[current.transcript.length - 1]?.id)).map((entry) => (
+                    {(current?.transcript || []).filter(t => t.role === "USER" || t.providerId === "system" || t.id === synthesizedFinalEntry?.id).map((entry) => (
                       <section className={`message ${entry.role.toLowerCase()} ${entry.providerId ?? ""}`} key={entry.id}>
                         <header>
                           <strong>{entry.role === "USER" ? "Вы" : entry.providerId === "system" ? "Системный отчёт" : `Итоговый ответ (${entry.providerId})`}</strong>
@@ -818,7 +927,7 @@ function App(): React.JSX.Element {
                     </div>
                   </div>
                 ) : null}
-                {Object.entries(streaming).map(([providerId, text]) => {
+                {viewMode === "LIVE" ? Object.entries(streaming).map(([providerId, text]) => {
                   if (!text.trim()) return null;
                   const alreadyPersisted = current?.transcript.some(
                     t => t.role === "ASSISTANT" && t.providerId === providerId && t.content.slice(-20) === text.slice(-20)
@@ -833,7 +942,7 @@ function App(): React.JSX.Element {
                       <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml>{text}</ReactMarkdown>
                     </section>
                   );
-                })}
+                }) : null}
               </>
             ) : (
               <p className="empty">Напишите ваш первый запрос, чтобы запустить обсуждение ИИ-моделей.</p>
@@ -916,12 +1025,12 @@ function App(): React.JSX.Element {
               <div className="attached-files-row">
                 {attachedFiles.map((f) => (
                   <span key={f.id} className="attached-file-tag">
-                    {f.dataUrl ? (
+                    {f.previewUrl ? (
                       <img
-                        src={f.dataUrl}
-                        alt={f.name}
+                        src={f.previewUrl}
+                        alt={f.fileName}
                         className="attached-file-preview interactive"
-                        onClick={() => setPreviewImageModalUrl(f.dataUrl!)}
+                        onClick={() => setPreviewImageModalUrl(f.previewUrl!)}
                         title="Нажмите для полноэкранного просмотра"
                       />
                     ) : (
@@ -930,8 +1039,8 @@ function App(): React.JSX.Element {
                         <polyline points="13 2 13 9 20 9" />
                       </svg>
                     )}{" "}
-                    <span className="attached-file-name">{f.name}</span>
-                    <button onClick={() => removeFile(f.id)}>×</button>
+                    <span className="attached-file-name">{f.fileName}</span>
+                    <button aria-label={`Удалить вложение ${f.fileName}`} onClick={() => removeFile(f.id)}>×</button>
                   </span>
                 ))}
               </div>
@@ -1176,7 +1285,7 @@ function App(): React.JSX.Element {
                   onKeyDown={(e) => {
                     if (e.key === "Enter" && newProjectNameInput.trim()) {
                       e.preventDefault();
-                      void window.orchestrator.projects.create(newProjectNameInput.trim(), creationProviders).then(async (project) => {
+                      void window.orchestrator.projects.create(newProjectNameInput.trim(), creationProviders, newProjectDescriptionInput).then(async (project) => {
                         setNewProjectNameInput("");
                         setNewProjectDescriptionInput("");
                         setNewProjectModalOpen(false);
@@ -1223,8 +1332,9 @@ function App(): React.JSX.Element {
                 className="btn btn-primary"
                 disabled={!newProjectNameInput.trim()}
                 onClick={() => {
-                  void window.orchestrator.projects.create(newProjectNameInput.trim(), creationProviders).then(async (project) => {
+                  void window.orchestrator.projects.create(newProjectNameInput.trim(), creationProviders, newProjectDescriptionInput).then(async (project) => {
                     setNewProjectNameInput("");
+                    setNewProjectDescriptionInput("");
                     setNewProjectModalOpen(false);
                     await refresh();
                     await openProject(project.id);
