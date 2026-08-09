@@ -16,7 +16,6 @@ import type { AttachmentRefV1 } from "./attachments/attachments.js";
 import { TurnChannel } from "./adapters/turn-channel.js";
 import { ProfileLock } from "./browser/profile-lock.js";
 import { bundledChromiumExecutable } from "./browser/runtime.js";
-import { loginInSystemChrome } from "./browser/system-browser-login.js";
 import {
   AmbiguousElementError,
   ChallengeRequiredError,
@@ -31,10 +30,7 @@ import { newId } from "./ids.js";
 import { dataPath } from "./paths.js";
 import { inferSessionState } from "./adapters/session-inference.js";
 import { inferChallengePage } from "./adapters/challenge-inference.js";
-import {
-  canFinalizeManualLogin,
-  hasPendingExternalLoginPage,
-} from "./adapters/manual-login.js";
+import { hasPendingExternalLoginPage } from "./adapters/manual-login.js";
 import type {
   DiagnosticReport,
   ResponseSnapshot,
@@ -124,15 +120,16 @@ export class GeminiAdapter implements ModelAdapter {
       }
     }
     const composers = (await this.visibleComposers()).length;
-    const userMenu = await this.hasUserMenu();
-    const challenge = userMenu ? false : await this.hasChallenge();
+    const hasAccountSession =
+      await this.hasUserMenu() || await this.hasGoogleAccountSession();
+    const challenge = hasAccountSession ? false : await this.hasChallenge();
     return inferSessionState(
       "gemini",
       body,
       composers,
       visibleLoginControls,
       {
-        hasUserMenu: userMenu,
+        hasUserMenu: hasAccountSession,
         hasChallenge: challenge,
         url: page.url(),
       },
@@ -140,30 +137,31 @@ export class GeminiAdapter implements ModelAdapter {
   }
 
   async openLoginMode(): Promise<void> {
-    const page = await this.ensurePage(false);
-    await page.goto(GEMINI_URL, { waitUntil: "domcontentloaded" });
+    await this.ensurePage(false);
     const deadline = Date.now() + 10 * 60_000;
     let consecutiveAuthCount = 0;
     while (Date.now() < deadline) {
-      if (page.isClosed()) {
+      const openPages = this.context?.pages().filter((candidate) => !candidate.isClosed()) ?? [];
+      if (openPages.length === 0) {
         throw new LoginCancelledError("Пользователь закрыл окно Gemini до завершения входа");
       }
-      const state = await this.checkSession().catch(() => "UNKNOWN" as SessionState);
-      const openPageUrls = this.context?.pages()
-        .filter((candidate) => !candidate.isClosed())
-        .map((candidate) => candidate.url()) ?? [];
-      const canFinalize = canFinalizeManualLogin({
-        session: state,
-        hasExplicitAccountControl: await this.hasUserMenu().catch(() => false),
-        hasPendingExternalPage: hasPendingExternalLoginPage("gemini", openPageUrls),
-      });
-      if (canFinalize) {
+
+      const hasExplicitAccountControl =
+        await this.hasUserMenu().catch(() => false) ||
+        await this.hasGoogleAccountSession();
+      const hasPendingExternalPage = hasPendingExternalLoginPage(
+        "gemini",
+        openPages.map((candidate) => candidate.url()),
+      );
+      if (hasExplicitAccountControl && !hasPendingExternalPage) {
         consecutiveAuthCount += 1;
-        if (consecutiveAuthCount >= 4) return;
+        if (consecutiveAuthCount >= 2) return;
       } else {
         consecutiveAuthCount = 0;
       }
-      await page.waitForTimeout(500).catch(() => undefined);
+
+      const activePage = await this.ensurePage(false);
+      await activePage.waitForTimeout(2_000).catch(() => undefined);
     }
     throw new LoginTimeoutError("Время ожидания входа в Gemini истекло");
   }
@@ -641,6 +639,22 @@ export class GeminiAdapter implements ModelAdapter {
       }
     }
     return false;
+  }
+
+  private async hasGoogleAccountSession(): Promise<boolean> {
+    if (!this.context) return false;
+    const cookies = await this.context
+      .cookies([GEMINI_URL])
+      .catch(() => []);
+    const authenticatedCookieNames = new Set([
+      "SID",
+      "SAPISID",
+      "__Secure-1PSID",
+      "__Secure-3PSID",
+    ]);
+    return cookies.some(
+      (cookie) => authenticatedCookieNames.has(cookie.name) && cookie.value.length > 0,
+    );
   }
 
   private async launchAutomatedBrowser(): Promise<void> {

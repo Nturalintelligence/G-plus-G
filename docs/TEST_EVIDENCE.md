@@ -57,7 +57,8 @@ subsets from `337abb0` and documentation-only content from `aa0486e`.
 | `npm run package` | PASS | Windows NSIS artifact embeds runtime commit `54a03e7f586a8c57ce11e32537624868c1e3d97d`. |
 | `npm run smoke:packaged` | PASS | First window, project/state/settings persistence, preflight, trusted origin, popup denial and backup; no provider calls. |
 | installer SHA-256 | PASS | `C57C4A0EBE276471AB3DA33822CC161ED91D8A43ABF4786F6649FB771EA0683F`, 245,931,415 bytes. |
-| live ChatGPT/Gemini login and delivery | `UNVERIFIED_MANUAL` | Requires owner UAT; no automated claim is made. |
+| live ChatGPT/Gemini login | `VERIFIED_USER` | Владелец подтвердил текущую авторизацию 2026-08-10. |
+| live ChatGPT/Gemini message and attachment delivery | `UNVERIFIED_MANUAL` | Подтверждение входа не доказывает отправку сообщений или файлов. |
 
 Explicitly excluded and frozen: provider login/session/status handling,
 project-delete authentication calls, ChatGPT/Gemini adapter upload changes,
@@ -73,9 +74,8 @@ ChatGPT OAuth-window closure was reproduced by the owner.
 |---|---|---|
 | auth-focused Vitest | PASS | 4 files / 20 tests: anonymous composer, pending OAuth page, explicit account control and no-auto-probe wiring. |
 | `npm run check` | PASS | Build, desktop typecheck, 44 files and 197/197 tests. |
-| ChatGPT live login | `PENDING_OWNER_UAT` | No automated PASS is claimed. |
-| Gemini live login | `NOT_RUN` | Deliberately avoided because of CAPTCHA/traffic-block risk. |
+| ChatGPT/Gemini live login | `VERIFIED_USER` | Владелец подтвердил 2026-08-10: «сейчас авторизация работает». |
 
-The code now requires explicit account UI before closing the manual-login
-browser, refuses to send through an anonymous composer, and performs no provider
-status request on application startup or immediately after login/reset.
+Текущий сценарий ручного входа подтверждён владельцем. Это evidence относится
+только к авторизации; message delivery, attachments и restart probe им не
+подтверждены.

@@ -57,20 +57,18 @@ both pass; see `docs/TEST_EVIDENCE.md` for the artifact hash.
 
 ## Owner-authorized login correction (2026-08-09)
 
-After the owner reproduced premature ChatGPT OAuth-window closure, the login
-freeze received an explicit narrow exception. Root cause: an anonymous composer
-was accepted as authentication whenever the visible login control temporarily
-disappeared. Completion now requires a stable explicit account control and no
-open external OAuth page. Message readiness can no longer bypass that check.
+After the owner reproduced premature OAuth-window closure, the login freeze
+received an explicit narrow exception. The confirmed observations were an early
+window close and an incorrect authenticated result; the exact transient DOM
+sequence was not proven and must not be presented as a confirmed root cause.
 
 Passive provider probes at application startup and after login/reset were also
-removed. Gemini received the same code-level protection but was intentionally
-not opened because of the active CAPTCHA/traffic-block risk. Automated gate:
-44 test files / 197 tests. Status remains `PENDING_OWNER_CHATGPT_UAT` and
-`GEMINI_NOT_LIVE_TESTED`.
+removed. On 2026-08-10 the owner confirmed that authorization currently works.
+Status: `VERIFIED_USER`, `FROZEN`. This does not verify provider messaging,
+attachments, response files or restart probing.
 
 ## Next step
 
-Build the owner-authorized auth-fix artifact, then let the owner test ChatGPT
-login first. Do not open Gemini, publish/merge the public variant, start the
-experimental branch, or run the full soak before ChatGPT UAT succeeds.
+Do not change authorization again without a new reproducible defect and direct
+owner command. Continue the remaining base fixes as isolated local checkpoints;
+do not start the experimental runtime or full soak.
