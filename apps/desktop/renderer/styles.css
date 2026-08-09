@@ -593,6 +593,117 @@ h2 {
   color: var(--text-muted);
 }
 
+.message > p,
+.message > ul,
+.message > ol,
+.message > blockquote,
+.message > pre,
+.message > table {
+  margin: 0 0 12px;
+}
+
+.message > :last-child {
+  margin-bottom: 0;
+}
+
+.message h1,
+.message h2,
+.message h3,
+.message h4 {
+  margin: 20px 0 10px;
+  color: var(--text-primary);
+  font-family: 'Outfit', sans-serif;
+  font-weight: 700;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.message h1 { font-size: 20px; }
+.message h2 { font-size: 17px; }
+.message h3 { font-size: 15px; }
+.message h4 { font-size: 14px; }
+
+.message p,
+.message li {
+  line-height: 1.65;
+}
+
+.message ul,
+.message ol {
+  padding-left: 24px;
+}
+
+.message li + li {
+  margin-top: 5px;
+}
+
+.message blockquote {
+  padding: 8px 14px;
+  border-left: 3px solid var(--accent);
+  border-radius: 0 8px 8px 0;
+  background: var(--bg-input);
+  color: var(--text-secondary);
+}
+
+.message code {
+  padding: 2px 6px;
+  border: 1px solid var(--border-color-card);
+  border-radius: 6px;
+  background: var(--bg-input);
+  font-family: Consolas, 'Cascadia Code', monospace;
+  font-size: 0.9em;
+}
+
+.message pre {
+  max-width: 100%;
+  overflow-x: auto;
+  padding: 14px 16px;
+  border: 1px solid var(--border-color-card);
+  border-radius: 10px;
+  background: #0b0b0d;
+  color: #e4e4e7;
+}
+
+.message pre code {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  white-space: pre;
+}
+
+.message table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+}
+
+.message th,
+.message td {
+  padding: 8px 10px;
+  border: 1px solid var(--border-color-card);
+  text-align: left;
+  vertical-align: top;
+}
+
+.message th {
+  background: var(--bg-input);
+  font-weight: 700;
+}
+
+.message a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.message hr {
+  margin: 18px 0;
+  border: 0;
+  border-top: 1px solid var(--border-color);
+}
+
 /* Big Tech Composer Panel */
 .composer-bottom {
   flex-shrink: 0;
