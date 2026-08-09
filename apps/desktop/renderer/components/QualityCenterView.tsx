@@ -1,10 +1,11 @@
 import React, { useState } from "react";
 import { getProviderDisplayName } from "../provider-metadata.js";
 import { formatDuration } from "../utils/formatters.js";
+import { buildQualityViewModel, type QualityDashboardData } from "../quality-view-model.js";
 import { ActivityIcon, ChevronDownIcon, ChevronUpIcon, ProviderLogoIcon, RefreshIcon } from "./Icon.js";
 
 export interface QualityCenterViewProps {
-  dashboardData: any;
+  dashboardData: QualityDashboardData | null;
   onRefresh?: () => void;
   isLoading?: boolean;
 }
@@ -29,7 +30,7 @@ export function QualityCenterView({
     );
   }
 
-  if (!dashboardData || !dashboardData.providers || Object.keys(dashboardData.providers).length === 0) {
+  if (!dashboardData || dashboardData.totalSamples === 0) {
     return (
       <div className="quality-center-empty">
         <ActivityIcon size={24} />
@@ -43,6 +44,8 @@ export function QualityCenterView({
       </div>
     );
   }
+
+  const view = buildQualityViewModel(dashboardData);
 
   return (
     <div className="quality-center-container">
@@ -59,11 +62,28 @@ export function QualityCenterView({
         )}
       </header>
 
+      <div className="quality-summary-grid">
+        <div className="kpi-card">
+          <span className="kpi-label">Всего запусков</span>
+          <strong className="kpi-value">{view.totalRuns}</strong>
+        </div>
+        <div className="kpi-card">
+          <span className="kpi-label">Успешные запуски</span>
+          <strong className="kpi-value text-success">{view.successfulRuns}</strong>
+        </div>
+        <div className="kpi-card">
+          <span className="kpi-label">Средняя длительность</span>
+          <strong className="kpi-value">
+            {view.avgRunDurationMs == null ? "—" : formatDuration(view.avgRunDurationMs)}
+          </strong>
+        </div>
+      </div>
+
       <div className="quality-models-grid">
-        {Object.entries(dashboardData.providers).map(([pId, stats]: [string, any]) => {
+        {Object.entries(view.providers).map(([pId, stats]) => {
           const displayName = getProviderDisplayName(pId);
           const isExpanded = !!expandedModels[pId];
-          const successRate = stats.successRate != null ? `${Math.round(stats.successRate * 100)}%` : "100%";
+          const successRate = stats.successRate != null ? `${Math.round(stats.successRate * 100)}%` : "—";
 
           return (
             <div key={pId} className="quality-model-card">
@@ -108,14 +128,6 @@ export function QualityCenterView({
                   <div className="detail-row">
                     <span>Измерений:</span>
                     <strong>{stats.sampleCount || stats.totalTurns || 0}</strong>
-                  </div>
-                  <div className="detail-row">
-                    <span>Медиана (P50):</span>
-                    <strong>{formatDuration(stats.p50Ms || stats.avgDurationMs || 0)}</strong>
-                  </div>
-                  <div className="detail-row">
-                    <span>Перцентиль (P95):</span>
-                    <strong>{formatDuration(stats.p95Ms || (stats.avgDurationMs || 0) * 1.5)}</strong>
                   </div>
                   <div className="detail-row">
                     <span>Минимум / Максимум:</span>

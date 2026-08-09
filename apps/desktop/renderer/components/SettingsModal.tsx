@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { getProviderDisplayName, PROVIDER_METADATA_MAP } from "../provider-metadata.js";
 import { ChevronDownIcon, ChevronUpIcon, CloseIcon, ProfileIcon, ProviderLogoIcon, RefreshIcon, SettingsIcon, TrashIcon } from "./Icon.js";
+import { QualityCenterView } from "./QualityCenterView.js";
 
 export interface SettingsModalProps {
   isOpen: boolean;
@@ -11,6 +12,7 @@ export interface SettingsModalProps {
   login: (provider: string) => Promise<void>;
   resetSession: (provider: string) => Promise<void>;
   qualityDashboard: any;
+  refreshQuality: () => Promise<void>;
   preflight: any[];
   runPreflight: () => void;
   maintenanceBusy: boolean;
@@ -27,6 +29,7 @@ export function SettingsModal({
   login,
   resetSession,
   qualityDashboard,
+  refreshQuality,
   preflight,
   runPreflight,
   maintenanceBusy,
@@ -370,24 +373,10 @@ export function SettingsModal({
               <section className="settings-section">
                 <h2>Центр качества ИИ-провайдеров</h2>
                 <p className="section-description">Статистика выполнения ходов и успешности браузерных сессий.</p>
-                {qualityDashboard ? (
-                  <div className="quality-summary-grid">
-                    <div className="kpi-card">
-                      <span className="kpi-label">Всего запусков</span>
-                      <strong className="kpi-value">{qualityDashboard.totalRuns || 0}</strong>
-                    </div>
-                    <div className="kpi-card">
-                      <span className="kpi-label">Успешные раунды</span>
-                      <strong className="kpi-value text-success">{qualityDashboard.successfulRuns || 0}</strong>
-                    </div>
-                    <div className="kpi-card">
-                      <span className="kpi-label">Средняя длительность</span>
-                      <strong className="kpi-value">{qualityDashboard.avgDuration || "—"}</strong>
-                    </div>
-                  </div>
-                ) : (
-                  <p className="text-muted">Данные центров качества загружаются…</p>
-                )}
+                <QualityCenterView
+                  dashboardData={qualityDashboard}
+                  onRefresh={() => void refreshQuality()}
+                />
               </section>
             )}
 

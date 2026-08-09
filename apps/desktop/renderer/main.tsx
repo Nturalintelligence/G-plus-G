@@ -13,7 +13,6 @@ import { ErrorModal } from "./components/ErrorModal.js";
 import { AttachmentIcon, CloseIcon, ProfileIcon, SendIcon, SettingsIcon, StopIcon, TargetIcon, TrashIcon } from "./components/Icon.js";
 import { ModelStatusRow } from "./components/ModelStatusRow.js";
 import { ProjectRequiredToast } from "./components/ProjectRequiredToast.js";
-import { QualityCenterView } from "./components/QualityCenterView.js";
 import { RunSummaryBar } from "./components/RunSummaryBar.js";
 import { SettingsModal } from "./components/SettingsModal.js";
 import { CliTaskPanel, type CliTaskView } from "./components/CliTaskPanel.js";
@@ -1136,6 +1135,7 @@ function App(): React.JSX.Element {
         login={login}
         resetSession={resetSession}
         qualityDashboard={qualityDashboard}
+        refreshQuality={loadQualityDashboard}
         preflight={preflight}
         runPreflight={refreshDiagnostics}
         maintenanceBusy={maintenanceBusy}
