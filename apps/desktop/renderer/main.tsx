@@ -18,6 +18,7 @@ import { RunSummaryBar } from "./components/RunSummaryBar.js";
 import { SettingsModal } from "./components/SettingsModal.js";
 import { CliTaskPanel, type CliTaskView } from "./components/CliTaskPanel.js";
 import { formatProviderList, getProviderDisplayName, getProviderMetadata } from "./provider-metadata.js";
+import { selectReadyAnswerEntries } from "./ready-answer.js";
 import { toUserFacingError, UserFacingError } from "./user-errors.js";
 
 const initialState: ProjectStateView = {
@@ -698,8 +699,10 @@ function App(): React.JSX.Element {
   }
 
   const assistantTranscript = (current?.transcript ?? []).filter((entry) => entry.role === "ASSISTANT");
-  const explicitFinalEntry = assistantTranscript.slice().reverse().find((entry) => entry.providerId === "final");
-  const synthesizedFinalEntry = explicitFinalEntry ?? assistantTranscript[assistantTranscript.length - 1];
+  const {
+    finalEntry: explicitFinalEntry,
+    visibleEntries: readyAnswerEntries,
+  } = selectReadyAnswerEntries(current?.transcript ?? []);
 
   return (
     <main>
@@ -872,7 +875,7 @@ function App(): React.JSX.Element {
                         ))}
                       </div>
                     </details>
-                    {(current?.transcript || []).filter(t => t.role === "USER" || t.providerId === "system" || t.id === synthesizedFinalEntry?.id).map((entry) => (
+                    {readyAnswerEntries.map((entry) => (
                       <section className={`message ${entry.role.toLowerCase()} ${entry.providerId ?? ""}`} key={entry.id}>
                         <header>
                           <strong>{entry.role === "USER" ? "Вы" : entry.providerId === "system" ? "Системный отчёт" : `Итоговый ответ (${entry.providerId})`}</strong>
