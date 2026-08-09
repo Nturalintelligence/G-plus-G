@@ -1,6 +1,7 @@
 import { extractCliTasksV1, BLOCK_START, BLOCK_END, CliTaskEnvelopeV1, ParseTaskResult } from "../cli-executors/cli-task-schema.js";
 import { TaskFsmRepository, CliTaskRecord, CliTaskState } from "../storage/task-fsm-repository.js";
 import { ExecutionResultV1 } from "../cli-executors/execution-broker.js";
+import { replaceExecutionEnvelopesWithNotice } from "../execution/execution-recognition.js";
 
 export interface TaskCompilerOptions {
   workspaceRoot: string;
@@ -60,7 +61,7 @@ export class TaskCompiler {
       startIndex = startPos + badge.length + 2;
     }
 
-    return cleanText.trim();
+    return replaceExecutionEnvelopesWithNotice(cleanText);
   }
 
   /**
