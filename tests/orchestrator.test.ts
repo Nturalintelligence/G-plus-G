@@ -301,8 +301,8 @@ describe("Orchestrator", () => {
     });
     expect(result.consensusReached).toBe(true);
     expect(result.outcome).toBe("CONSENSUS_REACHED");
-    expect(result.responses).toHaveLength(4);
-    expect(result.responses.slice(1, -1).every((response) => response.agreed)).toBe(true);
+    expect(result.responses).toHaveLength(3);
+    expect(result.responses.slice(0, -1).every((response) => response.agreed)).toBe(true);
     expect(result.responses.at(-1)).toMatchObject({ providerId: "final", phase: "FINALIZE" });
     expect(result.responses.every((response) => !response.text.includes("G_PLUS_G_DONE")))
       .toBe(true);
@@ -335,6 +335,50 @@ describe("Orchestrator", () => {
     expect(result.outcome).toBe("LIMIT_REACHED");
     expect(result.responses.filter((response) => response.phase === "DISCUSSION"))
       .toHaveLength(2);
+  });
+
+  it("finalizes 'оба тут?' after one substantive response from each provider", async () => {
+    const { database, projectId } = setup();
+    const makePresenceAdapter = (providerId: string): ModelAdapter => {
+      const prompts = new Map<string, string>();
+      let turnNumber = 0;
+      return {
+        ...fakeAdapter(providerId, []),
+        async sendMessage(input: MessageInput) {
+          turnNumber += 1;
+          const turn = { id: `${providerId}-presence-${turnNumber}` };
+          prompts.set(turn.id, input.content);
+          return turn;
+        },
+        async getFinalResponse(turn: TurnRef) {
+          const prompt = prompts.get(turn.id)!;
+          if (prompt.includes("FINALIZE PHASE")) {
+            const response = "Да, ChatGPT и Gemini доступны.";
+            return { response, responseFingerprint: response, elapsedMs: 1 };
+          }
+          const token = prompt.match(/\[\[G_PLUS_G_DONE:[^\]]+\]\]/)?.[0];
+          const response = `Да, ${providerId} здесь.${token ? `\n${token}` : ""}`;
+          return { response, responseFingerprint: response, elapsedMs: 1 };
+        },
+      } as ModelAdapter;
+    };
+
+    const result = await new Orchestrator(
+      database,
+      new Map([
+        ["chatgpt", makePresenceAdapter("ChatGPT")],
+        ["gemini", makePresenceAdapter("Gemini")],
+      ]),
+    ).run(projectId, "DEBATE", "оба тут?", ["chatgpt", "gemini"], {
+      ...limits,
+      maxTurns: 6,
+    });
+
+    expect(result.responses.filter((response) => response.phase === "DISCUSSION"))
+      .toHaveLength(2);
+    expect(result.outcome).not.toBe("LIMIT_REACHED");
+    expect(result.finalResponse?.text).toBe("Да, ChatGPT и Gemini доступны.");
+    expect(result.finalResponse?.text).not.toMatch(/orchestration|consensus|marker/i);
   });
 
   it("uses the requested finalizer and persists an explicit final transcript entry", async () => {

@@ -423,6 +423,7 @@ export class Orchestrator {
             ? buildInitialCollaborationPrompt(
                 initialMessage,
                 effectiveMode === "DEBATE",
+                effectiveMode === "DEBATE" ? consensusToken : undefined,
                 customizations,
               )
             : effectiveMode === "DEBATE"
