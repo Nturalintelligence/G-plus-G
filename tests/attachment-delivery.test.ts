@@ -42,6 +42,22 @@ describe("AttachmentDeliveryManager & ProviderSubmission FSM", () => {
     expect(gemini.status).toBe("PENDING");
   });
 
+  it("deduplicates delivered content by SHA-256 within one provider conversation", () => {
+    const first = deliveryMgr.getOrCreateDelivery("att-1", "chatgpt", "conv-chatgpt-1");
+    deliveryMgr.updateDeliveryStatus(first.id, "UPLOADING");
+    deliveryMgr.updateDeliveryStatus(first.id, "DELIVERED");
+    appDb.raw.prepare(`
+      INSERT INTO message_attachments
+      (id, message_id, project_id, kind, file_name, mime_type, size_bytes, sha256, local_relative_path, source, status, created_at)
+      VALUES ('att-2', 'msg-2', 'p1', 'image', 'renamed.png', 'image/png', 1024, 'sha123', 'p1/msg-2/att-2/renamed.png', 'user', 'STAGED', '2026-01-02')
+    `).run();
+
+    expect(deliveryMgr.wasContentDelivered("sha123", "chatgpt", "conv-chatgpt-1")).toBe(true);
+    expect(deliveryMgr.wasContentDelivered("sha123", "gemini", "conv-chatgpt-1")).toBe(false);
+    expect(deliveryMgr.wasContentDelivered("sha123", "chatgpt", "conv-chatgpt-2")).toBe(false);
+    expect(deliveryMgr.wasContentDelivered("changed-sha", "chatgpt", "conv-chatgpt-1")).toBe(false);
+  });
+
   it("manages ProviderSubmission state machine idempotently and blocks blind UNKNOWN retry", () => {
     const sub = subMgr.createSubmission("msg-1", "gemini", ["att-1", "att-1"]);
     expect(sub.state).toBe("PREPARING");

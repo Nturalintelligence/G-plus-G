@@ -92,6 +92,23 @@ function mapSubmission(row: Record<string, unknown>): ProviderSubmission {
 export class AttachmentDeliveryManager {
   constructor(private readonly db: DatabaseSync) {}
 
+  public wasContentDelivered(sha256: string, providerId: string, conversationId: string): boolean {
+    requireIdentifier(sha256, "sha256");
+    requireIdentifier(providerId, "providerId");
+    requireIdentifier(conversationId, "conversationId");
+    const row = this.db.prepare(`
+      SELECT 1 AS delivered
+      FROM attachment_deliveries d
+      JOIN message_attachments a ON a.id = d.attachment_id
+      WHERE a.sha256 = ?
+        AND d.provider_id = ?
+        AND d.conversation_id = ?
+        AND d.status = 'DELIVERED'
+      LIMIT 1
+    `).get(sha256, providerId, conversationId) as { delivered: number } | undefined;
+    return row?.delivered === 1;
+  }
+
   public getOrCreateDelivery(attachmentId: string, providerId: string, conversationId: string): AttachmentDelivery {
     requireIdentifier(attachmentId, "attachmentId");
     requireIdentifier(providerId, "providerId");

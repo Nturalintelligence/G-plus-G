@@ -609,31 +609,41 @@ export class Orchestrator {
     const conversation = repository.getOrCreateConversation(projectId, providerId);
     let attachmentSubmission: ProviderSubmission | undefined;
     let attachmentDeliveries: AttachmentDelivery[] = [];
+    let attachmentsToUpload = attachments;
     if (attachments && attachments.length > 0) {
       if (!messageId) throw new Error("Attachments require a persisted user message id");
       if (attachments.some((attachment) => attachment.messageId !== messageId)) {
         throw new Error("Attachment/message binding mismatch");
       }
-      const submissionManager = new ProviderSubmissionManager(this.database.raw);
-      attachmentSubmission = submissionManager.createSubmission(
-        messageId,
-        providerId,
-        attachments.map((attachment) => attachment.id),
-      );
-      if (attachmentSubmission.state !== "PREPARING") {
-        throw new Error(
-          `Provider submission ${attachmentSubmission.submissionId} is ${attachmentSubmission.state}; manual reconciliation is required`,
-        );
-      }
       const deliveryManager = new AttachmentDeliveryManager(this.database.raw);
-      attachmentDeliveries = attachments.map((attachment) =>
-        deliveryManager.getOrCreateDelivery(attachment.id, providerId, conversation.id),
+      attachmentsToUpload = attachments.filter(
+        (attachment) => !deliveryManager.wasContentDelivered(
+          attachment.sha256,
+          providerId,
+          conversation.id,
+        ),
       );
-      for (const delivery of attachmentDeliveries) {
-        if (delivery.status === "DELIVERED" || delivery.status === "UNSUPPORTED") {
-          throw new Error(`Attachment delivery ${delivery.id} is already terminal: ${delivery.status}`);
+      if (attachmentsToUpload.length > 0) {
+        const submissionManager = new ProviderSubmissionManager(this.database.raw);
+        attachmentSubmission = submissionManager.createSubmission(
+          messageId,
+          providerId,
+          attachmentsToUpload.map((attachment) => attachment.id),
+        );
+        if (attachmentSubmission.state !== "PREPARING") {
+          throw new Error(
+            `Provider submission ${attachmentSubmission.submissionId} is ${attachmentSubmission.state}; manual reconciliation is required`,
+          );
         }
-        deliveryManager.updateDeliveryStatus(delivery.id, "UPLOADING");
+        attachmentDeliveries = attachmentsToUpload.map((attachment) =>
+          deliveryManager.getOrCreateDelivery(attachment.id, providerId, conversation.id),
+        );
+        for (const delivery of attachmentDeliveries) {
+          if (delivery.status === "DELIVERED" || delivery.status === "UNSUPPORTED") {
+            throw new Error(`Attachment delivery ${delivery.id} is already terminal: ${delivery.status}`);
+          }
+          deliveryManager.updateDeliveryStatus(delivery.id, "UPLOADING");
+        }
       }
     }
     const markAttachmentSubmissionUnknown = (): void => {
@@ -690,7 +700,11 @@ export class Orchestrator {
           attempt: attemptIndex + 1,
         });
         repository.updateTurnStatus(started.turn.id, "SUBMITTING");
-        turn = await adapter.sendMessage(attachments ? { content: edited, attachments } : { content: edited });
+        turn = await adapter.sendMessage(
+          attachmentsToUpload && attachmentsToUpload.length > 0
+            ? { content: edited, attachments: attachmentsToUpload }
+            : { content: edited },
+        );
         repository.updateTurnStatus(started.turn.id, "WAITING_RESPONSE");
         logEvent("INFO", "provider.turn.submitted", {
           runId: this.activeRunId,
