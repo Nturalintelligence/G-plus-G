@@ -27,14 +27,12 @@ Required next decisions and work:
 4. Prove default-off networking, host filesystem/credential isolation, quotas and process-tree termination.
 5. Add adversarial, fuzz, crash recovery and sandbox escape tests before enabling any Run action.
 
-## GitHub external blocker
+## GitHub publication status
 
-Release `v0.0.1` and branches `main`, `uat`, `prod` were pushed successfully. The repository visibility API reports `PUBLIC`, but immediately afterwards the Git endpoint returned HTTP 403 with `Your repository is disabled`, while the repository API simultaneously reported `disabled: false` and the anonymous page returned 404.
+The temporary GitHub 403 observed immediately after the visibility change cleared without a workaround. Publication is complete:
 
-Consequences until GitHub clears the state:
-
-- obsolete remote branches could not be deleted;
-- branch `experimental` could not yet be pushed;
-- public anonymous access could not be confirmed.
-
-Do not bypass this restriction through alternate ref APIs. Retry normal Git access or contact GitHub Support/account notices first.
+- anonymous repository request returns HTTP 200;
+- release `v0.0.1` and its Windows installer are public;
+- `main`, `uat` and `prod` point to the verified release commit;
+- `experimental` contains the changes listed above;
+- obsolete remote work branches were deleted.
