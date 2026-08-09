@@ -96,6 +96,12 @@ function getSessionStatusDisplay(session?: string): { text: string; type: "onlin
       return { text: "Лимит запросов", type: "warning" };
     case "CHECKING":
       return { text: "Проверяем…", type: "busy" };
+    case "BUSY":
+      return { text: "Открывается вход…", type: "busy" };
+    case "UNSUPPORTED":
+      return { text: "Недоступен", type: "offline" };
+    case "UNKNOWN":
+      return { text: "Не проверено", type: "offline" };
     default:
       return { text: "Неизвестно", type: "offline" };
   }
@@ -107,7 +113,7 @@ function App(): React.JSX.Element {
   const [providerStatuses, setProviderStatuses] = useState<Record<string, { session: string; ready: boolean }>>({
     chatgpt: { session: "UNKNOWN", ready: false },
     gemini: { session: "UNKNOWN", ready: false },
-    deepseek: { session: "UNKNOWN", ready: false },
+    deepseek: { session: "UNSUPPORTED", ready: false },
   });
   const [name, setName] = useState("");
   const [task, setTask] = useState("");
