@@ -6,4 +6,5 @@ backups/
 build-info.json
 user-data/
 test-results/
+output/playwright/
 *.log

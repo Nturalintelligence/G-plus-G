@@ -79,3 +79,20 @@ ChatGPT OAuth-window closure was reproduced by the owner.
 Текущий сценарий ручного входа подтверждён владельцем. Это evidence относится
 только к авторизации; message delivery, attachments и restart probe им не
 подтверждены.
+
+## Phase B attachment lifecycle — 2026-08-24
+
+| Command / check | Result | Boundary |
+|---|---|---|
+| focused attachment lifecycle/storage | PASS | 4 files, 26 tests. |
+| renderer attachment boundary | PASS | No storage path, full SHA, provider URL or save target path in renderer DTO. |
+| `npm run check` | PASS | 48 files, 210/210 tests. |
+| `npm run test:security` | PASS | 3 files, 37/37 tests. |
+| `npm run security:guard` | PASS | 91 production source files. |
+| `npm run desktop:build` | PASS | Vite renderer and Electron TypeScript build. |
+| `npm run package` | PASS | Windows unpacked app and NSIS installer. |
+| packaged smoke | PASS | Temporary local profile; no provider login/live provider calls. |
+| Phase B visual smoke | PASS | Draft restart recovery, safe DTO, integrity preview, text input and light/dark screenshots. |
+| Markdown/code-fence zero-job guard | PASS | Ordinary fenced code creates zero execution jobs. |
+
+Provider upload behavior was not exercised or modified; it remains the explicit Phase C gate.

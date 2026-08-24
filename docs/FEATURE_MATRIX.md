@@ -1,6 +1,6 @@
 # G+G 0.1 feature matrix
 
-Updated: 2026-08-08. Branch: `fix/core-functionality-0.1`.
+Updated: 2026-08-24. Branch: `fix/clipboard-and-provider-attachments`.
 
 Status vocabulary:
 
@@ -37,9 +37,10 @@ An existing button, class, or type is not treated as proof that a feature works.
 | Shared history | Conversation pane | `conversation_entries` | TESTED | storage/orchestrator tests | Candidate rows remain attributable; final row is explicit. |
 | Memory, brief, checkpoint, rollover hooks | Advanced/context services | three-tier memory, rollover manager, RunOptions hooks | PARTIAL | memory/checkpoint tests | Core services are tested; desktop does not yet automate a full provider rollover. |
 | Prompt lifecycle | Settings → Models; orchestration | versioned protocol, role/custom prompt, incremental prompts | TESTED | prompt protocol/golden tests | Provider chat should receive the full protocol once, then incremental context. |
-| Pick TXT/MD/PDF/PNG/JPEG | Composer attachment button | native dialog, staging IPC, artifact store | TESTED | artifact-store/attachment tests | Live provider upload remains auth-blocked. |
-| Drag-and-drop a file | Composer drop zone | Electron `webUtils.getPathForFile` in preload, immediate staging IPC | IMPLEMENTED | type/build boundary checks | Requires packaged Electron gesture test for all five formats. Absolute path is not returned to renderer. |
-| Paste screenshot | Composer paste | size-limited PNG/JPEG data URL staging | IMPLEMENTED | build/typecheck and storage validation | Packaged paste test remains. Text stays in the textarea and is not converted to an attachment. |
+| Pick TXT/MD/PDF/PNG/JPEG/WebP | Composer attachment button | native dialog, unified staging service, artifact store | TESTED | lifecycle/artifact-store tests, packaged build | Provider upload remains Phase C. |
+| Drag-and-drop a file | Composer drop zone | Electron `webUtils.getPathForFile` in preload, immediate staging IPC | TESTED | renderer-boundary tests, build and packaged smoke | Absolute path exists only inside preload → main staging and is never returned to React. |
+| Paste screenshot | Composer paste | bounded `Uint8Array` PNG/JPEG/WebP staging | TESTED | lifecycle/boundary and visual packaged smoke | Text paste remains native. Clipboard documents fall back to picker/drop when Windows supplies no trusted path. |
+| Restore attachment draft/history | Project reopen | migration 9, draft lifecycle, transcript DTO wiring | TESTED | lifecycle, migration, full check and visual smoke | Draft expiry is seven days; failed drafts purge after a further one-day retention unless referenced/active. |
 | Managed artifact storage | Automatic | SHA-256, magic MIME, safe names, content dedupe, integrity read | TESTED | artifact store/cleanup tests | Unsafe, executable, mismatched and oversized content is rejected/quarantined honestly. |
 | Provider-specific attachment delivery | Send with attachments | capability policy, integrity recheck, Delivery and Submission FSM | IMPLEMENTED | attachment delivery/unit + orchestrator build | Live ChatGPT and Gemini must each confirm TXT/MD/PDF/PNG/JPEG. UNKNOWN is not retried blindly. |
 | Receive a response file | Response result | authenticated download event + strict HTTPS/domain/IP/MIME policy | PARTIAL | artifact-downloader tests | Secure primitive exists, but adapter-to-persisted UI result-card wiring needs live provider fixtures and is not release-ready. |

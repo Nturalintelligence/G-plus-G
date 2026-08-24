@@ -15,6 +15,7 @@
     "browser:install-local": "node scripts/install-local-browser.mjs",
     "package": "npm run build:info && npm run browser:install-local && npm run desktop:build && electron-builder",
     "smoke:packaged": "node tests/packaged-smoke.mjs",
+    "smoke:phase-b-visual": "node tests/phase-b-visual-smoke.mjs",
     "start": "tsx src/cli.ts",
     "login": "tsx src/cli.ts login",
     "send": "tsx src/cli.ts send",

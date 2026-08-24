@@ -26,6 +26,9 @@ An item is not considered complete merely because an interface or UI control exi
   outcomes, and traffic-light health indicators.
 - Incremental live response rendering and content-free per-phase diagnostics.
 - Live 20x20 endurance acceptance completed for ChatGPT and Gemini in one project.
+- Phase B local attachment lifecycle: unified staging, binary clipboard IPC,
+  safe renderer DTO, WebP preview, file-only submit, transcript/draft restore,
+  expiry and reference-safe cleanup.
 
 ## Required acceptance work
 
@@ -37,6 +40,8 @@ An item is not considered complete merely because an interface or UI control exi
 - Add second-provider specification review and discrepancy approval workflow.
 - Verify packaged Chromium inclusion for each target platform.
 - Run installer smoke tests and backup/restore tests against the packaged desktop app.
+- Complete provider-specific attachment evidence in Phase C; a text response is
+  not proof that an attachment was uploaded or included in the submitted turn.
 
 ## Release gate
 
