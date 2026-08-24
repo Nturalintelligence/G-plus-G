@@ -77,21 +77,31 @@ async function geometry(page) {
     const composer = document.querySelector(".composer-bottom"), strip = document.querySelector(".composer-bottom .attached-files-row");
     const textarea = document.querySelector('.composer-bottom textarea[aria-label="Сообщение для моделей"]'), send = document.querySelector('.composer-bottom [title="Отправить сообщение"]');
     const attachmentImages = [...document.querySelectorAll('img[src^="attachment-preview:"]')];
-    return { viewport: { width: innerWidth, height: innerHeight, dpr: devicePixelRatio }, scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth, overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth, composer: b(composer), strip: b(strip), textarea: b(textarea), send: b(send), attachmentImages: attachmentImages.map((n) => ({ ...b(n), inThumbnail: Boolean(n.closest(".attachment-thumbnail")), inTranscriptCard: Boolean(n.closest(".message-attachment-card")), inModal: Boolean(n.closest(".image-preview-backdrop")) })), cards: [...document.querySelectorAll(".composer-bottom .attachment-thumbnail")].map((n) => ({ ...b(n), remove: b(n.querySelector(".attachment-thumbnail-remove")) })) };
+    return { viewport: { width: innerWidth, height: innerHeight, dpr: devicePixelRatio }, scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth, overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth, composer: b(composer), strip: b(strip), textarea: b(textarea), send: b(send), attachmentImages: attachmentImages.map((n) => ({ ...b(n), inThumbnail: Boolean(n.closest(".attachment-thumbnail")), inTranscriptCard: Boolean(n.closest(".message-attachment-card")), inModal: Boolean(n.closest(".image-preview-backdrop")) })), cards: [...document.querySelectorAll(".composer-bottom .attachment-card")].map((n) => ({ ...b(n), kind: n.classList.contains("attachment-image-card") ? "image" : "document", remove: b(n.querySelector(".attachment-remove")) })) };
   });
 }
-function assertGeometry(g) {
+function assertGeometry(g, allowWrap = false) {
   assert(!g.overflow && g.scrollWidth <= g.clientWidth, `Horizontal overflow: ${JSON.stringify(g)}`);
   assert(g.composer.right <= g.viewport.width + 1 && g.strip.left >= g.composer.left - 1 && g.strip.right <= g.composer.right + 1, "Composer/strip exits viewport");
   assert(g.composer.top >= 0 && g.composer.bottom <= g.viewport.height + 1, `Composer exits viewport vertically: ${JSON.stringify(g.composer)}`);
   assert(g.textarea.top >= 0 && g.textarea.bottom <= g.viewport.height + 1 && g.send.top >= 0 && g.send.bottom <= g.viewport.height + 1, "Textarea/send is not fully visible");
   assert(g.textarea.right <= g.send.left + 1, "Textarea overlaps send");
-  assert(g.strip.height <= 88, `Closed attachment strip exceeds one 88px row: ${g.strip.height}`);
-  assert(g.attachmentImages.length === g.cards.length && g.attachmentImages.every((image) => image.inThumbnail && !image.inModal), `Closed DOM contains an inline original: ${JSON.stringify(g.attachmentImages)}`);
+  assert(g.strip.height <= (allowWrap ? 168 : 88), `Attachment strip exceeds its bound: ${g.strip.height}`);
+  const composerImages = g.attachmentImages.filter((image) => image.inThumbnail);
+  assert(composerImages.length === g.cards.filter((card) => card.kind === "image").length, `Composer image/card mismatch: ${JSON.stringify(g.attachmentImages)}`);
+  assert(g.attachmentImages.every((image) => (image.inThumbnail || image.inTranscriptCard) && !image.inModal && image.width <= 72 && image.height <= 72), `Closed DOM contains an inline original: ${JSON.stringify(g.attachmentImages)}`);
   for (const card of g.cards) {
-    assert(card.width === 72 && card.height === 72, `Card must be exactly 72x72: ${JSON.stringify(card)}`);
+    if (card.kind === "image") assert(card.width === 72 && card.height === 72, `Image card must be exactly 72x72: ${JSON.stringify(card)}`);
+    else assert(card.width <= 320 && card.height >= 58, `Document card is outside its fixed bounds: ${JSON.stringify(card)}`);
     assert(card.left >= g.strip.left - 1 && card.right <= g.strip.right + 1 && card.top >= g.strip.top - 1 && card.bottom <= g.strip.bottom + 1, "Card exits strip");
+    assert(card.remove.width === 24 && card.remove.height === 24, `Remove must be exactly 24x24: ${JSON.stringify(card.remove)}`);
+    assert(Math.abs(card.remove.left - (card.right - 28)) < .01 && Math.abs(card.remove.top - (card.top + 4)) < .01, `Remove offset must be top/right 4px: ${JSON.stringify(card)}`);
     assert(card.remove.left >= card.left && card.remove.right <= card.right && card.remove.top >= card.top && card.remove.bottom <= card.bottom, "Remove exits card");
+  }
+  if (allowWrap) assert(new Set(g.cards.map((card) => card.top)).size >= 2, `Mixed cards did not wrap: ${JSON.stringify(g.cards)}`);
+  for (let index = 0; index < g.cards.length; index += 1) for (let neighbor = index + 1; neighbor < g.cards.length; neighbor += 1) {
+    const a = g.cards[index].remove, b = g.cards[neighbor];
+    assert(a.right <= b.left || a.left >= b.right || a.bottom <= b.top || a.top >= b.bottom, `Remove intersects neighboring card: ${JSON.stringify({ remove: a, neighbor: b })}`);
   }
 }
 
@@ -148,6 +158,54 @@ try {
   shot = await screenshot("preview-closed-three-thumbnails-dark-1920x1080.png"); results.push({ scenario: "preview-closed", theme: "dark", window: "1920x1080", zoomFactor: 1, windowsScale: "100%", source: "3 fullscreen screenshots", sourceDimensions: fixtures.map((x) => `${x.width}x${x.height}`).join(", "), fileSizeBytes: fixtures.reduce((n, x) => n + x.sizeBytes, 0), cardBounds: closedGeometry.cards, stripBounds: closedGeometry.strip, scrollWidth: closedGeometry.scrollWidth, clientWidth: closedGeometry.clientWidth, screenshot: shot.path, status: "PASS" });
   await thumbs.first().locator(".attachment-thumbnail-open").click(); await page.locator(".image-preview-backdrop").click({ position: { x: 5, y: 5 } }); await modal.waitFor({ state: "hidden" }); await thumbs.first().locator(".attachment-thumbnail-open").click(); await page.getByLabel("Закрыть просмотр").click(); await modal.waitFor({ state: "hidden" }); assertGeometry(await geometry(page));
 
+  const mixedDraftMessageId = await page.evaluate(async (id) => (await window.orchestrator.attachments.listDraft(id))?.messageId, projectId);
+  assert(mixedDraftMessageId, "Draft missing before mixed attachment scenario");
+  await app.close(); app = undefined;
+  const mixedSeedDb = new DatabaseSync(join(dataRoot, "orchestrator.sqlite"));
+  const insertDocument = mixedSeedDb.prepare(`INSERT INTO message_attachments
+    (id, message_id, project_id, kind, file_name, mime_type, size_bytes, sha256, local_relative_path, source, status, quarantine_reason, provider_metadata_json, created_at, draft_expires_at, last_error, updated_at)
+    VALUES (?, ?, ?, 'document', ?, ?, ?, ?, ?, 'file_picker', 'STAGED', NULL, NULL, ?, ?, NULL, ?)`);
+  const seededAt = "2026-08-24T10:10:00.000Z";
+  const expiresAt = "2026-08-31T10:10:00.000Z";
+  const documentSpecs = [
+    ["visual-pdf", "Очень длинное имя документа — проверка Unicode — финансовый отчёт 2026.pdf", "application/pdf", 72, "a".repeat(64), "visual-fixtures/report.pdf"],
+    ["visual-md-unicode", "Технические заметки — очень длинное Unicode имя — финальная версия.md", "text/markdown", 55, "b".repeat(64), "visual-fixtures/notes.md"],
+    ["visual-md-readme", "README attachment controls regression.md", "text/markdown", 32, "c".repeat(64), "visual-fixtures/readme.md"],
+  ];
+  for (const spec of documentSpecs) insertDocument.run(spec[0], mixedDraftMessageId, projectId, spec[1], spec[2], spec[3], spec[4], spec[5], seededAt, expiresAt, seededAt);
+  mixedSeedDb.close();
+  page = await launch(); await setTheme(page, "dark"); await selectProject(page, projectName);
+  await page.waitForFunction(() => document.querySelectorAll(".composer-bottom .attachment-card").length === 6);
+  await setWindow(1280, 720); await page.waitForTimeout(200);
+  const mixedGeometry = await geometry(page); assertGeometry(mixedGeometry, true);
+  const removeButtons = page.locator(".composer-bottom .attachment-remove");
+  await removeButtons.nth(2).hover(); await removeButtons.nth(2).focus(); assertGeometry(await geometry(page), true);
+  shot = await screenshot("attachments-mixed-wrap-hover-focus-1280x720-dark.png");
+  results.push({ scenario: "mixed-wrap-hover-focus", theme: "dark", window: "1280x720", zoomFactor: 1, windowsScale: "100%", effectiveWindowDpi: shot.Dpi, cardBounds: mixedGeometry.cards, screenshot: shot.path, status: "PASS" });
+  await app.close(); app = undefined;
+  const transcriptSeedDb = new DatabaseSync(join(dataRoot, "orchestrator.sqlite"));
+  transcriptSeedDb.prepare(`INSERT INTO message_attachments
+    (id, message_id, project_id, kind, file_name, mime_type, size_bytes, sha256, local_relative_path, source, status, quarantine_reason, provider_metadata_json, created_at, draft_expires_at, last_error, updated_at)
+    SELECT 'transcript-' || id, 'visual-user', project_id, kind, file_name, mime_type, size_bytes, sha256, local_relative_path, source, status, quarantine_reason, provider_metadata_json, created_at, NULL, last_error, updated_at
+    FROM message_attachments WHERE project_id = ?`).run(projectId);
+  transcriptSeedDb.close();
+  page = await launch(); await setTheme(page, "dark"); await selectProject(page, projectName); await setWindow(1280, 720);
+  const removeButtonsAfterRestart = page.locator(".composer-bottom .attachment-remove");
+  for (const targetIndex of [0, 2, -1]) {
+    const beforeRemoval = await geometry(page);
+    const index = targetIndex < 0 ? beforeRemoval.cards.length - 1 : targetIndex;
+    const targetSlot = beforeRemoval.cards[index];
+    await removeButtonsAfterRestart.nth(index).click();
+    await page.waitForFunction((count) => document.querySelectorAll(".composer-bottom .attachment-card").length === count, beforeRemoval.cards.length - 1);
+    const afterRemoval = await geometry(page); assertGeometry(afterRemoval);
+    if (index < afterRemoval.cards.length) {
+      const replacement = afterRemoval.cards[index];
+      const targetRelative = { left: targetSlot.left - beforeRemoval.strip.left, top: targetSlot.top - beforeRemoval.strip.top };
+      const replacementRelative = { left: replacement.left - afterRemoval.strip.left, top: replacement.top - afterRemoval.strip.top };
+      assert(Math.abs(replacementRelative.left - targetRelative.left) < .01 && Math.abs(replacementRelative.top - targetRelative.top) < .01, `Attachment slot jumped after removal at ${index}: ${JSON.stringify({ targetSlot, replacement, targetRelative, replacementRelative })}`);
+    }
+  }
+
   await page.getByRole("button", { name: /Показать ход обсуждения/ }).click(); let discussion = page.getByLabel("Ход обсуждения моделей"); await discussion.waitFor(); assert(await discussion.locator(".discussion-turn").count() === 7, "Drawer lost turns");
   shot = await screenshot("discussion-right-drawer-long-russian-dark.png"); results.push({ scenario: "right-drawer", theme: "dark", window: "1366x768", zoomFactor: 1, windowsScale: "100%", source: "7 long Russian turns", sourceDimensions: "n/a", fileSizeBytes: 0, screenshot: shot.path, status: "PASS" });
   await page.getByLabel("Вернуться к итоговому ответу").click(); await page.evaluate(async () => { const s = await window.orchestrator.settings.get(); await window.orchestrator.settings.save({ ...s, appearance: { ...s.appearance, discussionView: "FULLSCREEN" } }); });
@@ -156,17 +214,13 @@ try {
   await setWindow(700, 760); await page.waitForTimeout(200); const narrow = await discussion.boundingBox(); assert(narrow?.width >= 690, "Narrow view is not fullscreen");
   shot = await screenshot("discussion-narrow-700x760-dark.png"); results.push({ scenario: "narrow-fullscreen", theme: "dark", window: "700x760", zoomFactor: 1, windowsScale: "100%", source: "7 long Russian turns", sourceDimensions: "n/a", fileSizeBytes: 0, screenshot: shot.path, status: "PASS" });
 
-  await app.close(); app = undefined;
-  const transcriptDb = new DatabaseSync(join(dataRoot, "orchestrator.sqlite"));
-  transcriptDb.prepare("UPDATE message_attachments SET message_id = 'visual-user' WHERE project_id = ?").run(projectId);
-  transcriptDb.close();
-  page = await launch(); await setTheme(page, "dark"); await selectProject(page, projectName); await setWindow(1920, 1080);
+  await page.getByLabel("Вернуться к итоговому ответу").click(); await setWindow(1920, 1080);
   const transcriptCards = page.locator(".message.user .message-attachment-card");
-  await transcriptCards.nth(2).waitFor();
-  const transcriptGeometry = await transcriptCards.evaluateAll((nodes) => nodes.map((node) => { const card = node.getBoundingClientRect(), image = node.querySelector("img").getBoundingClientRect(); return { card: { left: card.left, top: card.top, right: card.right, bottom: card.bottom, width: card.width, height: card.height }, image: { width: image.width, height: image.height }, documentOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth }; }));
-  assert(transcriptGeometry.length === 3 && transcriptGeometry.every((item) => item.image.width === 38 && item.image.height === 38 && !item.documentOverflow), `Transcript attachments are not compact: ${JSON.stringify(transcriptGeometry)}`);
-  shot = await screenshot("transcript-three-compact-attachments-dark-1920x1080.png");
-  results.push({ scenario: "transcript-compact", theme: "dark", window: "1920x1080", zoomFactor: 1, windowsScale: "100%", effectiveWindowDpi: shot.Dpi, source: "3 sent screenshots", sourceDimensions: fixtures.map((x) => `${x.width}x${x.height}`).join(", "), cardBounds: transcriptGeometry, screenshot: shot.path, status: "PASS" });
+  await transcriptCards.nth(5).waitFor();
+  const transcriptGeometry = await transcriptCards.evaluateAll((nodes) => nodes.map((node) => { const card = node.getBoundingClientRect(), imageNode = node.querySelector("img"), image = imageNode ? imageNode.getBoundingClientRect() : null; return { card: { left: card.left, top: card.top, right: card.right, bottom: card.bottom, width: card.width, height: card.height }, image: image ? { width: image.width, height: image.height } : null, documentOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth }; }));
+  assert(transcriptGeometry.length === 6 && transcriptGeometry.filter((item) => item.image).length === 3 && transcriptGeometry.filter((item) => item.image).every((item) => item.image.width === 38 && item.image.height === 38) && transcriptGeometry.every((item) => item.card.width <= 320 && !item.documentOverflow), `Transcript attachments are not compact: ${JSON.stringify(transcriptGeometry)}`);
+  shot = await screenshot("transcript-six-compact-attachments-dark-1920x1080.png");
+  results.push({ scenario: "transcript-compact", theme: "dark", window: "1920x1080", zoomFactor: 1, windowsScale: "100%", effectiveWindowDpi: shot.Dpi, source: "3 screenshots + PDF + 2 MD", sourceDimensions: fixtures.map((x) => `${x.width}x${x.height}`).join(", "), cardBounds: transcriptGeometry, screenshot: shot.path, status: "PASS" });
 
   const reportPath = join(out, "visual-gate-report.json"); await writeFile(reportPath, `${JSON.stringify({ generatedAt: new Date().toISOString(), fixtures, results }, null, 2)}\n`, "utf8");
   console.log(JSON.stringify({ ok: true, screenshots: results.length, fixtures: fixtures.length, report: reportPath }, null, 2));

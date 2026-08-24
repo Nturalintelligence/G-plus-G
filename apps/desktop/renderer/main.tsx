@@ -1095,14 +1095,14 @@ function App(): React.JSX.Element {
               <div className="attached-files-row">
                 {attachedFiles.map((f) => (
                   f.previewUrl ? (
-                    <span key={f.id} className="attachment-thumbnail" title={`${f.fileName} · ${f.mimeType} · ${formatAttachmentSize(f.sizeBytes)} · ${f.status}`}>
+                    <span key={f.id} className="attachment-card attachment-image-card attachment-thumbnail" title={`${f.fileName} · ${f.mimeType} · ${formatAttachmentSize(f.sizeBytes)} · ${f.status}`}>
                       <button type="button" className="attachment-thumbnail-open" aria-label={`Открыть изображение ${f.fileName}`} onClick={() => setPreviewImageModalUrl(f.previewUrl!)}>
                         <img src={f.previewUrl} alt="" />
                       </button>
-                      <button type="button" className="attachment-thumbnail-remove" aria-label={`Удалить вложение ${f.fileName}`} onClick={() => void removeFile(f.id)}>×</button>
+                      <button type="button" className="attachment-remove attachment-thumbnail-remove" aria-label={`Удалить вложение ${f.fileName}`} onClick={() => void removeFile(f.id)}>×</button>
                     </span>
                   ) : (
-                    <span key={f.id} className="attached-file-tag document-attachment-card">
+                    <span key={f.id} className="attachment-card attachment-document-card attached-file-tag document-attachment-card">
                       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                         <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z" />
                         <polyline points="13 2 13 9 20 9" />
@@ -1113,7 +1113,7 @@ function App(): React.JSX.Element {
                         {f.error ? <small className="attachment-error">{f.error}</small> : null}
                       </span>
                       {f.status === "FAILED" ? <button aria-label={`Повторить вложение ${f.fileName}`} onClick={() => void retryFile(f.id)}>↻</button> : null}
-                      <button aria-label={`Удалить вложение ${f.fileName}`} onClick={() => void removeFile(f.id)}>×</button>
+                      <button type="button" className="attachment-remove" aria-label={`Удалить вложение ${f.fileName}`} onClick={() => void removeFile(f.id)}>×</button>
                     </span>
                   )
                 ))}

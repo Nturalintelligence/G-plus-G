@@ -173,3 +173,29 @@ the production composer through the Electron system clipboard and `Ctrl+V`.
 Production changes are limited to renderer layout, compact attachment rendering,
 the body portal preview and the regression fixture/test. Phase C and Phase C.1
 were not started.
+
+## Phase B.1 anchored remove-control gate — 2026-08-24
+
+The owner-provided failing screenshot is retained as
+`tests/fixtures/remove-controls-regression.png` (472x43, 7,509 bytes, SHA-256
+`4CB200084E2D14F1F4F10CE15085B5E9CCA07C39CF4B752C6ACB96C599A49B55`).
+It records the remove controls escaping their cards before this production CSS
+correction.
+
+| Check | Result | Evidence |
+|---|---|---|
+| Positioning context | PASS | Every composer image/document uses its own relative, clipped `.attachment-card`; `.attachment-remove` is the only shared remove-control class. |
+| Exact remove geometry | PASS | Every button is 24x24 CSS px with top/right offsets of exactly 4 px; no transforms, negative margins, percentages or natural-image dimensions participate. |
+| Three fullscreen PNG | PASS | 1912x1199 owner fixture, 1920x1080 and 3840x2160 enter the packaged production composer through system clipboard + Ctrl+V and remain three 72x72 cards. |
+| Mixed wrapping | PASS | PNG + PDF + two long-Unicode MD cards wrap at 1280x720. Document cards are 320x58; image cards are 72x72; all controls remain inside their own card and outside neighbors. |
+| Hover/focus and deletion | PASS | Focus/hover geometry is unchanged. First, middle and last controls remove only their card; remaining cards reflow into stable strip-relative slots. |
+| Theme/window/DPI matrix | PASS | Light/dark; 1280x720, 1366x768, 1920x1080; forced Electron scale 100/125/150%; zoom factor exactly 1. Host effective window DPI is recorded by native capture. |
+| Closed 1920x1080 geometry | PASS | Cards `(317,889)-(389,961)`, `(397,889)-(469,961)`, `(477,889)-(549,961)`; controls `(361,893)-(385,917)`, `(441,893)-(465,917)`, `(521,893)-(545,917)`. |
+| Workspace containment | PASS | Closed 1920 capture reports `scrollWidth=clientWidth=1898`; no attachment image outside composer thumbnail, transcript card, or active body portal. |
+| Transcript cards | PASS | Three documents are capped at 320x50; three images use 320x56 cards with 38x38 thumbnails. Long Unicode names do not widen the transcript. |
+| Native visual review | PASS | 25 full-window Win32 captures reviewed, including closed/open/closed preview, mixed wrap/focus, compact transcript, right drawer, fullscreen and narrow fullscreen. |
+| Build/test/security/package | PASS | `npm run check`: 49 files, 213/213; security: 37/37; source guard: 91 production files; NSIS/unpacked build and packaged smoke pass. |
+
+Machine-readable bounding boxes and native screenshot paths are in
+`output/playwright/phase-b1-real-gate/visual-gate-report.json` (generated,
+ignored evidence). No live provider UAT was run.
