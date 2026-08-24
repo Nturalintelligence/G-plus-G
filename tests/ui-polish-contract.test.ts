@@ -13,6 +13,7 @@ describe("Phase B.1 UI contracts", () => {
     expect(styles).toMatch(/\.output\s*\{[\s\S]*?min-height:\s*0;[\s\S]*?overflow-y:\s*auto;/);
     expect(styles).toMatch(/\.composer-bottom \.attached-files-row\s*\{[\s\S]*?flex-wrap:\s*nowrap;[\s\S]*?max-height:\s*88px;[\s\S]*?overflow-x:\s*auto;/);
     expect(styles).toMatch(/\.attachment-thumbnail-open img\s*\{[\s\S]*?object-fit:\s*cover;/);
+    expect(styles).toMatch(/\.attachment-thumbnail-remove\s*\{[\s\S]*?width:\s*16px;[\s\S]*?height:\s*16px;[\s\S]*?font-size:\s*11px;/);
     expect(styles).toMatch(/\.image-preview-modal-card\s*\{[\s\S]*?max-width:\s*90vw;[\s\S]*?max-height:\s*90vh;/);
     expect(styles).toMatch(/\.full-preview-image\s*\{[\s\S]*?max-width:\s*100%;[\s\S]*?max-height:\s*100%;[\s\S]*?object-fit:\s*contain;/);
     expect(renderer).toContain('event.key !== "Escape"');
