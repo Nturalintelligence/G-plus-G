@@ -16,6 +16,7 @@
     "package": "npm run build:info && npm run browser:install-local && npm run desktop:build && electron-builder",
     "smoke:packaged": "node tests/packaged-smoke.mjs",
     "smoke:phase-b-visual": "node tests/phase-b-visual-smoke.mjs",
+    "smoke:composer-draft": "node tests/composer-draft-crash-smoke.mjs",
     "start": "tsx src/cli.ts",
     "login": "tsx src/cli.ts login",
     "send": "tsx src/cli.ts send",

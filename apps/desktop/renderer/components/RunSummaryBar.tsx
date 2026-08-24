@@ -2,11 +2,13 @@ import React from "react";
 import { formatProviderList, getProviderDisplayName, getProviderMetadata } from "../provider-metadata.js";
 import { ChevronDownIcon, ChevronUpIcon, LayersIcon, ProviderLogoIcon, TargetIcon } from "./Icon.js";
 
+type RunModeView = "MANUAL" | "SEQUENTIAL" | "PARALLEL" | "DEBATE";
+
 export interface RunSummaryBarProps {
   viewMode: "SYNTHESIZED" | "LIVE";
   setViewMode: (mode: "SYNTHESIZED" | "LIVE") => void;
-  mode: string;
-  setMode: (mode: string) => void;
+  mode: RunModeView;
+  setMode: (mode: RunModeView) => void;
   finalizerMode: "MANUAL" | "LEAD_SELECTS" | "PEER_AGREEMENT";
   setFinalizerMode: (mode: "MANUAL" | "LEAD_SELECTS" | "PEER_AGREEMENT") => void;
   finalResponder: string;
@@ -116,12 +118,12 @@ export function RunSummaryBar({
           <div className="config-group">
             <label className="config-group-title">Как обсуждать</label>
             <div className="pills-row">
-              {[
+              {([
                 { id: "MANUAL", label: "Один ответ" },
                 { id: "SEQUENTIAL", label: "По очереди" },
                 { id: "PARALLEL", label: "Параллельно" },
                 { id: "DEBATE", label: "До согласия" },
-              ].map((m) => (
+              ] satisfies Array<{ id: RunModeView; label: string }>).map((m) => (
                 <button
                   key={m.id}
                   type="button"

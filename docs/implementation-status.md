@@ -33,6 +33,10 @@ An item is not considered complete merely because an interface or UI control exi
   compact transcript cards, body-level fixed portal preview, closed-DOM image
   assertions and native full-window evidence using the owner's 1912x1199 PNG
   plus 1920x1080 and 4K screenshots at zoom factor 1.
+- Crash-safe, project-scoped composer drafts in SQLite: text, ordered attachment
+  ids, discussion mode/policy/starter, participants, view/finalizer/final
+  responder and expanded state. Renderer changes are debounced, restored after a
+  forced process kill, and never trigger an automatic run or provider submission.
 
 ## Required acceptance work
 

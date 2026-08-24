@@ -199,3 +199,19 @@ correction.
 Machine-readable bounding boxes and native screenshot paths are in
 `output/playwright/phase-b1-real-gate/visual-gate-report.json` (generated,
 ignored evidence). No live provider UAT was run.
+
+## Crash-safe per-project composer draft — 2026-08-24
+
+| Check | Result | Evidence |
+|---|---|---|
+| SQLite migration/reopen | PASS | Migration 10 stores one project-keyed row; repository reopen restores every field and preserves de-duplicated id order. |
+| Project isolation | PASS | Clearing project A leaves project B's text/order/settings unchanged. |
+| Renderer debounce | PASS | Packaged renderer edit reached SQLite through trusted IPC before forced process termination. |
+| Forced crash/restart | PASS | Same packaged data root restored text, two ordered Unicode image attachments, mode, continuation policy, starter, participants, view, finalizer, final responder and expanded state. |
+| No automatic work | PASS | After recovery, `orchestration_runs=0` and `provider_submissions=0`; no send/retry occurs. |
+| Submission lifecycle | PASS | Snapshot is saved before UI clearing, retained/restored on failure, and cleared only after successful orchestration return. |
+| `npm run check` | PASS | 50 test files, 216/216 tests. |
+| Security | PASS | 37/37 focused tests; source guard passed across 92 production files. |
+| Package/crash smoke | PASS | Windows unpacked app and NSIS installer rebuilt; `npm run smoke:composer-draft` passed after a forced main-process kill. |
+
+No live provider UAT was run in this phase.

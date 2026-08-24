@@ -416,4 +416,25 @@ export const migrations: readonly Migration[] = [
         ON message_attachments(project_id, message_id, draft_expires_at);
     `,
   },
+  {
+    version: 10,
+    name: "crash_safe_composer_drafts",
+    sql: `
+      CREATE TABLE composer_drafts (
+        project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+        text TEXT NOT NULL,
+        message_id TEXT NOT NULL,
+        attachment_ids_json TEXT NOT NULL,
+        mode TEXT NOT NULL CHECK (mode IN ('MANUAL', 'SEQUENTIAL', 'PARALLEL', 'DEBATE')),
+        continuation_policy TEXT NOT NULL CHECK (continuation_policy IN ('autonomous', 'approval')),
+        starter TEXT NOT NULL,
+        providers_json TEXT NOT NULL,
+        view_mode TEXT NOT NULL CHECK (view_mode IN ('SYNTHESIZED', 'LIVE')),
+        finalizer_mode TEXT NOT NULL CHECK (finalizer_mode IN ('MANUAL', 'LEAD_SELECTS', 'PEER_AGREEMENT')),
+        final_responder TEXT NOT NULL,
+        composer_expanded INTEGER NOT NULL CHECK (composer_expanded IN (0, 1)),
+        updated_at TEXT NOT NULL
+      );
+    `,
+  },
 ];

@@ -124,7 +124,7 @@ function App(): React.JSX.Element {
   });
   const [name, setName] = useState("");
   const [task, setTask] = useState("");
-  const [mode, setMode] = useState<string>("DEBATE");
+  const [mode, setMode] = useState<ComposerDraftView["mode"]>("DEBATE");
   const [continuationPolicy, setContinuationPolicy] = useState<"autonomous" | "approval">("autonomous");
   const [starter, setStarter] = useState<string>("chatgpt");
   const [providers, setProviders] = useState<string[]>(["chatgpt", "gemini"]);
@@ -175,6 +175,25 @@ function App(): React.JSX.Element {
   const [cliTasks, setCliTasks] = useState<CliTaskView[]>([]);
   const [busyCliTaskId, setBusyCliTaskId] = useState<string | null>(null);
   const outputRef = useRef<HTMLElement>(null);
+  const draftHydratedProjectRef = useRef<string | null>(null);
+  const draftPersistenceSuspendedRef = useRef(false);
+
+  function composerDraftPayload(projectId: string): Omit<ComposerDraftView, "updatedAt"> {
+    return {
+      projectId,
+      text: task,
+      messageId: draftMessageId,
+      attachmentIds: attachedFiles.map((file) => file.id),
+      mode,
+      continuationPolicy,
+      starter,
+      providers,
+      viewMode,
+      finalizerMode,
+      finalResponder,
+      composerExpanded,
+    };
+  }
 
   async function addAttachmentRefs(refs: AttachmentRefView[]): Promise<void> {
     if (refs.length === 0) return;
@@ -404,19 +423,54 @@ function App(): React.JSX.Element {
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
   }, [previewImageModalUrl, discussionOpen]);
+  useEffect(() => {
+    const projectId = current?.project.id;
+    if (!projectId || draftHydratedProjectRef.current !== projectId || draftPersistenceSuspendedRef.current) return;
+    const timer = window.setTimeout(() => {
+      void window.orchestrator.composerDraft.save(composerDraftPayload(projectId)).catch((error) => {
+        setStatus(`Черновик не сохранён: ${error instanceof Error ? error.message : String(error)}`);
+      });
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [current?.project.id, task, draftMessageId, attachedFiles, mode, continuationPolicy, starter, providers, viewMode, finalizerMode, finalResponder, composerExpanded]);
+  useEffect(() => {
+    const flushDraft = () => {
+      const projectId = current?.project.id;
+      if (!projectId || draftHydratedProjectRef.current !== projectId || draftPersistenceSuspendedRef.current) return;
+      void window.orchestrator.composerDraft.save(composerDraftPayload(projectId));
+    };
+    window.addEventListener("beforeunload", flushDraft);
+    return () => window.removeEventListener("beforeunload", flushDraft);
+  }, [current?.project.id, task, draftMessageId, attachedFiles, mode, continuationPolicy, starter, providers, viewMode, finalizerMode, finalResponder, composerExpanded]);
 
   async function openProject(id: string): Promise<void> {
-    const [details, tasks] = await Promise.all([
+    draftHydratedProjectRef.current = null;
+    const [details, tasks, savedDraft] = await Promise.all([
       window.orchestrator.projects.open(id),
       window.orchestrator.cliTasks.list(id),
+      window.orchestrator.composerDraft.get(id),
     ]);
+    const attachmentDraft = details.attachmentDraft;
+    const attachmentOrder = new Map((savedDraft?.attachmentIds ?? []).map((attachmentId, index) => [attachmentId, index]));
+    const restoredAttachments = [...(attachmentDraft?.attachments ?? [])].sort((left, right) =>
+      (attachmentOrder.get(left.id) ?? Number.MAX_SAFE_INTEGER) - (attachmentOrder.get(right.id) ?? Number.MAX_SAFE_INTEGER));
     setCurrent(details);
     setCliTasks(tasks);
-    setAttachedFiles(details.attachmentDraft?.attachments ?? []);
-    setDraftMessageId(details.attachmentDraft?.messageId ?? `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`);
+    setAttachedFiles(restoredAttachments);
+    setDraftMessageId(savedDraft?.messageId ?? attachmentDraft?.messageId ?? `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`);
+    setTask(savedDraft?.text ?? "");
+    setMode(savedDraft?.mode ?? settings.defaults.mode);
+    setContinuationPolicy(savedDraft?.continuationPolicy ?? "autonomous");
+    setProviders(savedDraft?.providers.length ? savedDraft.providers : (details.project.providers?.length ? details.project.providers : settings.defaults.providers));
+    setStarter(savedDraft?.starter ?? details.project.providers?.[0] ?? settings.defaults.providers[0] ?? "chatgpt");
+    setViewMode(savedDraft?.viewMode ?? "SYNTHESIZED");
+    setFinalizerMode(savedDraft?.finalizerMode ?? "MANUAL");
+    setFinalResponder(savedDraft?.finalResponder ?? "auto");
+    setComposerExpanded(savedDraft?.composerExpanded ?? false);
     const nextState = details.state?.state ?? structuredClone(initialState);
     setProjectState(nextState);
     setStateText(JSON.stringify(nextState, null, 2));
+    draftHydratedProjectRef.current = id;
   }
 
   const [showNoProjectToast, setShowNoProjectToast] = useState(false);
@@ -430,6 +484,13 @@ function App(): React.JSX.Element {
     }
     if (!submittedTask || running || providers.length === 0 || attachedFiles.some((file) => file.status === "FAILED" || file.status === "QUARANTINED" || file.status === "UNSUPPORTED")) return;
     const projectId = current.project.id;
+    try {
+      await window.orchestrator.composerDraft.save(composerDraftPayload(projectId));
+    } catch (error) {
+      setStatus(`Не удалось безопасно сохранить черновик перед отправкой: ${error instanceof Error ? error.message : String(error)}`);
+      return;
+    }
+    draftPersistenceSuspendedRef.current = true;
     setOptimisticUserTask(submittedTask);
     setTask("");
     setStreaming({});
@@ -452,6 +513,7 @@ function App(): React.JSX.Element {
         attachments: attachedFiles,
         promptCustomizations: settings.models,
       });
+      await window.orchestrator.composerDraft.clear(projectId);
       setAttachedFiles([]);
       setDraftMessageId(`msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`);
       setStatus(
@@ -464,8 +526,10 @@ function App(): React.JSX.Element {
       const userErr = toUserFacingError(error, "Запуск оркестратора");
       setActiveUserError(userErr);
       setStatus(userErr.message);
+      draftPersistenceSuspendedRef.current = false;
       await openProject(projectId);
     } finally {
+      draftPersistenceSuspendedRef.current = false;
       setRunning(false);
       setStreaming({});
       setOptimisticUserTask(null);

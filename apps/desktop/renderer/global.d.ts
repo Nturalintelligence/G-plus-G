@@ -62,6 +62,11 @@ interface Window {
       get(): Promise<AppSettingsView>;
       save(value: AppSettingsView): Promise<AppSettingsView>;
     };
+    composerDraft: {
+      get(projectId: string): Promise<ComposerDraftView | null>;
+      save(value: Omit<ComposerDraftView, "updatedAt">): Promise<ComposerDraftView>;
+      clear(projectId: string): Promise<{ success: boolean }>;
+    };
     cliTasks: {
       list(projectId: string): Promise<any[]>;
       approve(projectId: string, taskId: string): Promise<any>;
@@ -208,6 +213,22 @@ interface ConversationEntryView {
   content: string;
   createdAt: string;
   attachments?: AttachmentRefView[];
+}
+
+interface ComposerDraftView {
+  projectId: string;
+  text: string;
+  messageId: string;
+  attachmentIds: string[];
+  mode: "MANUAL" | "SEQUENTIAL" | "PARALLEL" | "DEBATE";
+  continuationPolicy: "autonomous" | "approval";
+  starter: string;
+  providers: string[];
+  viewMode: "SYNTHESIZED" | "LIVE";
+  finalizerMode: "MANUAL" | "LEAD_SELECTS" | "PEER_AGREEMENT";
+  finalResponder: string;
+  composerExpanded: boolean;
+  updatedAt: string;
 }
 
 interface StateVersion {

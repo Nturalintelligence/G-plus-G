@@ -53,6 +53,7 @@ import {
   type RendererAttachmentDto,
 } from "../../src/attachments/attachment-staging.js";
 import { AttachmentDraftLifecycle } from "../../src/attachments/attachment-draft-lifecycle.js";
+import { ComposerDraftRepository, type ComposerDraftInput } from "../../src/composer-draft.js";
 
 let mainWindow: BrowserWindow | null = null;
 let database: AppDatabase | null = null;
@@ -437,6 +438,53 @@ function registerIpc(): void {
       density: settings.appearance.density,
     });
     return settings;
+  });
+  handle("composerDraft:get", (_event, projectIdValue: unknown) => {
+    const projectId = requireString(projectIdValue, "projectId", 200);
+    assertProjectExists(projectId);
+    return new ComposerDraftRepository(db().raw).get(projectId);
+  });
+  handle("composerDraft:save", (_event, value: unknown) => {
+    const input = (typeof value === "object" && value !== null ? value : {}) as Record<string, unknown>;
+    const projectId = requireString(input.projectId, "projectId", 200);
+    assertProjectExists(projectId);
+    if (typeof input.text !== "string" || input.text.length > 100_000) throw new Error("Draft text is invalid");
+    const messageId = requireString(input.messageId, "messageId", 200);
+    const attachmentIds = Array.isArray(input.attachmentIds)
+      ? [...new Set(input.attachmentIds.map((id) => requireString(id, "attachmentId", 200)))].slice(0, 100)
+      : [];
+    if (attachmentIds.length > 0) {
+      const placeholders = attachmentIds.map(() => "?").join(",");
+      const rows = db().raw.prepare(`SELECT id FROM message_attachments WHERE project_id = ? AND message_id = ? AND id IN (${placeholders})`).all(projectId, messageId, ...attachmentIds) as Array<{ id: string }>;
+      const valid = new Set(rows.map((row) => row.id));
+      if (attachmentIds.some((id) => !valid.has(id))) throw new Error("Draft contains an attachment outside its project/message");
+    }
+    const mode = requireString(input.mode, "mode", 20) as ComposerDraftInput["mode"];
+    if (!["MANUAL", "SEQUENTIAL", "PARALLEL", "DEBATE"].includes(mode)) throw new Error("Invalid draft mode");
+    const continuationPolicy = requireString(input.continuationPolicy, "continuationPolicy", 20) as ComposerDraftInput["continuationPolicy"];
+    if (!["autonomous", "approval"].includes(continuationPolicy)) throw new Error("Invalid continuation policy");
+    const providers = Array.isArray(input.providers)
+      ? [...new Set(input.providers.map((provider) => parseProvider(requireString(provider, "provider", 100))))]
+      : [];
+    const starter = parseProvider(requireString(input.starter, "starter", 100));
+    const viewMode = requireString(input.viewMode, "viewMode", 20) as ComposerDraftInput["viewMode"];
+    if (!["SYNTHESIZED", "LIVE"].includes(viewMode)) throw new Error("Invalid draft view mode");
+    const finalizerMode = requireString(input.finalizerMode, "finalizerMode", 30) as ComposerDraftInput["finalizerMode"];
+    if (!["MANUAL", "LEAD_SELECTS", "PEER_AGREEMENT"].includes(finalizerMode)) throw new Error("Invalid finalizer mode");
+    const finalResponder = requireString(input.finalResponder, "finalResponder", 100);
+    const saved = new ComposerDraftRepository(db().raw).save({
+      projectId, text: input.text, messageId, attachmentIds, mode, continuationPolicy,
+      starter, providers, viewMode, finalizerMode, finalResponder,
+      composerExpanded: Boolean(input.composerExpanded),
+    });
+    return saved;
+  });
+  handle("composerDraft:clear", (_event, projectIdValue: unknown) => {
+    const projectId = requireString(projectIdValue, "projectId", 200);
+    assertProjectExists(projectId);
+    new ComposerDraftRepository(db().raw).clear(projectId);
+    logEvent("INFO", "composer.draft.cleared", { projectId });
+    return { success: true };
   });
   handle("projects:list", () => new ProjectRepository(db()).listProjects());
   handle("projects:create", (_event, nameOrInput: unknown, providersValue: unknown) => {

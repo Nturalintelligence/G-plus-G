@@ -57,6 +57,11 @@ const api = {
     get: () => ipcRenderer.invoke("settings:get"),
     save: (value) => ipcRenderer.invoke("settings:save", value),
   },
+  composerDraft: {
+    get: (projectId) => ipcRenderer.invoke("composerDraft:get", projectId),
+    save: (value) => ipcRenderer.invoke("composerDraft:save", value),
+    clear: (projectId) => ipcRenderer.invoke("composerDraft:clear", projectId),
+  },
   cliTasks: {
     list: (projectId) => ipcRenderer.invoke("cliTasks:list", projectId),
     approve: (projectId, taskId) => ipcRenderer.invoke("cliTasks:approve", { projectId, taskId }),

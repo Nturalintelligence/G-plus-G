@@ -46,9 +46,24 @@ After: `id`, `messageId`, `projectId`, `kind`, `fileName`, `mimeType`, `sizeByte
 
 ## Phase B.1 UI polish — 2026-08-24
 
-- Composer images are fixed 64×64 thumbnails with cover crop, tooltip, remove action and modal preview; documents remain compact rectangular cards.
+- Composer images are fixed 72×72 thumbnails with cover crop, tooltip, remove action and modal preview; documents remain compact rectangular cards.
 - Preview is bounded to 90vw × 90vh, uses contain sizing, and closes by button, Escape or backdrop.
 - Intermediate model turns no longer expand inline. They open in a persistent-scroll right drawer (420–650 px, default) or application fullscreen view; narrow windows force fullscreen presentation.
 - Discussion presentation is persisted in local settings as `RIGHT_DRAWER` or `FULLSCREEN`.
 - READY view remains limited to user entries plus the explicit final/system result.
 - Seven turns for a trivial prompt remains a separate semantic-stopping defect; orchestration was not changed.
+
+## Crash-safe composer draft — 2026-08-24
+
+- A versioned SQLite migration adds one atomic draft row per project.
+- Debounced renderer persistence covers text, attachment ids and order, run mode,
+  continuation policy, starter, participants, synthesized/live view, finalizer,
+  final responder and expanded composer state.
+- Project switching restores only that project's row and reconciles ordered ids
+  with the safe attachment DTO returned by the main process.
+- The last snapshot is retained while a run is in flight. It is cleared only
+  after the orchestration call succeeds; failure restores it for an explicit
+  user decision. Recovery never sends or retries automatically.
+- Packaged crash smoke kills the Electron process after the debounced SQLite
+  write, reopens the same data root and verifies full recovery, attachment order,
+  zero orchestration runs and zero provider submissions.
