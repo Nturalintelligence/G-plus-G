@@ -64,7 +64,13 @@ function metricValue(metric: MetricSummaryView): string {
   return metric.average.toFixed(metric.average % 1 === 0 ? 0 : 1);
 }
 
-export type AttachedFileItem = AttachmentRefView & { previewUrl?: string };
+export type AttachedFileItem = AttachmentRefView;
+
+function formatAttachmentSize(sizeBytes: number): string {
+  if (sizeBytes < 1024) return `${sizeBytes} B`;
+  if (sizeBytes < 1024 * 1024) return `${(sizeBytes / 1024).toFixed(1)} KB`;
+  return `${(sizeBytes / (1024 * 1024)).toFixed(1)} MB`;
+}
 
 const fallbackSettings: AppSettingsView = {
   schemaVersion: 1,
@@ -170,25 +176,16 @@ function App(): React.JSX.Element {
   const outputRef = useRef<HTMLElement>(null);
 
   async function addAttachmentRefs(refs: AttachmentRefView[]): Promise<void> {
-    const accepted: AttachedFileItem[] = [];
-    const rejected: AttachmentRefView[] = [];
-    for (const ref of refs) {
-      if (ref.status === "QUARANTINED" || ref.status === "FAILED") {
-        rejected.push(ref);
-        continue;
-      }
-      const previewUrl = ref.kind === "image"
-        ? await window.orchestrator.attachments.getPreviewUrl(ref.id)
-        : null;
-      accepted.push({ ...ref, ...(previewUrl ? { previewUrl } : {}) });
-    }
-    if (accepted.length > 0) {
-      setAttachedFiles((previous) => [...previous, ...accepted]);
-      setStatus(`Прикреплено файлов: ${accepted.length}`);
-    }
-    if (rejected.length > 0) {
-      setStatus(`Отклонено вложений: ${rejected.map((item) => item.fileName).join(", ")}`);
-    }
+    if (refs.length === 0) return;
+    setAttachedFiles((previous) => {
+      const byId = new Map(previous.map((item) => [item.id, item]));
+      for (const ref of refs) byId.set(ref.id, ref);
+      return [...byId.values()];
+    });
+    const rejected = refs.filter((ref) => ref.status === "QUARANTINED" || ref.status === "FAILED" || ref.status === "UNSUPPORTED");
+    setStatus(rejected.length > 0
+      ? `Есть вложения с ошибкой: ${rejected.map((item) => item.fileName).join(", ")}`
+      : `Прикреплено файлов: ${refs.length}`);
   }
 
   async function handlePickFiles() {
@@ -228,10 +225,20 @@ function App(): React.JSX.Element {
   async function removeFile(attachmentId: string) {
     try {
       await window.orchestrator.attachments.removeDraft(attachmentId);
-    } catch {
-      // Ignore cleanup error
+      setAttachedFiles((previous) => previous.filter((item) => item.id !== attachmentId));
+    } catch (error) {
+      setStatus(`Не удалось удалить вложение: ${String(error)}`);
     }
-    setAttachedFiles((prev: any[]) => prev.filter((f: any) => f.id !== attachmentId));
+  }
+
+  async function retryFile(attachmentId: string) {
+    try {
+      const retried = await window.orchestrator.attachments.retryDraft(attachmentId);
+      setAttachedFiles((previous) => previous.map((item) => item.id === attachmentId ? retried : item));
+      setStatus(retried.status === "STAGED" ? "Вложение снова готово к отправке" : retried.error ?? retried.status);
+    } catch (error) {
+      setStatus(`Повторная проверка не удалась: ${String(error)}`);
+    }
   }
 
   async function handlePaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
@@ -244,24 +251,21 @@ function App(): React.JSX.Element {
       const file = item.getAsFile();
       if (!file) continue;
 
-      if (file.type.startsWith("image/")) {
-        const reader = new FileReader();
-        reader.onload = async (event) => {
-          const base64Data = event.target?.result as string;
-          if (base64Data) {
-            try {
-              const ref = await window.orchestrator.attachments.stageClipboardImage(
-                current.project.id,
-                draftMessageId,
-                base64Data
-              );
-              await addAttachmentRefs([ref]);
-            } catch (err: any) {
-              setStatus(`Ошибка вставки из буфера: ${err.message}`);
-            }
-          }
-        };
-        reader.readAsDataURL(file);
+      try {
+        const ref = file.type.startsWith("image/")
+          ? await window.orchestrator.attachments.stageClipboard(
+              current.project.id,
+              draftMessageId,
+              new Uint8Array(await file.arrayBuffer()),
+              file.type,
+              file.name || undefined,
+            )
+          : await window.orchestrator.attachments.stageDroppedFile(current.project.id, draftMessageId, file);
+        await addAttachmentRefs([ref]);
+      } catch (err: any) {
+        setStatus(file.type.startsWith("image/")
+          ? `Ошибка вставки из буфера: ${err.message}`
+          : `Буфер Windows не предоставил безопасный путь к документу. Используйте скрепку или перетащите файл.`);
       }
     }
   }
@@ -397,8 +401,8 @@ function App(): React.JSX.Element {
     ]);
     setCurrent(details);
     setCliTasks(tasks);
-    setAttachedFiles([]);
-    setDraftMessageId(`msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`);
+    setAttachedFiles(details.attachmentDraft?.attachments ?? []);
+    setDraftMessageId(details.attachmentDraft?.messageId ?? `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`);
     const nextState = details.state?.state ?? structuredClone(initialState);
     setProjectState(nextState);
     setStateText(JSON.stringify(nextState, null, 2));
@@ -408,12 +412,12 @@ function App(): React.JSX.Element {
   const [activeUserError, setActiveUserError] = useState<UserFacingError | null>(null);
 
   async function run(): Promise<void> {
-    const submittedTask = task.trim();
+    const submittedTask = task.trim() || (attachedFiles.length > 0 ? "Пожалуйста, проанализируй прикреплённые файлы." : "");
     if (!current) {
       setShowNoProjectToast(true);
       return;
     }
-    if (!submittedTask || running || providers.length === 0) return;
+    if (!submittedTask || running || providers.length === 0 || attachedFiles.some((file) => file.status === "FAILED" || file.status === "QUARANTINED" || file.status === "UNSUPPORTED")) return;
     const projectId = current.project.id;
     setOptimisticUserTask(submittedTask);
     setTask("");
@@ -933,6 +937,21 @@ function App(): React.JSX.Element {
                         {entry.round ? <small>ход {entry.round}</small> : null}
                       </header>
                       <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml>{entry.content}</ReactMarkdown>
+                      {entry.attachments?.length ? (
+                        <div className="message-attachments">
+                          {entry.attachments.map((file) => (
+                            <button
+                              type="button"
+                              className="message-attachment-card"
+                              key={file.id}
+                              onClick={() => file.previewUrl ? setPreviewImageModalUrl(file.previewUrl) : void window.orchestrator.attachments.open(file.id)}
+                            >
+                              {file.previewUrl ? <img src={file.previewUrl} alt="" /> : <AttachmentIcon />}
+                              <span><strong>{file.fileName}</strong><small>{file.mimeType} · {formatAttachmentSize(file.sizeBytes)}</small></span>
+                            </button>
+                          ))}
+                        </div>
+                      ) : null}
                       {entry.role === "ASSISTANT" ? (
                         <button className="relay" onClick={() => relay(entry)}>
                           Передать дальше
@@ -1044,7 +1063,7 @@ function App(): React.JSX.Element {
                 ) : (
                   <button
                     className="action-btn send primary telegram-btn"
-                    disabled={!current || !task.trim() || providers.length === 0}
+                    disabled={!current || (!task.trim() && attachedFiles.length === 0) || providers.length === 0 || attachedFiles.some((file) => file.status === "FAILED" || file.status === "QUARANTINED" || file.status === "UNSUPPORTED")}
                     onClick={() => void run()}
                     title="Отправить сообщение"
                   >
@@ -1075,7 +1094,12 @@ function App(): React.JSX.Element {
                         <polyline points="13 2 13 9 20 9" />
                       </svg>
                     )}{" "}
-                    <span className="attached-file-name">{f.fileName}</span>
+                    <span className="attached-file-details">
+                      <span className="attached-file-name">{f.fileName}</span>
+                      <small>{f.mimeType} · {formatAttachmentSize(f.sizeBytes)} · {f.status}</small>
+                      {f.error ? <small className="attachment-error">{f.error}</small> : null}
+                    </span>
+                    {f.status === "FAILED" ? <button aria-label={`Повторить вложение ${f.fileName}`} onClick={() => void retryFile(f.id)}>↻</button> : null}
                     <button aria-label={`Удалить вложение ${f.fileName}`} onClick={() => removeFile(f.id)}>×</button>
                   </span>
                 ))}

@@ -405,4 +405,15 @@ export const migrations: readonly Migration[] = [
       ALTER TABLE projects ADD COLUMN description TEXT NOT NULL DEFAULT '';
     `,
   },
+  {
+    version: 9,
+    name: "attachment_draft_lifecycle",
+    sql: `
+      ALTER TABLE message_attachments ADD COLUMN draft_expires_at TEXT;
+      ALTER TABLE message_attachments ADD COLUMN last_error TEXT;
+      ALTER TABLE message_attachments ADD COLUMN updated_at TEXT;
+      CREATE INDEX message_attachments_draft_idx
+        ON message_attachments(project_id, message_id, draft_expires_at);
+    `,
+  },
 ];

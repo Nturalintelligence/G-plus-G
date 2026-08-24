@@ -28,6 +28,7 @@ const EXPECTED_MIME_BY_EXTENSION: Readonly<Record<string, readonly string[]>> = 
   ".jpg": ["image/jpeg"],
   ".jpeg": ["image/jpeg"],
   ".gif": ["image/gif"],
+  ".webp": ["image/webp"],
   ".pdf": ["application/pdf"],
   ".txt": ["text/plain"],
   ".md": ["text/markdown", "text/plain"],
@@ -169,6 +170,11 @@ export function sniffMimeType(buffer: Buffer, originalFileName: string): string 
     if (buffer[0] === 0x25 && buffer[1] === 0x50 && buffer[2] === 0x44 && buffer[3] === 0x46) return "application/pdf";
     if (buffer[0] === 0x50 && buffer[1] === 0x4b && buffer[2] === 0x03 && buffer[3] === 0x04) return "application/zip";
   }
+  if (
+    buffer.length >= 12 &&
+    buffer.subarray(0, 4).toString("ascii") === "RIFF" &&
+    buffer.subarray(8, 12).toString("ascii") === "WEBP"
+  ) return "image/webp";
 
   const ext = path.extname(originalFileName).toLowerCase();
   if (isLikelyUtf8Text(buffer)) {

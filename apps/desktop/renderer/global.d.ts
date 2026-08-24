@@ -83,11 +83,12 @@ interface Window {
     attachments: {
       pickFiles(projectId: string, messageId: string): Promise<AttachmentRefView[]>;
       stageDroppedFile(projectId: string, messageId: string, file: File): Promise<AttachmentRefView>;
-      stageClipboardImage(projectId: string, messageId: string, base64Data: string): Promise<AttachmentRefView>;
+      stageClipboard(projectId: string, messageId: string, bytes: Uint8Array, mimeType: string, fileName?: string): Promise<AttachmentRefView>;
+      listDraft(projectId: string): Promise<{ messageId: string; attachments: AttachmentRefView[] } | null>;
+      retryDraft(attachmentId: string): Promise<AttachmentRefView>;
       removeDraft(attachmentId: string): Promise<{ success: boolean }>;
       open(attachmentId: string): Promise<{ success: boolean; error?: string }>;
-      saveAs(attachmentId: string): Promise<{ success: boolean; targetPath?: string }>;
-      getPreviewUrl(attachmentId: string): Promise<string | null>;
+      saveAs(attachmentId: string): Promise<{ success: boolean; fileName?: string }>;
     };
   };
 }
@@ -100,10 +101,10 @@ interface AttachmentRefView {
   fileName: string;
   mimeType: string;
   sizeBytes: number;
-  sha256: string;
-  localRelativePath: string;
   source: "user" | "chatgpt" | "gemini" | "cli";
-  status: "STAGED" | "UPLOADING" | "READY" | "FAILED" | "QUARANTINED";
+  status: "STAGED" | "UPLOADING" | "READY" | "FAILED" | "QUARANTINED" | "UNSUPPORTED";
+  previewUrl?: string;
+  error?: string;
   quarantineReason?: "EXECUTABLE_BLOCKED" | "MIME_MISMATCH" | "SIZE_LIMIT" | "UNSAFE_FILENAME" | "MANUAL_REVIEW_REQUIRED";
 }
 
@@ -194,6 +195,7 @@ interface ProjectDetails {
     occurredAt: string;
   }>;
   transcript: ConversationEntryView[];
+  attachmentDraft?: { messageId: string; attachments: AttachmentRefView[] } | null;
   state: StateVersion | null;
 }
 
@@ -204,6 +206,7 @@ interface ConversationEntryView {
   round: number | null;
   content: string;
   createdAt: string;
+  attachments?: AttachmentRefView[];
 }
 
 interface StateVersion {

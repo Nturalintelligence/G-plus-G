@@ -82,11 +82,15 @@ const api = {
       if (!filePath) throw new Error("Dropped file has no trusted local path");
       return ipcRenderer.invoke("attachments:stageDroppedFile", { projectId, messageId, filePath });
     },
-    stageClipboardImage: (projectId, messageId, base64Data) => ipcRenderer.invoke("attachments:stageClipboardImage", { projectId, messageId, base64Data }),
+    stageClipboard: (projectId, messageId, bytes, mimeType, fileName) => {
+      if (!(bytes instanceof Uint8Array)) throw new Error("Clipboard attachment must be Uint8Array");
+      return ipcRenderer.invoke("attachments:stageClipboard", { projectId, messageId, bytes, mimeType, fileName });
+    },
+    listDraft: (projectId) => ipcRenderer.invoke("attachments:listDraft", { projectId }),
+    retryDraft: (attachmentId) => ipcRenderer.invoke("attachments:retryDraft", attachmentId),
     removeDraft: (attachmentId) => ipcRenderer.invoke("attachments:removeDraft", attachmentId),
     open: (attachmentId) => ipcRenderer.invoke("attachments:open", attachmentId),
     saveAs: (attachmentId) => ipcRenderer.invoke("attachments:saveAs", attachmentId),
-    getPreviewUrl: (attachmentId) => ipcRenderer.invoke("attachments:getPreviewUrl", attachmentId),
   },
 };
 

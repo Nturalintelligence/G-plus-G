@@ -46,7 +46,13 @@ import { TaskFsmRepository } from "../../src/storage/task-fsm-repository.js";
 import { ThreeTierMemoryManager } from "../../src/context/three-tier-memory.js";
 import { ContextRolloverManager } from "../../src/context/context-rollover.js";
 import { PromptRegistry } from "../../src/orchestrator/prompt-registry.js";
-import { DEFAULT_MAX_ARTIFACT_BYTES, LocalArtifactStore } from "../../src/attachments/artifact-store.js";
+import { LocalArtifactStore } from "../../src/attachments/artifact-store.js";
+import {
+  AttachmentStagingService,
+  toRendererAttachment,
+  type RendererAttachmentDto,
+} from "../../src/attachments/attachment-staging.js";
+import { AttachmentDraftLifecycle } from "../../src/attachments/attachment-draft-lifecycle.js";
 
 let mainWindow: BrowserWindow | null = null;
 let database: AppDatabase | null = null;
@@ -66,6 +72,10 @@ protocol.registerSchemesAsPrivileged([
       supportFetchAPI: true,
       corsEnabled: true,
     },
+  },
+  {
+    scheme: "attachment-preview",
+    privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true },
   },
 ]);
 
@@ -117,26 +127,39 @@ function findAttachmentRef(attachmentId: string): AttachmentRefV1 | null {
   return row ? attachmentRefFromRow(row) : null;
 }
 
-function persistAttachmentRef(ref: AttachmentRefV1): void {
-  db().raw.prepare(`
-    INSERT INTO message_attachments
-    (id, message_id, project_id, kind, file_name, mime_type, size_bytes, sha256, local_relative_path, source, status, quarantine_reason, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    ref.id,
-    ref.messageId,
-    ref.projectId,
-    ref.kind,
-    ref.fileName,
-    ref.mimeType,
-    ref.sizeBytes,
-    ref.sha256,
-    ref.localRelativePath,
-    ref.source,
-    ref.status,
-    ref.quarantineReason ?? null,
-    new Date().toISOString(),
-  );
+function attachmentDtoFromRow(row: Record<string, unknown>): RendererAttachmentDto {
+  const dto = toRendererAttachment(attachmentRefFromRow(row));
+  const lastError = row.last_error ? String(row.last_error) : undefined;
+  return lastError ? { ...dto, error: lastError } : dto;
+}
+
+function attachmentViewsForProject(projectId: string): {
+  transcriptAttachments: Record<string, RendererAttachmentDto[]>;
+  draft: { messageId: string; attachments: RendererAttachmentDto[] } | null;
+} {
+  const rows = db().raw.prepare(`
+    SELECT ma.*,
+      CASE WHEN ce.id IS NULL THEN 1 ELSE 0 END AS is_draft
+    FROM message_attachments ma
+    LEFT JOIN conversation_entries ce ON ce.id = ma.message_id
+    WHERE ma.project_id = ?
+    ORDER BY ma.created_at, ma.rowid
+  `).all(projectId) as Array<Record<string, unknown>>;
+  const transcriptAttachments: Record<string, RendererAttachmentDto[]> = {};
+  const draftRows = rows.filter((row) => Number(row.is_draft) === 1);
+  const activeDraftId = draftRows.at(-1)?.message_id ? String(draftRows.at(-1)!.message_id) : null;
+  for (const row of rows) {
+    const messageId = String(row.message_id);
+    if (Number(row.is_draft) === 0) {
+      (transcriptAttachments[messageId] ??= []).push(attachmentDtoFromRow(row));
+    }
+  }
+  return {
+    transcriptAttachments,
+    draft: activeDraftId
+      ? { messageId: activeDraftId, attachments: draftRows.filter((row) => String(row.message_id) === activeDraftId).map(attachmentDtoFromRow) }
+      : null,
+  };
 }
 
 async function closeActiveAdapters(): Promise<void> {
@@ -345,6 +368,25 @@ function registerRendererProtocol(): void {
     }
     return net.fetch(pathToFileURL(filePath).toString());
   });
+  protocol.handle("attachment-preview", (request) => {
+    try {
+      const url = new URL(request.url);
+      const id = decodeURIComponent(url.pathname.replace(/^\/+/, ""));
+      if (url.hostname !== "local" || !/^[A-Za-z0-9_-]{1,200}$/.test(id)) {
+        return new Response("Forbidden", { status: 403 });
+      }
+      const ref = findAttachmentRef(id);
+      if (!ref || ref.kind !== "image" || ref.status === "FAILED" || ref.status === "QUARANTINED") {
+        return new Response("Not found", { status: 404 });
+      }
+      const bytes = new LocalArtifactStore().readVerifiedBuffer(ref);
+      return new Response(new Uint8Array(bytes), {
+        headers: { "Content-Type": ref.mimeType, "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" },
+      });
+    } catch {
+      return new Response("Not found", { status: 404 });
+    }
+  });
 }
 
 function registerIpc(): void {
@@ -415,9 +457,11 @@ function registerIpc(): void {
     const repository = new ProjectRepository(db());
     const project = repository.openProject(projectId);
     if (!project) throw new Error(`Project not found: ${projectId}`);
+    new AttachmentDraftLifecycle(db().raw).expireAndCleanup();
     const recoveredRuns = activeOrchestrator
       ? 0
       : repository.recoverUnfinishedRuns(projectId);
+    const attachmentViews = attachmentViewsForProject(projectId);
     return {
       project,
       recoveredTurns: activeOrchestrator
@@ -430,7 +474,11 @@ function registerIpc(): void {
         externalRef: c.externalRef,
       })),
       events: repository.projectEvents(projectId),
-      transcript: repository.conversationEntries(projectId),
+      transcript: repository.conversationEntries(projectId).map((entry) => ({
+        ...entry,
+        attachments: attachmentViews.transcriptAttachments[entry.id] ?? [],
+      })),
+      attachmentDraft: attachmentViews.draft,
       state: new ProjectStateService(db()).latest(projectId),
     };
   });
@@ -832,21 +880,14 @@ function registerIpc(): void {
     const result = await dialog.showOpenDialog(mainWindow!, {
       properties: ["openFile", "multiSelections"],
       title: "Select Attachments",
-      filters: [{ name: "Supported files", extensions: ["txt", "md", "pdf", "png", "jpg", "jpeg"] }],
+      filters: [{ name: "Supported files", extensions: ["txt", "md", "pdf", "png", "jpg", "jpeg", "webp"] }],
     });
     if (result.canceled || !result.filePaths.length) return [];
 
-    const store = new LocalArtifactStore();
-    const refs: AttachmentRefV1[] = [];
+    const staging = new AttachmentStagingService(db().raw);
+    const refs: RendererAttachmentDto[] = [];
     for (const filePath of result.filePaths) {
-      const ref = store.storeFileFromPath(filePath, {
-        projectId,
-        messageId,
-        source: "user",
-        originalFileName: path.basename(filePath),
-      });
-      persistAttachmentRef(ref);
-      refs.push(ref);
+      refs.push(staging.stagePath(filePath, { projectId, messageId }));
     }
     return refs;
   });
@@ -857,45 +898,59 @@ function registerIpc(): void {
     const filePath = requireString(data?.filePath, "filePath", 1000);
     assertProjectExists(projectId);
 
-    const store = new LocalArtifactStore();
-    const ref = store.storeFileFromPath(filePath, {
-      projectId,
-      messageId,
-      source: "user",
-      originalFileName: path.basename(filePath),
-    });
-    persistAttachmentRef(ref);
-    return ref;
+    return new AttachmentStagingService(db().raw).stagePath(filePath, { projectId, messageId });
   });
-  handle("attachments:stageClipboardImage", async (_event, input: unknown) => {
-    const data = input as { projectId?: string; messageId?: string; base64Data?: string };
+  handle("attachments:stageClipboard", async (_event, input: unknown) => {
+    const data = input as { projectId?: string; messageId?: string; bytes?: unknown; mimeType?: string; fileName?: string };
     const projectId = requireString(data?.projectId, "projectId", 200);
     const messageId = requireString(data?.messageId, "messageId", 200);
-    const base64Data = requireString(data?.base64Data, "base64Data", 16_000_000);
-    assertProjectExists(projectId);
-    const match = /^data:image\/(png|jpe?g);base64,([A-Za-z0-9+/]+={0,2})$/.exec(base64Data);
-    if (!match) throw new Error("Clipboard attachment must be a PNG or JPEG data URL");
-    const encodedImage = match[2];
-    if (!encodedImage) throw new Error("Clipboard image payload is missing");
-    const fileBuf = Buffer.from(encodedImage, "base64");
-    if (fileBuf.length === 0 || fileBuf.length > DEFAULT_MAX_ARTIFACT_BYTES) {
-      throw new Error("Clipboard image is empty or exceeds the size limit");
+    const mimeType = requireString(data?.mimeType, "mimeType", 100).toLowerCase();
+    if (!new Set(["image/png", "image/jpeg", "image/webp"]).has(mimeType)) {
+      throw new Error(`Clipboard type ${mimeType} is unsupported; use file picker or drag-and-drop`);
     }
-
-    const store = new LocalArtifactStore();
-    const ref = store.storeBuffer(fileBuf, {
-      projectId,
-      messageId,
-      source: "user",
-      originalFileName: `pasted_screenshot_${Date.now()}.${match[1] === "png" ? "png" : "jpg"}`,
-    });
-    persistAttachmentRef(ref);
-    return ref;
+    assertProjectExists(projectId);
+    const extension = mimeType === "image/png" ? "png" : mimeType === "image/webp" ? "webp" : "jpg";
+    const requestedName = typeof data.fileName === "string" && data.fileName.trim()
+      ? path.basename(data.fileName.trim())
+      : `pasted_image_${Date.now()}.${extension}`;
+    return new AttachmentStagingService(db().raw).stageBytes(
+      data.bytes,
+      { projectId, messageId },
+      requestedName.toLowerCase().endsWith(`.${extension}`) ? requestedName : `pasted_image_${Date.now()}.${extension}`,
+    );
+  });
+  handle("attachments:listDraft", (_event, input: unknown) => {
+    const data = input as { projectId?: string };
+    const projectId = requireString(data?.projectId, "projectId", 200);
+    assertProjectExists(projectId);
+    return attachmentViewsForProject(projectId).draft;
+  });
+  handle("attachments:retryDraft", (_event, attachmentId: unknown) => {
+    const id = requireString(attachmentId, "attachmentId", 200);
+    const ref = findAttachmentRef(id);
+    if (!ref) throw new Error("Attachment not found");
+    const sentEntry = db().raw.prepare("SELECT 1 AS found FROM conversation_entries WHERE id=?").get(ref.messageId);
+    if (sentEntry) throw new Error("Sent attachments cannot be retried as drafts");
+    if (ref.status === "QUARANTINED") throw new Error("Quarantined attachments cannot be retried");
+    const integrity = new LocalArtifactStore().verifyIntegrity(ref);
+    if (!integrity.valid) {
+      db().raw.prepare("UPDATE message_attachments SET status='FAILED', last_error=?, updated_at=? WHERE id=?")
+        .run(`Integrity check failed: ${integrity.reason}`, new Date().toISOString(), id);
+    } else {
+      const now = new Date();
+      const expires = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString();
+      db().raw.prepare("UPDATE message_attachments SET status='STAGED', last_error=NULL, draft_expires_at=?, updated_at=? WHERE id=?")
+        .run(expires, now.toISOString(), id);
+    }
+    const row = db().raw.prepare("SELECT * FROM message_attachments WHERE id=?").get(id) as Record<string, unknown>;
+    return attachmentDtoFromRow(row);
   });
   handle("attachments:removeDraft", (_event, attachmentId: unknown) => {
     const id = requireString(attachmentId, "attachmentId", 200);
     const ref = findAttachmentRef(id);
     if (!ref) return { success: true };
+    const sentEntry = db().raw.prepare("SELECT 1 AS found FROM conversation_entries WHERE id=?").get(ref.messageId);
+    if (sentEntry) throw new Error("Cannot remove an attachment from transcript history");
     const deliveryCount = db().raw.prepare("SELECT COUNT(*) AS count FROM attachment_deliveries WHERE attachment_id = ?").get(id) as { count: number };
     if (deliveryCount.count > 0) throw new Error("Cannot remove an attachment that has delivery history");
     db().raw.prepare("DELETE FROM message_attachments WHERE id = ?").run(id);
@@ -913,7 +968,7 @@ function registerIpc(): void {
     if (ref.status === "QUARANTINED" || ref.status === "FAILED") {
       return { success: false, error: `Attachment is not safe to open: ${ref.quarantineReason ?? ref.status}` };
     }
-    const openableMimeTypes = new Set(["text/plain", "text/markdown", "application/pdf", "image/png", "image/jpeg"]);
+    const openableMimeTypes = new Set(["text/plain", "text/markdown", "application/pdf", "image/png", "image/jpeg", "image/webp"]);
     if (!openableMimeTypes.has(ref.mimeType)) return { success: false, error: `Opening ${ref.mimeType} is not allowed` };
 
     const store = new LocalArtifactStore();
@@ -935,20 +990,7 @@ function registerIpc(): void {
     const store = new LocalArtifactStore();
     const buf = store.readVerifiedBuffer(ref);
     fs.writeFileSync(saveRes.filePath, buf);
-    return { success: true, targetPath: saveRes.filePath };
-  });
-  handle("attachments:getPreviewUrl", (_event, attachmentId: unknown) => {
-    const id = requireString(attachmentId, "attachmentId", 200);
-    const ref = findAttachmentRef(id);
-    if (!ref || ref.kind !== "image" || ref.status === "QUARANTINED" || ref.status === "FAILED") return null;
-
-    try {
-      const store = new LocalArtifactStore();
-      const buf = store.readVerifiedBuffer(ref);
-      return `data:${ref.mimeType};base64,${buf.toString("base64")}`;
-    } catch {
-      return null;
-    }
+    return { success: true, fileName: path.basename(saveRes.filePath) };
   });
 }
 

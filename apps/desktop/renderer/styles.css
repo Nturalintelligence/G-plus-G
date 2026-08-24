@@ -2159,3 +2159,54 @@ fieldset label textarea {
 .cli-task-error {
   color: #ff8e8e;
 }
+.attached-files-row,
+.message-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.attached-file-tag,
+.message-attachment-card {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border-color-card);
+  border-radius: 10px;
+  background: var(--surface-card, rgba(127, 127, 127, 0.08));
+  color: inherit;
+}
+
+.attached-file-details,
+.message-attachment-card > span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.attached-file-name {
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attached-file-tag small,
+.message-attachment-card small {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.attachment-error { color: var(--danger, #c2413b) !important; }
+
+.attached-file-preview,
+.message-attachment-card img {
+  width: 38px;
+  height: 38px;
+  border-radius: 7px;
+  object-fit: cover;
+}
