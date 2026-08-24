@@ -72,3 +72,17 @@ attachments, response files or restart probing.
 Do not change authorization again without a new reproducible defect and direct
 owner command. Continue the remaining base fixes as isolated local checkpoints;
 do not start the experimental runtime or full soak.
+# Phase C.1 handoff — 2026-08-24
+
+- Production orchestration now emits one `ProviderTurnEnvelopeV1` through one
+  adapter `sendMessage` call for each provider turn. Bootstrap, current task,
+  peer/candidates, attachment references and continuation instructions share
+  that atomic message.
+- Migration 11 persists protocol version/hash/text/initialization/checkpoint by
+  provider conversation. Successful completion advances state; failed or
+  unknown turns do not.
+- Reused conversations omit the base protocol; changed identities emit a short
+  bounded delta. Projects and ChatGPT/Gemini conversations remain independent.
+- No authenticated provider profile was opened. Live UAT remains owner-gated.
+- Next authorized phase: Phase D response-file retrieval. Do not touch
+  `experimental` or its runtime/stash.

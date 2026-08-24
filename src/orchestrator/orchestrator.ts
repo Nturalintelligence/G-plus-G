@@ -16,15 +16,21 @@ import type {
 import type { AppDatabase } from "../storage/database.js";
 import { ProjectRepository } from "../storage/repository.js";
 import {
-  buildDirectPrompt,
-  buildFinalizationPrompt,
-  buildPeerReviewPrompt,
-  buildIncrementalPrompt,
-  buildInitialCollaborationPrompt,
+  COLLABORATION_PROTOCOL,
+  COLLABORATION_PROTOCOL_HASH,
+  COLLABORATION_PROTOCOL_VERSION,
   hasTerminalConsensusMarker,
   stripConsensusMarkers,
   type PromptCustomizations,
 } from "./prompt-builder.js";
+import { ProviderProtocolStateRepository } from "./provider-protocol-state.js";
+import {
+  attachmentEnvelopeRefs,
+  buildProviderTurnPrompt,
+  compactCandidates,
+  compactPeer,
+  type ProviderTurnEnvelopeV1,
+} from "./provider-turn-envelope.js";
 import {
   defaultLimits,
   validateLimits,
@@ -224,13 +230,12 @@ export class Orchestrator {
     const repository = new ProjectRepository(this.database);
     const taskCompiler = new TaskCompiler(new TaskFsmRepository(this.database.raw));
     let memoryContext: PromptMemoryContext | undefined;
-    const providersWithExistingConversation = new Set(
-      repository
-        .getConversationsForProject(projectId)
-        .filter((conversation) => Boolean(conversation.externalRef))
-        .map((conversation) => conversation.providerId),
-    );
-    const providersGivenProtocol = new Set(providersWithExistingConversation);
+    const protocolStates = new ProviderProtocolStateRepository(this.database.raw);
+    const protocolIdentity = {
+      version: COLLABORATION_PROTOCOL_VERSION,
+      hash: COLLABORATION_PROTOCOL_HASH,
+      text: COLLABORATION_PROTOCOL,
+    };
     let persistedUserMessageId = userMessageId;
     let charsSent = 0;
     const processModelText = (rawText: string): string => {
@@ -250,18 +255,14 @@ export class Orchestrator {
     };
     const cleanProgressText = (rawText: string): string =>
       stripConsensusMarkers(taskCompiler.cleanPublicTranscript(rawText));
-    const customizationsFor = (
-      providerId: string,
-      includeProtocol: boolean,
-    ): PromptCustomizations => ({
+    const customizationsFor = (providerId: string): PromptCustomizations => ({
       ...(options.promptCustomizations?.[providerId] ?? {}),
-      includeProtocol,
       ...(memoryContext?.projectBrief ? { projectBrief: memoryContext.projectBrief } : {}),
       ...(memoryContext?.decisionLedger ? { decisionLedger: memoryContext.decisionLedger } : {}),
     });
     const askInPhase = async (
       providerId: string,
-      message: string,
+      envelope: Omit<ProviderTurnEnvelopeV1, "protocolVersion" | "role" | "customInstructions">,
       phase: RunPhase,
       round: number,
       turnAttachments?: AttachmentRefV1[],
@@ -275,9 +276,19 @@ export class Orchestrator {
         round,
         charsSent,
       });
-      const preparedMessage = directive?.continuationPrompt
-        ? `${directive.continuationPrompt}\n\n${message}`
-        : message;
+      const conversation = repository.getOrCreateConversation(projectId, providerId);
+      const protocolPlan = protocolStates.plan(providerId, conversation.id, protocolIdentity);
+      const preparedMessage = buildProviderTurnPrompt(
+        {
+          ...envelope,
+          ...(directive?.continuationPrompt
+            ? { continuationInstruction: directive.continuationPrompt }
+            : {}),
+        },
+        COLLABORATION_PROTOCOL_VERSION,
+        protocolPlan,
+        customizationsFor(providerId),
+      );
       charsSent += preparedMessage.length;
       const rawText = await this.ask(
         projectId,
@@ -291,6 +302,12 @@ export class Orchestrator {
         turnAttachments,
         persistedUserMessageId,
       );
+      protocolStates.markInitialized(
+        providerId,
+        conversation.id,
+        protocolIdentity,
+        memoryContext?.checkpointId,
+      );
       await options.contextHooks?.onTurnCompleted?.({
         projectId,
         runId,
@@ -301,8 +318,6 @@ export class Orchestrator {
       });
       return rawText;
     };
-    // Each provider web chat already owns its history. Re-sending the local
-    // transcript duplicates old messages and makes every later prompt larger.
     const initialMessage = task;
     const responses: RunOutput["responses"] = [];
     const startedAt = Date.now();
@@ -350,13 +365,21 @@ export class Orchestrator {
             limits,
             askInPhase(
               providerId,
-              buildDirectPrompt(initialMessage, customizationsFor(providerId, false)),
+              {
+                runId,
+                round: 1,
+                mode: effectiveMode,
+                phase: "DISCUSSION",
+                task: initialMessage,
+                ...buildRelevantContextField(memoryContext),
+                ...buildAttachmentRefsField(attachments),
+                outputContract: { kind: "WORKING_ANSWER" },
+              },
               "DISCUSSION",
               1,
               attachments,
             ),
           );
-          providersGivenProtocol.add(providerId);
           const response: RunOutput["responses"][number] = {
             providerId,
             text: processModelText(rawText),
@@ -381,7 +404,16 @@ export class Orchestrator {
           limits,
           askInPhase(
             providerId,
-            buildDirectPrompt(initialMessage, customizationsFor(providerId, false)),
+            {
+              runId,
+              round: 1,
+              mode: effectiveMode,
+              phase: "DISCUSSION",
+              task: initialMessage,
+              ...buildRelevantContextField(memoryContext),
+              ...buildAttachmentRefsField(attachments),
+              outputContract: { kind: "FINAL_ANSWER" },
+            },
             "DISCUSSION",
             1,
             attachments,
@@ -416,25 +448,22 @@ export class Orchestrator {
             break;
           }
           const providerId = providerIds[turn % providerIds.length]!;
-          const includeProtocol = !providersGivenProtocol.has(providerId);
-          const customizations = customizationsFor(providerId, includeProtocol);
           const previous = responses.at(-1);
-          const message = turn === 0
-            ? buildInitialCollaborationPrompt(
-                initialMessage,
-                effectiveMode === "DEBATE",
-                effectiveMode === "DEBATE" ? consensusToken : undefined,
-                customizations,
-              )
-            : effectiveMode === "DEBATE"
-              ? buildIncrementalPrompt(
-                  initialMessage,
-                  previous ? [previous] : [],
-                  turn + 1,
-                  consensusToken,
-                  customizations,
-                )
-              : buildPeerReviewPrompt(initialMessage, previous?.text ?? "", customizations);
+          const message: Omit<ProviderTurnEnvelopeV1, "protocolVersion" | "role" | "customInstructions"> = {
+            runId,
+            round: turn + 1,
+            mode: effectiveMode,
+            phase: "DISCUSSION",
+            task: initialMessage,
+            ...buildRelevantContextField(memoryContext),
+            ...(previous ? { peerContribution: compactPeer(previous.providerId, previous.text) } : {}),
+            ...(turn < providerIds.length ? buildAttachmentRefsField(attachments) : {}),
+            outputContract: {
+              kind: "WORKING_ANSWER",
+              ...(effectiveMode === "DEBATE" ? { consensusToken } : {}),
+              maxChars: 12_000,
+            },
+          };
           const rawText = await this.withSessionLimit(
             startedAt,
             limits,
@@ -446,7 +475,6 @@ export class Orchestrator {
               turn < providerIds.length ? attachments : undefined,
             ),
           );
-          providersGivenProtocol.add(providerId);
           const agreed =
             effectiveMode === "DEBATE" && hasTerminalConsensusMarker(rawText, consensusToken);
           const text = processModelText(stripConsensusMarkers(rawText));
@@ -496,16 +524,24 @@ export class Orchestrator {
       if (effectiveMode !== "MANUAL" && outcome !== "USER_STOPPED" && responses.length > 0) {
         const finalizerProviderId = selectedFinalizerProvider;
         const finalRound = responses.length + 1;
-        const finalPrompt = buildFinalizationPrompt(
-          initialMessage,
-          responses,
-          outcome,
-          customizationsFor(finalizerProviderId, false),
-        );
         const finalRawText = await this.withSessionLimit(
           startedAt,
           limits,
-          askInPhase(finalizerProviderId, finalPrompt, "FINALIZE", finalRound),
+          askInPhase(
+            finalizerProviderId,
+            {
+              runId,
+              round: finalRound,
+              mode: effectiveMode,
+              phase: "FINALIZE",
+              task: initialMessage,
+              ...buildRelevantContextField(memoryContext),
+              candidates: compactCandidates(responses),
+              outputContract: { kind: "FINAL_ANSWER", discussionOutcome: outcome },
+            },
+            "FINALIZE",
+            finalRound,
+          ),
         );
         const finalText = processModelText(stripConsensusMarkers(finalRawText));
         persistResponse({
@@ -1006,6 +1042,26 @@ function isNonRetryableTurnError(error: unknown): boolean {
   return /target (page|context|browser).*closed|turn cancelled|profile is already in use|manual reconciliation is required/i.test(
     message,
   );
+}
+
+function buildRelevantContextField(memoryContext: PromptMemoryContext | undefined):
+  Pick<ProviderTurnEnvelopeV1, "relevantContext"> | Record<string, never> {
+  if (!memoryContext?.projectBrief && !memoryContext?.decisionLedger?.length && !memoryContext?.checkpointId) {
+    return {};
+  }
+  return {
+    relevantContext: {
+      ...(memoryContext.projectBrief ? { projectBrief: memoryContext.projectBrief } : {}),
+      ...(memoryContext.decisionLedger?.length ? { acceptedDecisions: memoryContext.decisionLedger } : {}),
+      ...(memoryContext.checkpointId ? { checkpointRevision: memoryContext.checkpointId } : {}),
+    },
+  };
+}
+
+function buildAttachmentRefsField(attachments: readonly AttachmentRefV1[] | undefined):
+  Pick<ProviderTurnEnvelopeV1, "attachmentRefs"> | Record<string, never> {
+  const attachmentRefs = attachmentEnvelopeRefs(attachments);
+  return attachmentRefs?.length ? { attachmentRefs } : {};
 }
 
 function normalizeRunOptions(

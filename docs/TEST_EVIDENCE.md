@@ -233,3 +233,18 @@ No live provider UAT was run in this phase.
 
 Live ChatGPT/Gemini UAT: **NOT RUN — BLOCKED_BY_OWNER_APPROVAL**. No
 authenticated profile was opened and no external message/file was sent.
+
+## Phase C.1 compact provider prompt lifecycle — 2026-08-24
+
+| Check | Result | Evidence |
+|---|---|---|
+| One visible message per turn | PASS_LOCAL | Production Orchestrator invokes adapter `sendMessage` once with one atomic envelope; no bootstrap/continuation/status side call exists. |
+| First conversation | PASS_LOCAL | Full protocol and current task occur in the same recorded adapter input. |
+| Restart/reuse | PASS_LOCAL | A new Orchestrator over the same SQLite conversation omits the base protocol. |
+| Protocol update | PASS_LOCAL | Version/hash mismatch produces a bounded delta, not a full transcript/protocol replay. |
+| Isolation | PASS_LOCAL | State is keyed independently by provider and conversation; ChatGPT and Gemini do not initialize each other. |
+| Peer/final/context | PASS_LOCAL | Bounded peer/candidate data, continuation instruction, checkpoint and attachment metadata remain fields of the same envelope. |
+| Public output | PASS | Consensus and CLI markers remain stripped from progress/final transcript. |
+| Regression suite | PASS | 53 files, 230/230 tests before final build gate. |
+
+Live ChatGPT/Gemini UAT: **NOT RUN — BLOCKED_BY_OWNER_APPROVAL**.

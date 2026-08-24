@@ -3,30 +3,28 @@
 Status: **IMPLEMENTED and locally tested** for the 0.1 base branch. Live provider
 UAT is still required.
 
-## Composition
+## Composition and visible-message invariant
 
-A provider prompt is assembled from bounded layers:
+Every invoked provider receives exactly one visible user message per orchestration
+turn. `ProviderTurnEnvelopeV1` atomically contains the current task, bounded
+project context, optional latest peer contribution/candidates, attachment
+references, continuation instruction and output contract. The first message in a
+provider conversation prefixes that same envelope with the collaboration
+protocol; there is no separate bootstrap, continuation or status message.
 
-1. the static collaboration protocol and its version marker;
-2. mode-specific instructions (manual, sequential, parallel, or debate);
-3. optional provider role and user-saved custom instruction;
-4. a compact project brief and accepted decision ledger when supplied;
-5. the current user task or current peer candidate;
-6. a phase-specific finalization request when an explicit final answer is needed.
-
-The full local transcript is never replayed into every web chat. A provider with
-an existing conversation URL receives an incremental prompt; a new conversation
-receives the base protocol. The current implementation tracks this during a run
-and through persisted conversation references. Durable per-conversation protocol
-hash metadata is still a future hardening item.
+The full local transcript is never replayed. Peer content is bounded and marked
+as untrusted data. Attachments are browser uploads associated with the same turn,
+not extra text messages.
 
 ## Version and updates
 
-`productive-protocol.ts` owns the protocol identity. Static instructions are
-sent once per newly initialized provider conversation. Later turns contain only
-the relevant task, peer material, compact context, and phase constraints. A
-future protocol version change should send a short version update rather than
-the entire historical transcript.
+`prompt-builder.ts` owns the protocol version, SHA-256 identity and text.
+`provider_protocol_states` persists initialization independently by provider and
+conversation, including an optional project checkpoint revision. The row is
+written only after a confirmed provider response, so a failed/unknown submission
+cannot silently suppress required initialization. Same-version turns omit the
+protocol. A changed version/hash emits a bounded line delta with the same turn
+envelope instead of replaying the old protocol.
 
 ## Modes
 
@@ -77,8 +75,8 @@ download URLs and filenames remain untrusted inputs.
 
 ## Test cases
 
-Golden/focused coverage includes a first turn, reused chat, direct and debate
-prompts, peer prompt injection, provider custom role/prompt, exact consensus,
-explicit finalization, progress correlation/sanitization, cancellation and long
-bounded board cycles. Provider DOM and account behavior remains the manual UAT
-boundary.
+Golden/focused coverage includes atomic first-turn bootstrap, restart/reuse,
+provider isolation, bounded protocol delta, direct/debate/final envelopes, peer
+prompt injection, custom role/prompt, exact consensus, continuation in-envelope,
+progress correlation/sanitization, cancellation and long bounded board cycles.
+Provider DOM and account behavior remains the manual UAT boundary.

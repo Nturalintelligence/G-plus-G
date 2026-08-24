@@ -28,6 +28,9 @@ All notable project checkpoints are recorded here.
   truthful remote deletion, comprehensive local cleanup and keyboard accessibility.
 - Added factual feature, prompt and known-issue documentation with explicit
   `BLOCKED_BY_AUTH`, `PARTIAL`, and experimental boundaries.
+- Compacted provider prompt lifecycle to one atomic visible message per turn,
+  with durable per-conversation protocol version/hash/checkpoint state and
+  bounded bootstrap/reuse/delta behavior across restarts.
 
 ### Security and cleanup
 

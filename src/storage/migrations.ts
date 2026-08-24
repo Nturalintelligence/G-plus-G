@@ -437,4 +437,20 @@ export const migrations: readonly Migration[] = [
       );
     `,
   },
+  {
+    version: 11,
+    name: "provider_protocol_initialization_state",
+    sql: `
+      CREATE TABLE provider_protocol_states (
+        provider_id TEXT NOT NULL,
+        conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        protocol_version TEXT NOT NULL,
+        protocol_hash TEXT NOT NULL,
+        protocol_text TEXT NOT NULL,
+        initialized_at TEXT NOT NULL,
+        project_checkpoint_revision TEXT,
+        PRIMARY KEY (provider_id, conversation_id)
+      );
+    `,
+  },
 ];
