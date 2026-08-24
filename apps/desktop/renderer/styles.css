@@ -472,6 +472,8 @@ h2 {
 .workspace {
   display: flex;
   flex-direction: column;
+  min-width: 0;
+  min-height: 0;
   height: 100%;
   overflow: hidden;
   padding: 20px;
@@ -481,6 +483,8 @@ h2 {
 
 .output {
   flex: 1;
+  min-width: 0;
+  min-height: 0;
   overflow-y: auto;
   overflow-wrap: anywhere;
   padding-right: 8px;
@@ -2174,6 +2178,10 @@ fieldset label textarea {
 .composer-bottom .attached-files-row {
   width: 100%;
   align-items: center;
+  align-content: flex-start;
+  max-height: 144px;
+  overflow-x: hidden;
+  overflow-y: auto;
   padding-top: 2px;
 }
 

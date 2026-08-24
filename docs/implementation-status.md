@@ -29,6 +29,10 @@ An item is not considered complete merely because an interface or UI control exi
 - Phase B local attachment lifecycle: unified staging, binary clipboard IPC,
   safe renderer DTO, WebP preview, file-only submit, transcript/draft restore,
   expiry and reference-safe cleanup.
+- Phase B.1 real visual gate: native full-window evidence for detailed PNG,
+  JPEG and WebP originals across three window sizes, light/dark themes and
+  100/125/150% Electron DPI factors; bounded composer attachment strip,
+  viewport-safe preview and complete drawer/fullscreen discussion views.
 
 ## Required acceptance work
 

@@ -111,3 +111,30 @@ Provider upload behavior was not exercised or modified; it remains the explicit 
 | Light/dark and 100/125/150% visual scaling | PASS |
 
 No provider adapter or orchestration source was changed in Phase B.1.
+
+## Phase B.1 real visual acceptance gate — 2026-08-24
+
+Evidence root: `output/playwright/phase-b1-real-gate/` (ignored generated
+artifacts). Machine-readable scenario details are in
+`visual-gate-report.json`; each PNG is a native Win32 full-window capture with
+the Electron title/menu frame. The capture helper is per-monitor DPI-aware.
+
+| Check | Result | Evidence |
+|---|---|---|
+| Production clipboard route | PASS | Seven detailed `File` payloads dispatched through the composer paste handler, preload IPC and managed staging store. |
+| Original bytes/dimensions | PASS | 1920x1080, 2560x1440, 3840x2160, 1080x1920, 3440x1440 PNG; 2400x1600 JPEG; 1920x1080 WebP. Preview natural dimensions equal sources; 4K source remains 6,533,978 bytes. |
+| Composer geometry | PASS | Cards <=88x88, strip/composer containment, no document horizontal overflow, remove controls contained, textarea/send fully visible. |
+| Theme/window/DPI matrix | PASS | 18 native screenshots: light/dark x 1280x720, 1366x768, 1920x1080 x Electron DPI factors 100/125/150%; page zoom factor asserted at 1.0. Host Windows display scale was 150%. |
+| Middle removal/reflow | PASS | Six-card row compacts into the removed fourth card's former position. |
+| Preview modal | PASS | Viewport-contained 90vw/90vh preview; Escape, backdrop and close-button exits verified. |
+| Discussion views | PASS | Long Russian seven-turn chronology in right drawer, fullscreen, and 700x760 narrow fullscreen. |
+| Manual visual review | PASS | All 23 full-window PNGs reviewed after automated assertions; no clipping, app overflow, other-app contamination or expanded inline original. |
+| `npm run check` | PASS | 49 files, 213/213 tests. |
+| `npm run test:security` / `npm run security:guard` | PASS | 37/37 focused tests; 91 production files scanned. |
+| `npm run package` / `npm run smoke:packaged` | PASS | Windows unpacked app and NSIS installer rebuilt; packaged smoke passed without provider calls. |
+
+The gate exposed and fixed a flex minimum-size defect that could push the
+composer below the visible workspace for long transcript content. The output
+pane now has an explicit zero flex minimum, and a large attachment set scrolls
+inside a bounded 144 px strip. Provider adapters and orchestration were not
+changed. Phase C and the deferred Phase C.1 prompt lifecycle were not started.
