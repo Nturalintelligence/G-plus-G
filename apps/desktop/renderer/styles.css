@@ -84,6 +84,15 @@
   box-sizing: border-box;
 }
 
+html,
+body,
+#root {
+  width: 100%;
+  max-width: 100%;
+  height: 100%;
+  min-width: 0;
+}
+
 body {
   margin: 0;
   background: var(--bg-primary);
@@ -310,7 +319,9 @@ h2 {
 /* Dynamic Layout Grid */
 .layout {
   display: grid;
-  grid-template-columns: 280px 1fr;
+  grid-template-columns: 280px minmax(0, 1fr);
+  min-width: 0;
+  max-width: 100%;
   height: calc(100vh - 56px);
   overflow: hidden;
 }
@@ -320,11 +331,11 @@ h2 {
 }
 
 .layout.has-inspector {
-  grid-template-columns: 280px 1fr 360px;
+  grid-template-columns: 280px minmax(0, 1fr) 360px;
 }
 
 .layout.collapsed-sidebar.has-inspector {
-  grid-template-columns: 1fr 360px;
+  grid-template-columns: minmax(0, 1fr) 360px;
 }
 
 /* Sidebar Pane & ChatGPT/Apple-Style Footer */
@@ -543,6 +554,9 @@ h2 {
 
 /* Transcript Messages */
 .message {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
   border: 1px solid var(--border-color-card);
   border-radius: 16px;
   padding: 16px 20px;
@@ -595,6 +609,24 @@ h2 {
 .message>header small,
 .empty {
   color: var(--text-muted);
+}
+
+.message p,
+.message pre,
+.message blockquote {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.message p > img {
+  display: block;
+  width: 72px;
+  height: 72px;
+  max-width: 72px;
+  max-height: 72px;
+  object-fit: cover;
+  overflow: hidden;
 }
 
 /* Big Tech Composer Panel */
@@ -1130,17 +1162,21 @@ fieldset label textarea {
 /* Fullscreen Image Preview Modal */
 .image-preview-modal-card {
   position: relative;
-  width: min(90vw, 1400px);
-  height: min(90vh, 1000px);
+  width: auto;
+  height: auto;
   max-width: 90vw;
   max-height: 90vh;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
+  overflow: auto;
 }
 
 .full-preview-image {
+  display: block;
+  width: auto;
+  height: auto;
   max-width: 100%;
   max-height: 100%;
   object-fit: contain;
@@ -1150,9 +1186,10 @@ fieldset label textarea {
 }
 
 .image-preview-modal-card .close-modal-btn {
-  position: absolute;
-  top: -40px;
-  right: 0;
+  position: fixed;
+  top: max(14px, calc(5vh - 42px));
+  right: max(14px, calc(5vw - 42px));
+  z-index: 1;
   color: #ffffff;
   font-size: 32px;
 }
@@ -2172,25 +2209,26 @@ fieldset label textarea {
   gap: 8px;
   margin-top: 10px;
   max-width: 100%;
-  overflow: hidden;
+  min-width: 0;
 }
 
 .composer-bottom .attached-files-row {
+  flex-wrap: nowrap;
   width: 100%;
   align-items: center;
   align-content: flex-start;
-  max-height: 144px;
-  overflow-x: hidden;
-  overflow-y: auto;
+  max-height: 88px;
+  overflow-x: auto;
+  overflow-y: hidden;
   padding-top: 2px;
 }
 
 .attachment-thumbnail {
   position: relative;
   display: block;
-  flex: 0 0 64px;
-  width: 64px;
-  height: 64px;
+  flex: 0 0 72px;
+  width: 72px;
+  height: 72px;
   overflow: hidden;
   border: 1px solid var(--border-color-card);
   border-radius: 10px;
@@ -2230,6 +2268,7 @@ fieldset label textarea {
 
 .document-attachment-card {
   flex: 0 1 320px;
+  min-width: 0;
   max-width: min(320px, 100%);
 }
 
@@ -2239,6 +2278,8 @@ fieldset label textarea {
   align-items: center;
   gap: 9px;
   min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
   padding: 8px 10px;
   border: 1px solid var(--border-color-card);
   border-radius: 10px;
@@ -2271,6 +2312,8 @@ fieldset label textarea {
 
 .attached-file-preview,
 .message-attachment-card img {
+  display: block;
+  flex: 0 0 38px;
   width: 38px;
   height: 38px;
   border-radius: 7px;

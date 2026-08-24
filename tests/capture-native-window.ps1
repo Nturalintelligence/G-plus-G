@@ -16,6 +16,8 @@ public static class NativeWindowCapture {
   public static extern bool SetForegroundWindow(IntPtr hWnd);
   [DllImport("user32.dll")]
   public static extern bool PrintWindow(IntPtr hWnd, IntPtr hdcBlt, uint flags);
+  [DllImport("user32.dll")]
+  public static extern uint GetDpiForWindow(IntPtr hWnd);
   [DllImport("shcore.dll")]
   public static extern int SetProcessDpiAwareness(int value);
 }
@@ -44,4 +46,4 @@ try {
   $graphics.Dispose()
   $bitmap.Dispose()
 }
-[pscustomobject]@{ Width = $width; Height = $height; Path = $OutputPath } | ConvertTo-Json -Compress
+[pscustomobject]@{ Width = $width; Height = $height; Dpi = [NativeWindowCapture]::GetDpiForWindow($handle); Path = $OutputPath } | ConvertTo-Json -Compress

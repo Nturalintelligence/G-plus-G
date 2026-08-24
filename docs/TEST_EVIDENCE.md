@@ -112,7 +112,12 @@ Provider upload behavior was not exercised or modified; it remains the explicit 
 
 No provider adapter or orchestration source was changed in Phase B.1.
 
-## Phase B.1 real visual acceptance gate — 2026-08-24
+## Phase B.1 real visual acceptance gate — 2026-08-24 (SUPERSEDED)
+
+This result was rejected after owner evidence showed that its assertions did
+not enforce the final 72x72 closed-DOM contract or a body-level preview portal.
+Do not use this section as release evidence; the corrective gate below replaces
+it.
 
 Evidence root: `output/playwright/phase-b1-real-gate/` (ignored generated
 artifacts). Machine-readable scenario details are in
@@ -138,3 +143,33 @@ composer below the visible workspace for long transcript content. The output
 pane now has an explicit zero flex minimum, and a large attachment set scrolls
 inside a bounded 144 px strip. Provider adapters and orchestration were not
 changed. Phase C and the deferred Phase C.1 prompt lifecycle were not started.
+
+## Phase B.1 attachment renderer corrective gate — 2026-08-24
+
+The same packaged Electron regression test was run before and after the
+production renderer change. Before the change it failed with an actual card
+bounding box of 64x64 (`left=317, top=537, right=381, bottom=601`). Assertions
+were then held at the owner-specified values.
+
+The immutable owner fixture is
+`tests/fixtures/user-regression-screenshot.png`: 1912x1199, 433,245 bytes,
+SHA-256 `07898756903D65C5DB9DF607CE68E2F9B39C562310C0F78C40AE1E9F1640E30B`.
+It is tested with separate 1920x1080 and 3840x2160 screenshots. All three enter
+the production composer through the Electron system clipboard and `Ctrl+V`.
+
+| Check | Result | Evidence |
+|---|---|---|
+| Closed composer DOM | PASS | Exactly three attachment preview images, all inside `.attachment-thumbnail`; no modal preview image remains in DOM. |
+| Exact cards | PASS | At 1920x1080/zoom 1: `(317,959)-(389,1031)`, `(397,959)-(469,1031)`, `(477,959)-(549,1031)`; all exactly 72x72 CSS px. |
+| Strip bounds | PASS | 1566x74 CSS px; every card and 22x22 remove control remains inside the strip/card. |
+| Workspace overflow | PASS | `documentElement.scrollWidth=1920`, `clientWidth=1920`. |
+| Portal preview | PASS | Backdrop is a fixed `inset: 0` direct child of `document.body`; one original is bounded by 90vw/90vh. Escape, backdrop and close button remove it. |
+| Closed-after-preview | PASS | Three 72x72 cards remain; no modal image in DOM; `scrollWidth=clientWidth=1898` for the captured client area. |
+| Transcript attachments | PASS | Three sent screenshots render as compact cards with 38x38 thumbnail images; no document overflow. |
+| Native screenshots | PASS | Full 1920x1080 Electron window including system frame before preview, during preview, after preview, and with transcript cards. Effective per-window DPI is recorded in `visual-gate-report.json`. |
+| `npm run check` | PASS | 49 files, 213/213 tests. |
+| Security / package | PASS | 37/37 security tests, source guard, Electron package and packaged smoke. |
+
+Production changes are limited to renderer layout, compact attachment rendering,
+the body portal preview and the regression fixture/test. Phase C and Phase C.1
+were not started.

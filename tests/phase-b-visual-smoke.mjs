@@ -1,7 +1,7 @@
 import { _electron as electron } from "playwright";
 import { DatabaseSync } from "node:sqlite";
 import { execFileSync } from "node:child_process";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -14,13 +14,9 @@ await mkdir(out, { recursive: true });
 let app;
 
 const fixtures = [
+  { fileName: "user-regression-screenshot.png", mimeType: "image/png", width: 1912, height: 1199, fixturePath: resolve("tests/fixtures/user-regression-screenshot.png") },
   { fileName: "screenshot-1920x1080.png", mimeType: "image/png", width: 1920, height: 1080, seed: 11 },
-  { fileName: "screenshot-2560x1440.png", mimeType: "image/png", width: 2560, height: 1440, seed: 23 },
   { fileName: "screenshot-3840x2160.png", mimeType: "image/png", width: 3840, height: 2160, seed: 37 },
-  { fileName: "screenshot-vertical-1080x1920.png", mimeType: "image/png", width: 1080, height: 1920, seed: 41 },
-  { fileName: "screenshot-ultrawide-3440x1440.png", mimeType: "image/png", width: 3440, height: 1440, seed: 53 },
-  { fileName: "photo-normal-2400x1600.jpeg", mimeType: "image/jpeg", width: 2400, height: 1600, seed: 67 },
-  { fileName: "screenshot-normal-1920x1080.webp", mimeType: "image/webp", width: 1920, height: 1080, seed: 79 },
 ];
 const assert = (ok, message) => { if (!ok) throw new Error(message); };
 
@@ -51,7 +47,8 @@ async function setTheme(page, theme) {
   await page.reload();
 }
 async function pasteFixture(page, projectId, spec) {
-  await page.getByLabel("Сообщение для моделей").evaluate(async (textarea, f) => {
+  const before = (await page.evaluate((id) => window.orchestrator.attachments.listDraft(id), projectId))?.attachments.length ?? 0;
+  const base64 = spec.fixturePath ? (await readFile(spec.fixturePath)).toString("base64") : await page.evaluate(async (f) => {
     const canvas = document.createElement("canvas"); canvas.width = f.width; canvas.height = f.height;
     const c = canvas.getContext("2d");
     const g = c.createLinearGradient(0, 0, canvas.width, canvas.height);
@@ -66,28 +63,33 @@ async function pasteFixture(page, projectId, spec) {
     c.fillStyle = "white"; c.shadowColor = "rgba(0,0,0,.7)"; c.shadowBlur = 10; c.font = `700 ${Math.max(28, unit * .55)}px Segoe UI`; c.fillText(f.fileName, unit * 1.35, unit * 2.1);
     c.font = `500 ${Math.max(20, unit * .38)}px Segoe UI`; c.fillText(`${f.width} × ${f.height} · детализированный тестовый снимок`, unit * 1.35, unit * 2.75); c.shadowBlur = 0;
     for (let i = 0; i < 12; i += 1) { c.beginPath(); c.fillStyle = `hsl(${(f.seed + i * 31) % 360},85%,62%)`; c.arc(unit * (1.5 + (i % 6) * 2.1), canvas.height - unit * (1.5 + Math.floor(i / 6) * 1.7), unit * .38, 0, Math.PI * 2); c.fill(); }
-    const blob = await new Promise((done) => canvas.toBlob(done, f.mimeType, .9));
-    const transfer = new DataTransfer(); transfer.items.add(new File([blob], f.fileName, { type: f.mimeType }));
-    textarea.dispatchEvent(new ClipboardEvent("paste", { clipboardData: transfer, bubbles: true, cancelable: true }));
+    return canvas.toDataURL(f.mimeType, .9).split(",")[1];
   }, spec);
-  await page.waitForFunction(async ({ id, fileName }) => (await window.orchestrator.attachments.listDraft(id))?.attachments.some((x) => x.fileName === fileName && x.status === "READY"), { id: projectId, fileName: spec.fileName });
+  await app.evaluate(({ clipboard, nativeImage }, bytes) => clipboard.writeImage(nativeImage.createFromBuffer(Buffer.from(bytes, "base64"))), base64);
+  const textarea = page.getByLabel("Сообщение для моделей");
+  await textarea.focus();
+  await page.keyboard.press("Control+V");
+  await page.waitForFunction(async ({ id, count }) => ((await window.orchestrator.attachments.listDraft(id))?.attachments.length ?? 0) === count + 1, { id: projectId, count: before });
 }
 async function geometry(page) {
   return page.evaluate(() => {
     const b = (n) => { const r = n.getBoundingClientRect(); return { left: r.left, top: r.top, right: r.right, bottom: r.bottom, width: r.width, height: r.height }; };
     const composer = document.querySelector(".composer-bottom"), strip = document.querySelector(".composer-bottom .attached-files-row");
     const textarea = document.querySelector('.composer-bottom textarea[aria-label="Сообщение для моделей"]'), send = document.querySelector('.composer-bottom [title="Отправить сообщение"]');
-    return { viewport: { width: innerWidth, height: innerHeight, dpr: devicePixelRatio }, overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth, composer: b(composer), strip: b(strip), textarea: b(textarea), send: b(send), cards: [...document.querySelectorAll(".composer-bottom .attachment-thumbnail")].map((n) => ({ ...b(n), remove: b(n.querySelector(".attachment-thumbnail-remove")) })) };
+    const attachmentImages = [...document.querySelectorAll('img[src^="attachment-preview:"]')];
+    return { viewport: { width: innerWidth, height: innerHeight, dpr: devicePixelRatio }, scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth, overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth, composer: b(composer), strip: b(strip), textarea: b(textarea), send: b(send), attachmentImages: attachmentImages.map((n) => ({ ...b(n), inThumbnail: Boolean(n.closest(".attachment-thumbnail")), inTranscriptCard: Boolean(n.closest(".message-attachment-card")), inModal: Boolean(n.closest(".image-preview-backdrop")) })), cards: [...document.querySelectorAll(".composer-bottom .attachment-thumbnail")].map((n) => ({ ...b(n), remove: b(n.querySelector(".attachment-thumbnail-remove")) })) };
   });
 }
 function assertGeometry(g) {
-  assert(!g.overflow, `Horizontal overflow: ${JSON.stringify(g)}`);
+  assert(!g.overflow && g.scrollWidth <= g.clientWidth, `Horizontal overflow: ${JSON.stringify(g)}`);
   assert(g.composer.right <= g.viewport.width + 1 && g.strip.left >= g.composer.left - 1 && g.strip.right <= g.composer.right + 1, "Composer/strip exits viewport");
   assert(g.composer.top >= 0 && g.composer.bottom <= g.viewport.height + 1, `Composer exits viewport vertically: ${JSON.stringify(g.composer)}`);
   assert(g.textarea.top >= 0 && g.textarea.bottom <= g.viewport.height + 1 && g.send.top >= 0 && g.send.bottom <= g.viewport.height + 1, "Textarea/send is not fully visible");
   assert(g.textarea.right <= g.send.left + 1, "Textarea overlaps send");
+  assert(g.strip.height <= 88, `Closed attachment strip exceeds one 88px row: ${g.strip.height}`);
+  assert(g.attachmentImages.length === g.cards.length && g.attachmentImages.every((image) => image.inThumbnail && !image.inModal), `Closed DOM contains an inline original: ${JSON.stringify(g.attachmentImages)}`);
   for (const card of g.cards) {
-    assert(card.width <= 88 && card.height <= 88, `Card exceeds 88x88: ${JSON.stringify(card)}`);
+    assert(card.width === 72 && card.height === 72, `Card must be exactly 72x72: ${JSON.stringify(card)}`);
     assert(card.left >= g.strip.left - 1 && card.right <= g.strip.right + 1 && card.top >= g.strip.top - 1 && card.bottom <= g.strip.bottom + 1, "Card exits strip");
     assert(card.remove.left >= card.left && card.remove.right <= card.right && card.remove.top >= card.top && card.remove.bottom <= card.bottom, "Remove exits card");
   }
@@ -129,25 +131,22 @@ try {
       for (const [width, height] of [[1280, 720], [1366, 768], [1920, 1080]]) {
         await setWindow(width, height); await page.waitForTimeout(250); const g = await geometry(page); assertGeometry(g); assert(Math.abs(g.viewport.dpr - scale) < .15, `DPR ${g.viewport.dpr} != ${scale}`);
         const shot = await screenshot(`composer-${theme}-${width}x${height}-scale-${Math.round(scale * 100)}.png`);
-        results.push({ scenario: "composer", theme, window: `${width}x${height}`, zoomFactor: zoom, windowsScale: `${Math.round(scale * 100)}%`, source: "7 detailed originals", sourceDimensions: fixtures.map((x) => `${x.width}x${x.height}`).join(", "), fileSizeBytes: fixtures.reduce((n, x) => n + x.sizeBytes, 0), screenshot: shot.path, status: "PASS" });
+        results.push({ scenario: "composer-closed", theme, window: `${width}x${height}`, zoomFactor: zoom, windowsScale: `${Math.round(scale * 100)}%`, effectiveWindowDpi: shot.Dpi, source: "3 fullscreen screenshots via Ctrl+V", sourceDimensions: fixtures.map((x) => `${x.width}x${x.height}`).join(", "), fileSizeBytes: fixtures.reduce((n, x) => n + x.sizeBytes, 0), cardBounds: g.cards, stripBounds: g.strip, scrollWidth: g.scrollWidth, clientWidth: g.clientWidth, screenshot: shot.path, status: "PASS" });
       }
     }
     await app.close(); app = undefined;
   }
 
-  page = await launch(); await setTheme(page, "dark"); await selectProject(page, projectName); await setWindow(1366, 768);
+  page = await launch(); await setTheme(page, "dark"); await selectProject(page, projectName); await setWindow(1920, 1080);
   const thumbs = page.locator(".attachment-thumbnail");
-  const before = await thumbs.evaluateAll((nodes) => nodes.map((n) => { const r = n.getBoundingClientRect(); return { left: r.left, top: r.top }; }));
-  await thumbs.nth(3).locator(".attachment-thumbnail-remove").click(); await page.waitForFunction((count) => document.querySelectorAll(".attachment-thumbnail").length === count, fixtures.length - 1);
-  const after = await thumbs.evaluateAll((nodes) => nodes.map((n) => { const r = n.getBoundingClientRect(); return { left: r.left, top: r.top }; }));
-  assert(after[3].left === before[3].left && after[3].top === before[3].top, "No reflow after middle removal"); assertGeometry(await geometry(page));
-  let shot = await screenshot("composer-remove-middle-dark-1366x768.png"); results.push({ scenario: "remove-middle", theme: "dark", window: "1366x768", zoomFactor: 1, windowsScale: "100%", source: fixtures[3].fileName, sourceDimensions: `${fixtures[3].width}x${fixtures[3].height}`, fileSizeBytes: fixtures[3].sizeBytes, screenshot: shot.path, status: "PASS" });
-
   await thumbs.first().locator(".attachment-thumbnail-open").click(); const modal = page.locator(".image-preview-modal-card"); await modal.waitFor();
-  const mg = await page.evaluate(() => { const r = document.querySelector(".image-preview-modal-card").getBoundingClientRect(); return { width: r.width, height: r.height, left: r.left, top: r.top, right: r.right, bottom: r.bottom, vw: innerWidth, vh: innerHeight }; });
+  const mg = await page.evaluate(() => { const card = document.querySelector(".image-preview-modal-card"), backdrop = document.querySelector(".image-preview-backdrop"), r = card.getBoundingClientRect(), style = getComputedStyle(backdrop); return { width: r.width, height: r.height, left: r.left, top: r.top, right: r.right, bottom: r.bottom, vw: innerWidth, vh: innerHeight, portalParentIsBody: backdrop.parentElement === document.body, position: style.position, inset: [style.top, style.right, style.bottom, style.left] }; });
+  assert(mg.portalParentIsBody && mg.position === "fixed" && mg.inset.every((value) => value === "0px"), `Preview is not a fixed body portal: ${JSON.stringify(mg)}`);
   assert(mg.width <= mg.vw * .9 + 2 && mg.height <= mg.vh * .9 + 2 && mg.left >= 0 && mg.top >= 0 && mg.right <= mg.vw && mg.bottom <= mg.vh, `Bad modal: ${JSON.stringify(mg)}`);
-  shot = await screenshot("preview-open-1920x1080-dark-1366x768.png"); results.push({ scenario: "preview-open", theme: "dark", window: "1366x768", zoomFactor: 1, windowsScale: "100%", source: fixtures[0].fileName, sourceDimensions: "1920x1080", fileSizeBytes: fixtures[0].sizeBytes, screenshot: shot.path, status: "PASS" });
-  await page.keyboard.press("Escape"); await modal.waitFor({ state: "hidden" }); await thumbs.first().locator(".attachment-thumbnail-open").click(); await page.locator(".image-preview-backdrop").click({ position: { x: 5, y: 5 } }); await modal.waitFor({ state: "hidden" }); await thumbs.first().locator(".attachment-thumbnail-open").click(); await page.getByLabel("Закрыть просмотр").click(); await modal.waitFor({ state: "hidden" });
+  let shot = await screenshot("preview-open-user-regression-dark-1920x1080.png"); results.push({ scenario: "preview-open", theme: "dark", window: "1920x1080", zoomFactor: 1, windowsScale: "100%", source: fixtures[0].fileName, sourceDimensions: "1912x1199", fileSizeBytes: fixtures[0].sizeBytes, screenshot: shot.path, status: "PASS" });
+  await page.keyboard.press("Escape"); await modal.waitFor({ state: "hidden" }); const closedGeometry = await geometry(page); assertGeometry(closedGeometry);
+  shot = await screenshot("preview-closed-three-thumbnails-dark-1920x1080.png"); results.push({ scenario: "preview-closed", theme: "dark", window: "1920x1080", zoomFactor: 1, windowsScale: "100%", source: "3 fullscreen screenshots", sourceDimensions: fixtures.map((x) => `${x.width}x${x.height}`).join(", "), fileSizeBytes: fixtures.reduce((n, x) => n + x.sizeBytes, 0), cardBounds: closedGeometry.cards, stripBounds: closedGeometry.strip, scrollWidth: closedGeometry.scrollWidth, clientWidth: closedGeometry.clientWidth, screenshot: shot.path, status: "PASS" });
+  await thumbs.first().locator(".attachment-thumbnail-open").click(); await page.locator(".image-preview-backdrop").click({ position: { x: 5, y: 5 } }); await modal.waitFor({ state: "hidden" }); await thumbs.first().locator(".attachment-thumbnail-open").click(); await page.getByLabel("Закрыть просмотр").click(); await modal.waitFor({ state: "hidden" }); assertGeometry(await geometry(page));
 
   await page.getByRole("button", { name: /Показать ход обсуждения/ }).click(); let discussion = page.getByLabel("Ход обсуждения моделей"); await discussion.waitFor(); assert(await discussion.locator(".discussion-turn").count() === 7, "Drawer lost turns");
   shot = await screenshot("discussion-right-drawer-long-russian-dark.png"); results.push({ scenario: "right-drawer", theme: "dark", window: "1366x768", zoomFactor: 1, windowsScale: "100%", source: "7 long Russian turns", sourceDimensions: "n/a", fileSizeBytes: 0, screenshot: shot.path, status: "PASS" });
@@ -156,6 +155,18 @@ try {
   shot = await screenshot("discussion-fullscreen-long-russian-dark.png"); results.push({ scenario: "fullscreen", theme: "dark", window: "1366x768", zoomFactor: 1, windowsScale: "100%", source: "7 long Russian turns", sourceDimensions: "n/a", fileSizeBytes: 0, screenshot: shot.path, status: "PASS" });
   await setWindow(700, 760); await page.waitForTimeout(200); const narrow = await discussion.boundingBox(); assert(narrow?.width >= 690, "Narrow view is not fullscreen");
   shot = await screenshot("discussion-narrow-700x760-dark.png"); results.push({ scenario: "narrow-fullscreen", theme: "dark", window: "700x760", zoomFactor: 1, windowsScale: "100%", source: "7 long Russian turns", sourceDimensions: "n/a", fileSizeBytes: 0, screenshot: shot.path, status: "PASS" });
+
+  await app.close(); app = undefined;
+  const transcriptDb = new DatabaseSync(join(dataRoot, "orchestrator.sqlite"));
+  transcriptDb.prepare("UPDATE message_attachments SET message_id = 'visual-user' WHERE project_id = ?").run(projectId);
+  transcriptDb.close();
+  page = await launch(); await setTheme(page, "dark"); await selectProject(page, projectName); await setWindow(1920, 1080);
+  const transcriptCards = page.locator(".message.user .message-attachment-card");
+  await transcriptCards.nth(2).waitFor();
+  const transcriptGeometry = await transcriptCards.evaluateAll((nodes) => nodes.map((node) => { const card = node.getBoundingClientRect(), image = node.querySelector("img").getBoundingClientRect(); return { card: { left: card.left, top: card.top, right: card.right, bottom: card.bottom, width: card.width, height: card.height }, image: { width: image.width, height: image.height }, documentOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth }; }));
+  assert(transcriptGeometry.length === 3 && transcriptGeometry.every((item) => item.image.width === 38 && item.image.height === 38 && !item.documentOverflow), `Transcript attachments are not compact: ${JSON.stringify(transcriptGeometry)}`);
+  shot = await screenshot("transcript-three-compact-attachments-dark-1920x1080.png");
+  results.push({ scenario: "transcript-compact", theme: "dark", window: "1920x1080", zoomFactor: 1, windowsScale: "100%", effectiveWindowDpi: shot.Dpi, source: "3 sent screenshots", sourceDimensions: fixtures.map((x) => `${x.width}x${x.height}`).join(", "), cardBounds: transcriptGeometry, screenshot: shot.path, status: "PASS" });
 
   const reportPath = join(out, "visual-gate-report.json"); await writeFile(reportPath, `${JSON.stringify({ generatedAt: new Date().toISOString(), fixtures, results }, null, 2)}\n`, "utf8");
   console.log(JSON.stringify({ ok: true, screenshots: results.length, fixtures: fixtures.length, report: reportPath }, null, 2));

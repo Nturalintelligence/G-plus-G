@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { createRoot } from "react-dom/client";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -925,6 +926,21 @@ function App(): React.JSX.Element {
                           {entry.round ? <small>ход {entry.round}</small> : null}
                         </header>
                         <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml>{entry.content}</ReactMarkdown>
+                        {entry.attachments?.length ? (
+                          <div className="message-attachments">
+                            {entry.attachments.map((file) => (
+                              <button
+                                type="button"
+                                className="message-attachment-card"
+                                key={file.id}
+                                onClick={() => file.previewUrl ? setPreviewImageModalUrl(file.previewUrl) : void window.orchestrator.attachments.open(file.id)}
+                              >
+                                {file.previewUrl ? <img src={file.previewUrl} alt="" /> : <AttachmentIcon />}
+                                <span><strong>{file.fileName}</strong><small>{file.mimeType} · {formatAttachmentSize(file.sizeBytes)}</small></span>
+                              </button>
+                            ))}
+                          </div>
+                        ) : null}
                       </section>
                     ))}
                   </>
@@ -1435,13 +1451,14 @@ function App(): React.JSX.Element {
         </aside>
       ) : null}
 
-      {previewImageModalUrl ? (
+      {previewImageModalUrl ? createPortal(
         <div className="modal-backdrop image-preview-backdrop" role="presentation" onClick={() => setPreviewImageModalUrl(null)}>
           <div className="image-preview-modal-card" role="dialog" aria-modal="true" aria-label="Просмотр изображения" onClick={(e) => e.stopPropagation()}>
             <button className="close-modal-btn" aria-label="Закрыть просмотр" onClick={() => setPreviewImageModalUrl(null)}>×</button>
             <img src={previewImageModalUrl} alt="Полноэкранный просмотр" className="full-preview-image" />
           </div>
-        </div>
+        </div>,
+        document.body,
       ) : null}
 
       {webChatsDrawerOpen ? (
