@@ -37,6 +37,11 @@ An item is not considered complete merely because an interface or UI control exi
   ids, discussion mode/policy/starter, participants, view/finalizer/final
   responder and expanded state. Renderer changes are debounced, restored after a
   forced process kill, and never trigger an automatic run or provider submission.
+- Phase C provider upload is fail-closed in both ChatGPT and Gemini adapters:
+  capability and integrity preflight, exact browser FileList, stable composer-chip
+  evidence, ordered persisted upload/submit/confirmation states and no blind
+  retry from UNKNOWN. Production selector sets pass anonymized real-Chromium
+  PNG/JPEG/WebP/PDF/MD fixtures; live provider UAT remains approval-gated.
 
 ## Required acceptance work
 

@@ -654,15 +654,26 @@ export class Orchestrator {
         // The state record remains the authority if another observer advanced it.
       }
     };
-    const confirmAttachmentSubmission = (): void => {
+    const markAttachmentFilesUploaded = (attachmentIds: readonly string[] | undefined): void => {
       if (!attachmentSubmission) return;
+      const expected = [...attachmentSubmission.attachmentIds].sort();
+      const actual = [...new Set(attachmentIds ?? [])].sort();
+      if (JSON.stringify(actual) !== JSON.stringify(expected)) throw new Error("Provider upload evidence does not match the submitted attachment set");
       const deliveryManager = new AttachmentDeliveryManager(this.database.raw);
       for (const delivery of attachmentDeliveries) {
         deliveryManager.updateDeliveryStatus(delivery.id, "DELIVERED");
       }
       const submissionManager = new ProviderSubmissionManager(this.database.raw);
       submissionManager.updateState(attachmentSubmission.submissionId, "FILES_UPLOADED");
+    };
+    const markAttachmentMessageSubmitted = (): void => {
+      if (!attachmentSubmission) return;
+      const submissionManager = new ProviderSubmissionManager(this.database.raw);
       submissionManager.updateState(attachmentSubmission.submissionId, "SUBMITTED");
+    };
+    const confirmAttachmentSubmission = (): void => {
+      if (!attachmentSubmission) return;
+      const submissionManager = new ProviderSubmissionManager(this.database.raw);
       submissionManager.updateState(attachmentSubmission.submissionId, "CONFIRMED");
     };
     logEvent("INFO", "provider.turn.preparing", {
@@ -735,7 +746,11 @@ export class Orchestrator {
             const iterable = adapter.observeTurn(turn);
             if (iterable && typeof iterable[Symbol.asyncIterator] === "function") {
               for await (const event of iterable) {
-                if (event.type === "RESPONSE_UPDATED" && event.text && hooks.onResponseUpdate) {
+                if (event.type === "ATTACHMENTS_UPLOADED") {
+                  markAttachmentFilesUploaded(event.attachmentIds);
+                } else if (event.type === "MESSAGE_SUBMITTED") {
+                  markAttachmentMessageSubmitted();
+                } else if (event.type === "RESPONSE_UPDATED" && event.text && hooks.onResponseUpdate) {
                   const progress: RunProgressEvent = {
                     projectId,
                     runId: this.activeRunId ?? "unknown-run",
@@ -768,6 +783,7 @@ export class Orchestrator {
             }
           }
         } catch (error) {
+          if (attachmentSubmission) throw error;
           console.error(`[${providerId}] Streaming error:`, error);
         }
       })();
@@ -784,10 +800,10 @@ export class Orchestrator {
         // outlive the same turn deadline after the final result resolves.
         await Promise.race([observePromise, timeout]);
         if (timer) clearTimeout(timer);
+        confirmAttachmentSubmission();
         repository.addMessage(started.turn.id, attempt.id, "ASSISTANT", result.response);
         repository.finishAttempt(attempt.id, "COMPLETED");
         repository.updateTurnStatus(started.turn.id, "COMPLETED");
-        confirmAttachmentSubmission();
         metrics.record("provider.turn.success", 1, { providerId });
         metrics.record("provider.turn.elapsed_ms", Date.now() - metricStartedAt, {
           providerId,
@@ -814,6 +830,14 @@ export class Orchestrator {
       } catch (error) {
         // A turn reference means submission may already have reached the provider.
         // Retrying here can duplicate the user message, so fail safely.
+        await observePromise.catch((observationError) => {
+          logEvent("ERROR", "provider.turn.observation_failed", {
+            runId: this.activeRunId,
+            providerId,
+            turnId: started.turn.id,
+            error: observationError,
+          });
+        });
         await adapter.cancel(turn).catch(() => undefined);
         markAttachmentSubmissionUnknown();
         repository.finishAttempt(

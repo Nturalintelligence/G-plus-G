@@ -28,6 +28,7 @@ export interface TurnRef {
 }
 
 export type TurnEventType =
+  | "ATTACHMENTS_UPLOADED"
   | "MESSAGE_SUBMITTED"
   | "RESPONSE_STARTED"
   | "RESPONSE_UPDATED"
@@ -43,6 +44,7 @@ export interface TurnEvent {
   type: TurnEventType;
   at: string;
   text?: string;
+  attachmentIds?: string[];
 }
 
 export interface RecoveryResult {

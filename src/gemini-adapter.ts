@@ -10,7 +10,6 @@ import type {
   TurnEvent,
   TurnRef,
 } from "./adapters/adapter-contract.js";
-import { LocalArtifactStore } from "./attachments/artifact-store.js";
 import { ResponseArtifactDownloader } from "./attachments/artifact-downloader.js";
 import type { AttachmentRefV1 } from "./attachments/attachments.js";
 import { TurnChannel } from "./adapters/turn-channel.js";
@@ -37,6 +36,7 @@ import type {
   SessionState,
   TurnResult,
 } from "./types.js";
+import { uploadAttachmentsToComposer } from "./adapters/provider-attachment-upload.js";
 
 const GEMINI_URL = "https://gemini.google.com/app";
 const COMPOSERS = [
@@ -63,6 +63,20 @@ const USER_MESSAGES = [
   ".user-query-content",
   "user-query message-content",
 ];
+export const GEMINI_UPLOAD_SELECTORS = {
+  providerId: "gemini",
+  fileInputs: ['input[type="file"]', 'uploader-file-input input[type="file"]'],
+  attachmentButtons: ['button[aria-label*="Upload" i]', 'button[aria-label*="Прикреп" i]', 'button[aria-label*="Add file" i]', 'button[data-test-id*="upload" i]'],
+  attachmentEvidence: [
+    'file-chip',
+    'mat-chip:has([class*="file" i])',
+    '[data-test-id*="attachment" i]',
+    '[class*="attachment" i] [class*="file" i]',
+    'button[aria-label*="remove file" i]',
+  ],
+  uploadBusy: ['mat-progress-spinner', '[role="progressbar"]', '[aria-label*="uploading" i]', '[aria-busy="true"][class*="upload" i]'],
+  uploadErrors: ['[class*="upload-error" i]', '[role="alert"]:has-text("upload")', '[role="alert"]:has-text("загруз")'],
+} as const;
 interface GeminiTurn {
   channel: TurnChannel;
   result: Promise<TurnResult>;
@@ -199,7 +213,6 @@ export class GeminiAdapter implements ModelAdapter {
       supportsImages: true,
       supportsMultipleFiles: true,
       supportsResponseArtifacts: true,
-      verifiedAt: new Date().toISOString(),
     };
   }
 
@@ -290,34 +303,8 @@ export class GeminiAdapter implements ModelAdapter {
     const page = await this.ensurePage();
 
     if (attachments && attachments.length > 0) {
-      const store = new LocalArtifactStore();
-      const validPaths: string[] = [];
-      for (const att of attachments) {
-        if (att.status !== "QUARANTINED" && att.localRelativePath) {
-          try {
-            validPaths.push(store.resolveAbsolutePath(att.localRelativePath));
-          } catch {
-            // Ignore path violation
-          }
-        }
-      }
-
-      if (validPaths.length > 0) {
-        let fileInput = page.locator('input[type="file"], uploader-file-input input').first();
-        if ((await fileInput.count().catch(() => 0)) === 0) {
-          const attachBtn = page.locator('button[aria-label*="Upload"], button[aria-label*="Прикрепить"], button[aria-label*="Add"]').first();
-          if (await attachBtn.isVisible().catch(() => false)) {
-            await attachBtn.click().catch(() => undefined);
-            await page.waitForTimeout(300);
-            fileInput = page.locator('input[type="file"], uploader-file-input input').first();
-          }
-        }
-
-        if ((await fileInput.count().catch(() => 0)) > 0) {
-          await fileInput.setInputFiles(validPaths).catch(() => undefined);
-          await page.waitForTimeout(1000);
-        }
-      }
+      const evidence = await uploadAttachmentsToComposer(page, attachments, this.getCapabilities(), GEMINI_UPLOAD_SELECTORS);
+      channel?.publish({ type: "ATTACHMENTS_UPLOADED", at: evidence.confirmedAt, attachmentIds: evidence.attachmentIds });
     }
 
     const composers = await this.visibleComposers();

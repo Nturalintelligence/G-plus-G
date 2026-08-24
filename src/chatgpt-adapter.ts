@@ -10,7 +10,6 @@ import type {
   TurnEvent,
   TurnRef,
 } from "./adapters/adapter-contract.js";
-import { LocalArtifactStore } from "./attachments/artifact-store.js";
 import { ResponseArtifactDownloader } from "./attachments/artifact-downloader.js";
 import type { AttachmentRefV1 } from "./attachments/attachments.js";
 import { TurnChannel } from "./adapters/turn-channel.js";
@@ -41,6 +40,7 @@ import type {
   TurnResult,
 } from "./types.js";
 import { logEvent } from "./observability/logger.js";
+import { uploadAttachmentsToComposer } from "./adapters/provider-attachment-upload.js";
 
 const CHATGPT_URL = "https://chatgpt.com/";
 const RESPONSE_SELECTORS = [
@@ -64,6 +64,20 @@ const SEND_BUTTON_SELECTORS = [
   'button[aria-label*="Отправ" i]',
   'form button[type="submit"]',
 ];
+export const CHATGPT_UPLOAD_SELECTORS = {
+  providerId: "chatgpt",
+  fileInputs: ['input[type="file"]'],
+  attachmentButtons: ['button[aria-label*="Attach" i]', 'button[aria-label*="Прикреп" i]', 'button[data-testid="attach-button"]'],
+  attachmentEvidence: [
+    '[data-testid*="attachment" i]',
+    '[data-testid*="file" i]',
+    'button[aria-label*="remove file" i]',
+    'button[aria-label*="удалить файл" i]',
+    'form [class*="attachment" i]',
+  ],
+  uploadBusy: ['[aria-label*="uploading" i]', '[aria-label*="загруз" i][aria-busy="true"]', '[role="progressbar"]'],
+  uploadErrors: ['[data-testid*="attachment-error" i]', '[role="alert"]:has-text("upload")', '[role="alert"]:has-text("загруз")'],
+} as const;
 export interface AdapterOptions {
   profileDir?: string;
   timeoutMs?: number;
@@ -168,13 +182,12 @@ export class ChatGptAdapter implements ModelAdapter {
     return {
       supportsUpload: true,
       acceptedMimeTypes: ["image/*", "text/*", "application/pdf", "application/json"],
-      acceptedExtensions: [".png", ".jpg", ".jpeg", ".pdf", ".txt", ".md", ".json", ".csv"],
+      acceptedExtensions: [".png", ".jpg", ".jpeg", ".webp", ".pdf", ".txt", ".md", ".json", ".csv"],
       maxFileBytes: 52_428_800,
       maxFilesPerMessage: 10,
       supportsImages: true,
       supportsMultipleFiles: true,
       supportsResponseArtifacts: true,
-      verifiedAt: new Date().toISOString(),
     };
   }
 
@@ -392,34 +405,8 @@ export class ChatGptAdapter implements ModelAdapter {
     await this.installMutationObserver();
 
     if (attachments && attachments.length > 0) {
-      const store = new LocalArtifactStore();
-      const validPaths: string[] = [];
-      for (const att of attachments) {
-        if (att.status !== "QUARANTINED" && att.localRelativePath) {
-          try {
-            validPaths.push(store.resolveAbsolutePath(att.localRelativePath));
-          } catch {
-            // Ignore path violation
-          }
-        }
-      }
-
-      if (validPaths.length > 0) {
-        let fileInput = page.locator('input[type="file"]').first();
-        if ((await fileInput.count().catch(() => 0)) === 0) {
-          const attachBtn = page.locator('button[aria-label*="Attach"], button[aria-label*="Прикрепить"], button[data-testid="attach-button"]').first();
-          if (await attachBtn.isVisible().catch(() => false)) {
-            await attachBtn.click().catch(() => undefined);
-            await page.waitForTimeout(300);
-            fileInput = page.locator('input[type="file"]').first();
-          }
-        }
-
-        if ((await fileInput.count().catch(() => 0)) > 0) {
-          await fileInput.setInputFiles(validPaths).catch(() => undefined);
-          await page.waitForTimeout(1000);
-        }
-      }
+      const evidence = await uploadAttachmentsToComposer(page, attachments, this.getCapabilities(), CHATGPT_UPLOAD_SELECTORS);
+      channel?.publish({ type: "ATTACHMENTS_UPLOADED", at: evidence.confirmedAt, attachmentIds: evidence.attachmentIds });
     }
 
     const before = await this.captureResponses();

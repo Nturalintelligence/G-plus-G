@@ -215,3 +215,21 @@ ignored evidence). No live provider UAT was run.
 | Package/crash smoke | PASS | Windows unpacked app and NSIS installer rebuilt; `npm run smoke:composer-draft` passed after a forced main-process kill. |
 
 No live provider UAT was run in this phase.
+
+## Phase C provider attachment delivery — 2026-08-24
+
+| Check | Result | Evidence |
+|---|---|---|
+| Capability/integrity preflight | PASS | Count, multiple-file, size, MIME/extension, status, managed path, size, SHA-256 and sniffed MIME fail before provider DOM interaction. |
+| Exact browser input | PASS | Real local Chromium `FileList` must equal the selected managed basenames/count/byte lengths; ambiguous or missing inputs fail. |
+| ChatGPT production selectors | PASS_LOCAL_FIXTURE | An anonymized composer fixture uses the exported production selector set and requires stable attachment evidence. |
+| Gemini production selectors | PASS_LOCAL_FIXTURE | Same gate using Gemini `file-chip`/production selectors. |
+| Required format matrix | PASS_LOCAL_FIXTURE | PNG, JPEG, WebP, PDF and MD uploaded together through each provider's production capability policy and selector set. |
+| Error/timeout behavior | PASS | Missing chips, visible provider upload error, progress, ambiguous inputs and tampered bytes are covered. No swallowed `setInputFiles` error or fixed one-second success assumption remains. |
+| Persisted FSM | PASS | Provider events advance `PREPARING → FILES_UPLOADED → SUBMITTED → CONFIRMED`; missing submit evidence yields UNKNOWN. |
+| Retry safety | PASS | Ambiguous attachment failure creates one attempt; delivery is FAILED before upload evidence or remains DELIVERED after upload evidence; submission is UNKNOWN. |
+| `npm run check` | PASS | 53 test files, 231/231 tests, including the final two-provider format matrix. |
+| Security/package | PASS | Security 37/37; source guard 93 production files; Windows package and packaged smoke pass. |
+
+Live ChatGPT/Gemini UAT: **NOT RUN — BLOCKED_BY_OWNER_APPROVAL**. No
+authenticated profile was opened and no external message/file was sent.
