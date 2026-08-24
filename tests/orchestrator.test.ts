@@ -518,4 +518,18 @@ describe("Orchestrator", () => {
       ),
     ).rejects.toThrow(/userMessageId cannot be empty/);
   });
+
+  it("binds response artifact targets to the persisted assistant transcript entry", async () => {
+    const { database, projectId } = setup();
+    let target: MessageInput["responseArtifactTarget"];
+    const adapter = fakeAdapter("a", []);
+    adapter.sendMessage = async (input: MessageInput) => {
+      target = input.responseArtifactTarget;
+      return { id: "artifact-turn" };
+    };
+    adapter.getFinalResponse = async () => ({ response: "file ready", responseFingerprint: "file-ready", elapsedMs: 1 });
+    await new Orchestrator(database, new Map([["a", adapter]])).run(projectId, "MANUAL", "make file", ["a"], limits);
+    const assistant = new ProjectRepository(database).conversationEntries(projectId).find((entry) => entry.role === "ASSISTANT");
+    expect(target).toEqual({ projectId, messageId: assistant?.id });
+  });
 });

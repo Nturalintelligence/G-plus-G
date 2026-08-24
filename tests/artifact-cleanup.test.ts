@@ -79,4 +79,24 @@ describe("ArtifactCleanupManager Reference-Safe Cleanup", () => {
     expect(fs.existsSync(store.resolveAbsolutePath(ref1.localRelativePath))).toBe(true);
     expect(fs.existsSync(orphanPath)).toBe(false);
   });
+
+  it("preserves a blob referenced only by a downloaded provider artifact", () => {
+    const ref = store.storeBuffer(Buffer.from("provider result"), {
+      projectId: "p1",
+      messageId: "assistant-1",
+      source: "chatgpt",
+      originalFileName: "result.txt",
+    });
+    appDb.raw.prepare(`INSERT INTO downloaded_artifacts
+      (id, message_id, project_id, provider_id, original_url, sha256, local_relative_path, file_name, mime_type, size_bytes, status, downloaded_at)
+      VALUES ('dl-1', 'assistant-1', 'p1', 'chatgpt', 'https://chatgpt.com/result', ?, ?, ?, ?, ?, 'READY', ?)`)
+      .run(ref.sha256, ref.localRelativePath, ref.fileName, ref.mimeType, ref.sizeBytes, new Date().toISOString());
+    const fullPath = store.resolveAbsolutePath(ref.localRelativePath);
+    const oldTime = new Date(Date.now() - 48 * 3600 * 1000);
+    fs.utimesSync(fullPath, oldTime, oldTime);
+    const report = cleanupMgr.performOrphanCleanup(24 * 3600 * 1000);
+    expect(report.referencedFilesCount).toBe(1);
+    expect(report.deletedOrphanFilesCount).toBe(0);
+    expect(fs.existsSync(fullPath)).toBe(true);
+  });
 });

@@ -125,7 +125,27 @@ function attachmentRefFromRow(row: Record<string, unknown>): AttachmentRefV1 {
 
 function findAttachmentRef(attachmentId: string): AttachmentRefV1 | null {
   const row = db().raw.prepare("SELECT * FROM message_attachments WHERE id = ?").get(attachmentId) as Record<string, unknown> | undefined;
-  return row ? attachmentRefFromRow(row) : null;
+  if (row) return attachmentRefFromRow(row);
+  const downloaded = db().raw.prepare("SELECT * FROM downloaded_artifacts WHERE id = ?").get(attachmentId) as Record<string, unknown> | undefined;
+  return downloaded ? downloadedArtifactRefFromRow(downloaded) : null;
+}
+
+function downloadedArtifactRefFromRow(row: Record<string, unknown>): AttachmentRefV1 {
+  const status = String(row.status);
+  return {
+    id: String(row.id),
+    messageId: String(row.message_id),
+    projectId: String(row.project_id),
+    kind: String(row.mime_type).startsWith("image/") ? "image" : "document",
+    fileName: String(row.file_name),
+    mimeType: String(row.mime_type),
+    sizeBytes: Number(row.size_bytes),
+    sha256: String(row.sha256),
+    localRelativePath: String(row.local_relative_path),
+    source: String(row.provider_id) as AttachmentRefV1["source"],
+    status: status === "READY" ? "READY" : status === "QUARANTINED" ? "QUARANTINED" : "FAILED",
+    ...(status === "QUARANTINED" ? { quarantineReason: "MIME_MISMATCH" as const } : {}),
+  };
 }
 
 function attachmentDtoFromRow(row: Record<string, unknown>): RendererAttachmentDto {
@@ -154,6 +174,15 @@ function attachmentViewsForProject(projectId: string): {
     if (Number(row.is_draft) === 0) {
       (transcriptAttachments[messageId] ??= []).push(attachmentDtoFromRow(row));
     }
+  }
+  const downloadedRows = db().raw.prepare(`
+    SELECT * FROM downloaded_artifacts
+    WHERE project_id = ?
+    ORDER BY downloaded_at, rowid
+  `).all(projectId) as Array<Record<string, unknown>>;
+  for (const row of downloadedRows) {
+    const ref = downloadedArtifactRefFromRow(row);
+    (transcriptAttachments[ref.messageId] ??= []).push(toRendererAttachment(ref));
   }
   return {
     transcriptAttachments,
@@ -665,7 +694,7 @@ function registerIpc(): void {
       const provider = parseProvider(
         requireString(providerValue, "provider", 20),
       );
-      const adapter = createAdapter(provider, 180_000, true);
+      const adapter = createAdapter(provider, 180_000, true, db().raw);
       logEvent("INFO", "provider.send.started", {
         provider,
         messageLength: message.length,
@@ -707,7 +736,7 @@ function registerIpc(): void {
       }
       const input = validateRunInput(inputValue);
       const adapters = new Map(
-        input.providers.map((provider) => [provider, createAdapter(provider, 180_000, true)]),
+        input.providers.map((provider) => [provider, createAdapter(provider, 180_000, true, db().raw)]),
       );
       activeOrchestrationAdapters = adapters;
       try {

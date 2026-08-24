@@ -31,6 +31,9 @@ All notable project checkpoints are recorded here.
 - Compacted provider prompt lifecycle to one atomic visible message per turn,
   with durable per-conversation protocol version/hash/checkpoint state and
   bounded bootstrap/reuse/delta behavior across restarts.
+- Wired ChatGPT/Gemini response files from the bound assistant turn through the
+  authenticated browser context into validated managed storage, persistent
+  transcript result cards, preview/open and explicit Save As actions.
 
 ### Security and cleanup
 

@@ -38,6 +38,7 @@ describe("SQLite project state", () => {
       { version: 9 },
       { version: 10 },
       { version: 11 },
+      { version: 12 },
     ]);
   });
 
@@ -152,6 +153,10 @@ describe("SQLite project state", () => {
       role: "USER",
       content: "Hello",
     });
+    database.raw.prepare(`INSERT INTO downloaded_artifacts
+      (id, message_id, project_id, provider_id, original_url, sha256, local_relative_path, file_name, mime_type, size_bytes, status, downloaded_at)
+      VALUES ('dl-delete', 'assistant-delete', ?, 'chatgpt', 'https://chatgpt.com/file', 'abc', 'p/file', 'file.txt', 'text/plain', 3, 'READY', ?)`)
+      .run(project.id, new Date().toISOString());
 
     expect(repository.listProjects().length).toBe(1);
     expect(repository.getConversationsForProject(project.id).length).toBe(1);
@@ -161,5 +166,6 @@ describe("SQLite project state", () => {
     expect(repository.listProjects().length).toBe(0);
     expect(repository.getConversationsForProject(project.id).length).toBe(0);
     expect(repository.conversationEntries(project.id).length).toBe(0);
+    expect(database.raw.prepare("SELECT COUNT(*) AS count FROM downloaded_artifacts WHERE project_id = ?").get(project.id)?.count).toBe(0);
   });
 });

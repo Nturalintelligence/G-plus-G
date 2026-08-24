@@ -86,3 +86,19 @@ do not start the experimental runtime or full soak.
 - No authenticated provider profile was opened. Live UAT remains owner-gated.
 - Next authorized phase: Phase D response-file retrieval. Do not touch
   `experimental` or its runtime/stash.
+# Phase D handoff — 2026-08-24
+
+- ChatGPT/Gemini production adapters now inspect only the last bound assistant
+  response and retrieve HTTPS links or explicit download controls through the
+  existing authenticated Playwright context.
+- Every direct URL/redirect/DNS hop remains allowlisted and SSRF checked.
+  Download-event streams support validated provider-origin blob URLs. Bytes are
+  bounded, MIME-sniffed, SHA-256 recorded and stored below the managed artifact
+  root. Signed URL query/fragment data is not persisted.
+- Migration 12 records filename/MIME/size and binds each result to the exact
+  assistant transcript entry generated before submission. Renderer cards expose
+  compact preview/open and explicit Save As; failed/quarantined results are not
+  opened.
+- Local tests/build only. Real provider controls/URLs remain
+  `BLOCKED_BY_AUTH`; do not run live UAT without owner confirmation.
+- Branch is intended to be pushed for continuation from another computer.

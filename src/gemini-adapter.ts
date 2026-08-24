@@ -1,6 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
 import { chromium, type BrowserContext, type Locator, type Page } from "playwright";
+import type { DatabaseSync } from "node:sqlite";
 import type {
   ConversationRef,
   MessageInput,
@@ -94,12 +95,14 @@ export class GeminiAdapter implements ModelAdapter {
   private readonly timeoutMs: number;
 
   private readonly headless: boolean;
+  private readonly artifactDatabase: DatabaseSync | undefined;
 
-  constructor(options: { profileDir?: string; timeoutMs?: number; headless?: boolean } = {}) {
+  constructor(options: { profileDir?: string; timeoutMs?: number; headless?: boolean; artifactDatabase?: DatabaseSync } = {}) {
     this.profileDir = resolve(options.profileDir ?? dataPath("profiles", "gemini"));
     this.lock = new ProfileLock(this.profileDir);
     this.timeoutMs = options.timeoutMs ?? 180_000;
     this.headless = options.headless ?? true;
+    this.artifactDatabase = options.artifactDatabase;
   }
 
   async launch(): Promise<void> {
@@ -231,7 +234,7 @@ export class GeminiAdapter implements ModelAdapter {
       rejectCancellation = reject;
     });
     const result = Promise.race([
-      this.sendAndWait(input.content, input.attachments, channel),
+      this.sendAndWait(input.content, input.attachments, channel, input.responseArtifactTarget),
       cancellation,
       manual.then((response) => ({
         response,
@@ -297,7 +300,7 @@ export class GeminiAdapter implements ModelAdapter {
     };
   }
 
-  private async sendAndWait(message: string, attachments?: AttachmentRefV1[], channel?: TurnChannel): Promise<TurnResult> {
+  private async sendAndWait(message: string, attachments?: AttachmentRefV1[], channel?: TurnChannel, responseTarget?: { projectId: string; messageId: string }): Promise<TurnResult> {
     const started = Date.now();
     const state = await this.waitUntilReady();
     const page = await this.ensurePage();
@@ -324,14 +327,24 @@ export class GeminiAdapter implements ModelAdapter {
 
     const response = await this.waitForResponse(before, channel);
 
-    const extractedArtifacts: AttachmentRefV1[] = [];
+    const extractedArtifacts = [];
     const extractedLinks: Array<{ label: string; url: string; downloadable: boolean }> = [];
 
     try {
-      const downloader = new ResponseArtifactDownloader({ prepare: () => ({ run: () => undefined }) } as any);
-      const items = await downloader.extractTurnArtifactsFromPage(page, 'message-content, .model-response-text');
+      const downloader = this.artifactDatabase ? new ResponseArtifactDownloader(this.artifactDatabase) : null;
+      const items = await (downloader
+        ? downloader.extractTurnArtifactsFromPage(page, 'message-content, .model-response-text')
+        : new ResponseArtifactDownloader({ prepare: () => ({ run: () => undefined }) } as any)
+            .extractTurnArtifactsFromPage(page, 'message-content, .model-response-text'));
       for (const item of items) {
         extractedLinks.push({ label: item.label, url: item.url, downloadable: !item.isImage });
+      }
+      if (downloader && responseTarget) {
+        extractedArtifacts.push(...await downloader.downloadTurnArtifactsFromPage(page, 'message-content, .model-response-text', {
+          projectId: responseTarget.projectId,
+          messageId: responseTarget.messageId,
+          providerId: this.providerId,
+        }));
       }
     } catch {
       // Best-effort artifact scan

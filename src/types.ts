@@ -1,4 +1,5 @@
 import type { AttachmentRefV1 } from "./attachments/attachments.js";
+import type { DownloadedArtifactRecord } from "./attachments/artifact-downloader.js";
 
 export type SessionState =
   | "AUTHENTICATED"
@@ -19,7 +20,7 @@ export interface TurnResult {
   response: string;
   responseFingerprint: string;
   elapsedMs: number;
-  artifacts?: AttachmentRefV1[];
+  artifacts?: DownloadedArtifactRecord[];
   links?: Array<{ label: string; url: string; downloadable: boolean }>;
 }
 

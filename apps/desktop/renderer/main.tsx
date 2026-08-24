@@ -73,6 +73,22 @@ function formatAttachmentSize(sizeBytes: number): string {
   return `${(sizeBytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function MessageAttachments({ files, onPreview }: { files: AttachmentRefView[]; onPreview: (url: string) => void }): React.JSX.Element {
+  return <div className="message-attachments">
+    {files.map((file) => (
+      <div className="message-attachment-card" key={file.id}>
+        <button type="button" className="message-attachment-open" onClick={() => file.previewUrl ? onPreview(file.previewUrl) : void window.orchestrator.attachments.open(file.id)}>
+          {file.previewUrl ? <img src={file.previewUrl} alt="" /> : <AttachmentIcon />}
+          <span><strong>{file.fileName}</strong><small>{file.source !== "user" ? `Файл от ${file.source} · ` : ""}{file.mimeType} · {formatAttachmentSize(file.sizeBytes)} · {file.status}</small></span>
+        </button>
+        {file.source !== "user" && file.status === "READY" ? (
+          <button type="button" className="message-attachment-save" onClick={() => void window.orchestrator.attachments.saveAs(file.id)}>Сохранить как…</button>
+        ) : null}
+      </div>
+    ))}
+  </div>;
+}
+
 const fallbackSettings: AppSettingsView = {
   schemaVersion: 1,
   profile: { displayName: "", realName: "", greetingStyle: "generic" },
@@ -990,21 +1006,7 @@ function App(): React.JSX.Element {
                           {entry.round ? <small>ход {entry.round}</small> : null}
                         </header>
                         <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml>{entry.content}</ReactMarkdown>
-                        {entry.attachments?.length ? (
-                          <div className="message-attachments">
-                            {entry.attachments.map((file) => (
-                              <button
-                                type="button"
-                                className="message-attachment-card"
-                                key={file.id}
-                                onClick={() => file.previewUrl ? setPreviewImageModalUrl(file.previewUrl) : void window.orchestrator.attachments.open(file.id)}
-                              >
-                                {file.previewUrl ? <img src={file.previewUrl} alt="" /> : <AttachmentIcon />}
-                                <span><strong>{file.fileName}</strong><small>{file.mimeType} · {formatAttachmentSize(file.sizeBytes)}</small></span>
-                              </button>
-                            ))}
-                          </div>
-                        ) : null}
+                        {entry.attachments?.length ? <MessageAttachments files={entry.attachments} onPreview={setPreviewImageModalUrl} /> : null}
                       </section>
                     ))}
                   </>
@@ -1016,21 +1018,7 @@ function App(): React.JSX.Element {
                         {entry.round ? <small>ход {entry.round}</small> : null}
                       </header>
                       <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml>{entry.content}</ReactMarkdown>
-                      {entry.attachments?.length ? (
-                        <div className="message-attachments">
-                          {entry.attachments.map((file) => (
-                            <button
-                              type="button"
-                              className="message-attachment-card"
-                              key={file.id}
-                              onClick={() => file.previewUrl ? setPreviewImageModalUrl(file.previewUrl) : void window.orchestrator.attachments.open(file.id)}
-                            >
-                              {file.previewUrl ? <img src={file.previewUrl} alt="" /> : <AttachmentIcon />}
-                              <span><strong>{file.fileName}</strong><small>{file.mimeType} · {formatAttachmentSize(file.sizeBytes)}</small></span>
-                            </button>
-                          ))}
-                        </div>
-                      ) : null}
+                      {entry.attachments?.length ? <MessageAttachments files={entry.attachments} onPreview={setPreviewImageModalUrl} /> : null}
                       {entry.role === "ASSISTANT" ? (
                         <button className="relay" onClick={() => relay(entry)}>
                           Передать дальше

@@ -115,9 +115,63 @@ describe("ResponseArtifactDownloader deterministic download pipeline", () => {
     });
 
     expect(result.status).toBe("READY");
+    expect(result).toMatchObject({ fileName: "report.pdf", mimeType: "application/pdf", sizeBytes: pdf.length });
     expect(get).toHaveBeenCalledTimes(2);
     expect(store.readBuffer(result.localRelativePath)).toEqual(pdf);
     expect(appDb.raw.prepare("SELECT status FROM downloaded_artifacts WHERE id = ?").get(result.id)).toMatchObject({ status: "READY" });
+  });
+
+  it("discovers and downloads bound-turn links through the authenticated request context", async () => {
+    const pdf = Buffer.from("%PDF-1.7\nbound-turn");
+    const evaluate = vi.fn().mockResolvedValue([
+      { label: "результат.pdf", url: "https://files.oaiusercontent.com/result.pdf", isImage: false },
+    ]);
+    const get = vi.fn().mockResolvedValue(response(200, {
+      "content-type": "application/pdf",
+      "content-length": String(pdf.length),
+    }, pdf));
+    const page = {
+      locator: () => ({ last: () => ({ count: async () => 1, evaluate, locator: () => ({ count: async () => 0 }) }) }),
+      context: () => ({ request: { get } }),
+    } as unknown as Page;
+    const results = await downloader.downloadTurnArtifactsFromPage(page, ".bound-assistant", {
+      projectId: "project-1",
+      messageId: "assistant-entry-1",
+      providerId: "chatgpt",
+    });
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({ status: "READY", messageId: "assistant-entry-1", fileName: "результат.pdf" });
+    expect(appDb.raw.prepare("SELECT file_name, mime_type, size_bytes FROM downloaded_artifacts WHERE id = ?").get(results[0]!.id))
+      .toMatchObject({ file_name: "результат.pdf", mime_type: "application/pdf", size_bytes: pdf.length });
+  });
+
+  it("captures provider download controls from the bound response without replaying a URL", async () => {
+    const pdf = Buffer.from("%PDF-1.7\nbutton-event");
+    const control = {
+      getAttribute: vi.fn().mockResolvedValue(null),
+      textContent: vi.fn().mockResolvedValue("Download report"),
+      click: vi.fn().mockResolvedValue(undefined),
+    };
+    const download = {
+      url: () => "https://files.oaiusercontent.com/button.pdf?token=secret",
+      suggestedFilename: () => "button.pdf",
+      createReadStream: async () => Readable.from([pdf]),
+    };
+    const page = {
+      locator: () => ({ last: () => ({
+        count: async () => 1,
+        evaluate: async () => [],
+        locator: () => ({ count: async () => 1, nth: () => control }),
+      }) }),
+      waitForEvent: vi.fn().mockResolvedValue(download),
+    } as unknown as Page;
+    const results = await downloader.downloadTurnArtifactsFromPage(page, ".bound-assistant", {
+      projectId: "project-1",
+      messageId: "assistant-entry-2",
+      providerId: "chatgpt",
+    });
+    expect(results[0]).toMatchObject({ status: "READY", fileName: "button.pdf", originalUrl: "https://files.oaiusercontent.com/button.pdf" });
+    expect(control.click).toHaveBeenCalledOnce();
   });
 
   it("fails closed when a redirect resolves to private infrastructure", async () => {

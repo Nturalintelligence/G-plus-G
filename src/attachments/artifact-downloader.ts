@@ -15,6 +15,9 @@ export interface DownloadedArtifactRecord {
   originalUrl: string;
   sha256: string;
   localRelativePath: string;
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
   status: "READY" | "DOWNLOAD_EXPIRED" | "FAILED" | "QUARANTINED";
   downloadedAt: string;
 }
@@ -35,6 +38,7 @@ export interface ArtifactDownloadOptions {
   allowedMimeTypes?: readonly string[];
   expectedSha256?: string;
   maxRedirects?: number;
+  downloadEventTimeoutMs?: number;
 }
 
 export type HostnameResolver = (hostname: string) => Promise<readonly string[]>;
@@ -46,6 +50,7 @@ const DEFAULT_ALLOWED_MIME_TYPES: ReadonlySet<string> = new Set([
   "application/pdf",
   "image/png",
   "image/jpeg",
+  "image/webp",
 ]);
 const PROVIDER_DOWNLOAD_DOMAINS: Readonly<Record<string, readonly string[]>> = {
   chatgpt: ["chatgpt.com", "openai.com", "oaiusercontent.com", "oaistatic.com"],
@@ -156,6 +161,19 @@ function contentTypeWithoutParameters(value: string | undefined): string {
   return (value || "").split(";", 1)[0]!.trim().toLowerCase();
 }
 
+function urlWithoutCredentialsOrTokens(value: string): string {
+  try {
+    const parsed = new URL(value);
+    parsed.username = "";
+    parsed.password = "";
+    parsed.search = "";
+    parsed.hash = "";
+    return parsed.toString();
+  } catch {
+    return "";
+  }
+}
+
 function filenameFromHeadersOrUrl(headers: Record<string, string>, url: URL, label?: string): string {
   if (label?.trim()) return label.trim();
   const disposition = headers["content-disposition"] || "";
@@ -238,6 +256,38 @@ export class ResponseArtifactDownloader {
     }
   }
 
+  /** Downloads only candidates found inside the response bound to this turn. */
+  public async downloadTurnArtifactsFromPage(
+    page: Page,
+    turnSelector: string,
+    options: Omit<ArtifactDownloadOptions, "url" | "label">,
+  ): Promise<DownloadedArtifactRecord[]> {
+    const candidates = await this.extractTurnArtifactsFromPage(page, turnSelector);
+    const unique = [...new Map(candidates.map((item) => [item.url, item])).values()];
+    const records: DownloadedArtifactRecord[] = [];
+    for (const candidate of unique) {
+      try {
+        records.push(await this.downloadArtifactSsrfSafe(page, { ...options, url: candidate.url, label: candidate.label }));
+      } catch {
+        records.push(this.persistFailure({ ...options, url: candidate.url, label: candidate.label }));
+      }
+    }
+    const turn = page.locator(turnSelector).last();
+    const controls = turn.locator('a[download], button[aria-label*="download" i], button[aria-label*="скач" i], a[aria-label*="download" i], a[aria-label*="скач" i]');
+    const count = Math.min(await controls.count().catch(() => 0), 10);
+    for (let index = 0; index < count; index += 1) {
+      const control = controls.nth(index);
+      const href = await control.getAttribute("href").catch(() => null);
+      if (href?.startsWith("https://") && unique.some((candidate) => candidate.url === href)) continue;
+      try {
+        records.push(await this.captureDownloadFromLocator(page, control, options));
+      } catch {
+        records.push(this.persistFailure({ ...options, url: href?.startsWith("https://") ? href : "", label: await control.textContent().catch(() => null) || "downloaded_artifact" }));
+      }
+    }
+    return records;
+  }
+
   /**
    * Preferred path for provider download controls. It captures Playwright's
    * download event in the authenticated BrowserContext instead of replaying an
@@ -249,12 +299,17 @@ export class ResponseArtifactDownloader {
     options: Omit<ArtifactDownloadOptions, "url" | "label">,
   ): Promise<DownloadedArtifactRecord> {
     const [download] = await Promise.all([
-      page.waitForEvent("download"),
+      page.waitForEvent("download", { timeout: Math.min(Math.max(options.downloadEventTimeoutMs ?? 5_000, 250), 15_000) }),
       trigger.click(),
     ]);
     const url = download.url();
     const domains = this.allowedDomains(options.providerId, options.allowedDomainSuffixes);
-    await validateDownloadUrl(url, { allowedDomainSuffixes: domains, resolveHostname: this.resolveHostname });
+    if (url.startsWith("blob:")) {
+      const embedded = url.slice("blob:".length);
+      await validateDownloadUrl(embedded, { allowedDomainSuffixes: domains, resolveHostname: this.resolveHostname });
+    } else {
+      await validateDownloadUrl(url, { allowedDomainSuffixes: domains, resolveHostname: this.resolveHostname });
+    }
     const stream = await download.createReadStream();
     if (!stream) throw new Error("Provider download stream is unavailable");
     const maxBytes = options.maxBytes ?? DEFAULT_MAX_DOWNLOAD_BYTES;
@@ -356,9 +411,12 @@ export class ResponseArtifactDownloader {
       messageId: options.messageId,
       projectId: options.projectId,
       providerId: options.providerId,
-      originalUrl: options.url,
+      originalUrl: urlWithoutCredentialsOrTokens(options.url),
       sha256: validated.sha256,
       localRelativePath: ref.localRelativePath,
+      fileName: ref.fileName,
+      mimeType: ref.mimeType,
+      sizeBytes: ref.sizeBytes,
       status: ref.status === "QUARANTINED" ? "QUARANTINED" : "READY",
       downloadedAt: new Date().toISOString(),
     };
@@ -372,9 +430,12 @@ export class ResponseArtifactDownloader {
       messageId: options.messageId,
       projectId: options.projectId,
       providerId: options.providerId,
-      originalUrl: options.url,
+      originalUrl: urlWithoutCredentialsOrTokens(options.url),
       sha256: "",
       localRelativePath: "",
+      fileName: options.label || "downloaded_artifact",
+      mimeType: "application/octet-stream",
+      sizeBytes: 0,
       status: "FAILED",
       downloadedAt: new Date().toISOString(),
     };
@@ -385,8 +446,8 @@ export class ResponseArtifactDownloader {
   private insertRecord(record: DownloadedArtifactRecord): void {
     this.db.prepare(`
       INSERT INTO downloaded_artifacts
-      (id, message_id, project_id, provider_id, original_url, sha256, local_relative_path, status, downloaded_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (id, message_id, project_id, provider_id, original_url, sha256, local_relative_path, file_name, mime_type, size_bytes, status, downloaded_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       record.id,
       record.messageId,
@@ -395,6 +456,9 @@ export class ResponseArtifactDownloader {
       record.originalUrl,
       record.sha256,
       record.localRelativePath,
+      record.fileName,
+      record.mimeType,
+      record.sizeBytes,
       record.status,
       record.downloadedAt,
     );

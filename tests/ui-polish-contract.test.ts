@@ -34,4 +34,12 @@ describe("Phase B.1 UI contracts", () => {
     expect(styles).toContain("@media (max-width: 760px)");
     expect(styles).toMatch(/\.discussion-view-scroll\s*\{[\s\S]*?overflow-y:\s*auto;/);
   });
+
+  it("renders downloaded provider artifacts as compact open/save result cards", () => {
+    expect(renderer).toContain("function MessageAttachments");
+    expect(renderer).toContain("Файл от ${file.source}");
+    expect(renderer).toContain("attachments.saveAs(file.id)");
+    expect(styles).toMatch(/\.message-attachment-card\s*\{[\s\S]*?max-width:\s*min\(320px, 100%\);[\s\S]*?overflow/);
+    expect(styles).toContain(".message-attachment-save");
+  });
 });

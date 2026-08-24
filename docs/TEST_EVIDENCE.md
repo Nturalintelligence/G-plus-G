@@ -248,3 +248,17 @@ authenticated profile was opened and no external message/file was sent.
 | Regression suite | PASS | 53 files, 230/230 tests before final build gate. |
 
 Live ChatGPT/Gemini UAT: **NOT RUN — BLOCKED_BY_OWNER_APPROVAL**.
+
+## Phase D provider response-file retrieval — 2026-08-24
+
+| Check | Result | Evidence |
+|---|---|---|
+| Bound response scope | PASS_LOCAL | Production adapters scan only the final assistant response locator and bind a preallocated response-artifact target to the persisted assistant entry ID. |
+| Authenticated retrieval | PASS_LOCAL_FIXTURE | HTTPS links use `BrowserContext.request`; explicit download buttons use Playwright's authenticated download event/stream. |
+| URL/network policy | PASS | HTTPS/provider suffix allowlist, public DNS, every redirect hop, redirect limit and provider-origin blob validation are enforced. Signed URL query/fragment values are not persisted. |
+| Content integrity | PASS | Streaming/body size limits, declared/sniffed MIME agreement, allowlist, optional expected SHA-256 and managed-root storage are tested. |
+| Persistence/recovery | PASS | Migration 12 stores filename, MIME, byte length, hash, status and transcript binding. Project deletion removes result records; cleanup retains referenced blobs. |
+| Renderer | PASS_LOCAL | Provider result cards are compact, show source/status, preview/open verified safe content and expose explicit Save As. Failed/quarantined records cannot open. |
+| Full check | PASS | 53 files, 235/235 tests. Security: 37/37; source guard: 95 production files. |
+
+Live ChatGPT/Gemini response-file UAT: **NOT RUN — BLOCKED_BY_OWNER_APPROVAL**.

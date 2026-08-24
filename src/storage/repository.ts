@@ -184,6 +184,7 @@ export class ProjectRepository {
       this.database.raw.prepare("DELETE FROM conversations WHERE project_id = ?").run(projectId);
       this.database.raw.prepare("DELETE FROM orchestration_runs WHERE project_id = ?").run(projectId);
       this.database.raw.prepare("DELETE FROM project_state_versions WHERE project_id = ?").run(projectId);
+      this.database.raw.prepare("DELETE FROM downloaded_artifacts WHERE project_id = ?").run(projectId);
       this.database.raw.prepare("DELETE FROM projects WHERE id = ?").run(projectId);
       this.appendEventInternal("Project", projectId, "PROJECT_DELETED", { projectId });
     });

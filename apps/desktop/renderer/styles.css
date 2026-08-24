@@ -2320,10 +2320,38 @@ fieldset label textarea {
   flex: 0 1 320px;
   width: auto;
   max-width: min(320px, 100%);
+  overflow: hidden;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+  padding: 0;
+}
+
+.message-attachment-open {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
+.message-attachment-save {
+  border: 0;
+  border-top: 1px solid var(--border-color-card);
+  background: transparent;
+  color: var(--accent);
+  padding: 6px 10px;
+  text-align: left;
+  font-size: 11px;
 }
 
 .attached-file-details,
-.message-attachment-card > span {
+.message-attachment-open > span {
   display: flex;
   min-width: 0;
   max-width: 100%;
@@ -2331,7 +2359,7 @@ fieldset label textarea {
   align-items: flex-start;
 }
 
-.message-attachment-card > span > strong {
+.message-attachment-open > span > strong {
   max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2354,7 +2382,7 @@ fieldset label textarea {
 .attachment-error { color: var(--danger, #c2413b) !important; }
 
 .attached-file-preview,
-.message-attachment-card img {
+.message-attachment-open img {
   display: block;
   flex: 0 0 38px;
   width: 38px;

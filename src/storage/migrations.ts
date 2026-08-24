@@ -453,4 +453,14 @@ export const migrations: readonly Migration[] = [
       );
     `,
   },
+  {
+    version: 12,
+    name: "downloaded_artifact_metadata",
+    sql: `
+      ALTER TABLE downloaded_artifacts ADD COLUMN file_name TEXT NOT NULL DEFAULT 'downloaded_artifact';
+      ALTER TABLE downloaded_artifacts ADD COLUMN mime_type TEXT NOT NULL DEFAULT 'application/octet-stream';
+      ALTER TABLE downloaded_artifacts ADD COLUMN size_bytes INTEGER NOT NULL DEFAULT 0;
+      CREATE INDEX downloaded_artifacts_message_idx ON downloaded_artifacts(message_id, downloaded_at);
+    `,
+  },
 ];

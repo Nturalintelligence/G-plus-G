@@ -21,6 +21,10 @@ export interface ConversationRef {
 export interface MessageInput {
   content: string;
   attachments?: AttachmentRefV1[];
+  responseArtifactTarget?: {
+    projectId: string;
+    messageId: string;
+  };
 }
 
 export interface TurnRef {

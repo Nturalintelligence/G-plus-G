@@ -237,6 +237,7 @@ export class Orchestrator {
       text: COLLABORATION_PROTOCOL,
     };
     let persistedUserMessageId = userMessageId;
+    const responseEntryIds = new Map<string, string>();
     let charsSent = 0;
     const processModelText = (rawText: string): string => {
       const processed = taskCompiler.processModelTurnResponse(rawText, {
@@ -290,6 +291,7 @@ export class Orchestrator {
         customizationsFor(providerId),
       );
       charsSent += preparedMessage.length;
+      const responseEntryId = newId("entry");
       const rawText = await this.ask(
         projectId,
         repository,
@@ -301,7 +303,9 @@ export class Orchestrator {
         cleanProgressText,
         turnAttachments,
         persistedUserMessageId,
+        responseEntryId,
       );
+      responseEntryIds.set(`${providerId}:${phase}:${round}`, responseEntryId);
       protocolStates.markInitialized(
         providerId,
         conversation.id,
@@ -349,6 +353,9 @@ export class Orchestrator {
       const persistResponse = (response: RunOutput["responses"][number]): void => {
         responses.push(response);
         repository.appendConversationEntry({
+          ...(responseEntryIds.get(`${response.sourceProviderId ?? response.providerId}:${response.phase ?? "DISCUSSION"}:${response.round}`)
+            ? { id: responseEntryIds.get(`${response.sourceProviderId ?? response.providerId}:${response.phase ?? "DISCUSSION"}:${response.round}`)! }
+            : {}),
           projectId,
           runId,
           role: "ASSISTANT",
@@ -636,6 +643,7 @@ export class Orchestrator {
     sanitizeProgress: (text: string) => string,
     attachments?: AttachmentRefV1[],
     messageId?: string,
+    responseMessageId?: string,
   ): Promise<string> {
     const adapter = this.adapters.get(providerId);
     if (!adapter) throw new Error(`Adapter is not registered: ${providerId}`);
@@ -737,7 +745,12 @@ export class Orchestrator {
           attempt: attemptIndex + 1,
         });
         repository.updateTurnStatus(started.turn.id, "SUBMITTING");
-        turn = await adapter.sendMessage(attachments ? { content: edited, attachments } : { content: edited });
+        const responseArtifactTarget = responseMessageId ? { projectId, messageId: responseMessageId } : undefined;
+        turn = await adapter.sendMessage({
+          content: edited,
+          ...(attachments ? { attachments } : {}),
+          ...(responseArtifactTarget ? { responseArtifactTarget } : {}),
+        });
         repository.updateTurnStatus(started.turn.id, "WAITING_RESPONSE");
         logEvent("INFO", "provider.turn.submitted", {
           runId: this.activeRunId,
