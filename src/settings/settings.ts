@@ -21,6 +21,7 @@ export type ProviderId =
 
 export type Theme = "dark" | "light" | "system";
 export type Density = "comfortable" | "compact";
+export type DiscussionView = "RIGHT_DRAWER" | "FULLSCREEN";
 
 export const PROVIDER_METADATA: Record<
   ProviderId,
@@ -60,6 +61,7 @@ export interface AppSettings {
     theme: Theme;
     density: Density;
     fontScale: number;
+    discussionView: DiscussionView;
   };
 }
 
@@ -79,6 +81,7 @@ export const defaultSettings: AppSettings = {
     theme: "dark",
     density: "comfortable",
     fontScale: 100,
+    discussionView: "RIGHT_DRAWER",
   },
 };
 
@@ -97,6 +100,7 @@ const providerIds: ProviderId[] = [
 ];
 const themes: Theme[] = ["dark", "light", "system"];
 const densities: Density[] = ["comfortable", "compact"];
+const discussionViews: DiscussionView[] = ["RIGHT_DRAWER", "FULLSCREEN"];
 
 function record(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -165,6 +169,9 @@ export function parseSettings(value: unknown): AppSettings {
     : defaultSettings.appearance.density;
   const fontScale = integer(appearance.fontScale, defaultSettings.appearance.fontScale);
   if (fontScale < 80 || fontScale > 140) throw new Error("Font scale must be between 80 and 140");
+  const discussionView = discussionViews.includes(appearance.discussionView as DiscussionView)
+    ? appearance.discussionView as DiscussionView
+    : defaultSettings.appearance.discussionView;
 
   const rawModels = record(root.models);
   const models: Record<string, ModelCustomization> = {};
@@ -181,7 +188,7 @@ export function parseSettings(value: unknown): AppSettings {
     profile: { displayName, realName, greetingStyle },
     defaults: { mode, providers, limits: parsedLimits },
     models,
-    appearance: { theme, density, fontScale },
+    appearance: { theme, density, fontScale, discussionView },
   };
 }
 

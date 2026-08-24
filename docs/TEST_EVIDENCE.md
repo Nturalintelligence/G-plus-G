@@ -96,3 +96,18 @@ ChatGPT OAuth-window closure was reproduced by the owner.
 | Markdown/code-fence zero-job guard | PASS | Ordinary fenced code creates zero execution jobs. |
 
 Provider upload behavior was not exercised or modified; it remains the explicit Phase C gate.
+
+## Phase B.1 UI polish — 2026-08-24
+
+| Check | Result |
+|---|---|
+| Settings/ready-answer/UI contract focused tests | PASS |
+| PNG/JPEG/WebP and wide/tall canvas fixtures | PASS |
+| Four thumbnails, wrapping/bounds and removal | PASS |
+| Preview 90vw/90vh, Escape/backdrop/button close | PASS |
+| Right drawer with seven long turns | PASS |
+| Fullscreen mode and persisted setting | PASS |
+| Narrow 700 px window automatic fullscreen | PASS |
+| Light/dark and 100/125/150% visual scaling | PASS |
+
+No provider adapter or orchestration source was changed in Phase B.1.

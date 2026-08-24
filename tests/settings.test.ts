@@ -24,14 +24,20 @@ describe("settings", () => {
         providers: ["gemini", "gemini"],
         limits: { maxTurns: 8, maxTurnMs: 90000, maxSessionMs: 600000, maxRetries: 2, confirmationEvery: 3, requireConfirmation: true },
       },
-      appearance: { theme: "light", density: "compact", fontScale: 110 },
+      appearance: { theme: "light", density: "compact", fontScale: 110, discussionView: "FULLSCREEN" },
       secret: "must-not-survive",
     });
     expect(saved.profile.displayName).toBe("Ada");
     expect(saved.defaults.providers).toEqual(["gemini"]);
     expect(saved.defaults.limits.requireConfirmation).toBe(true);
+    expect(saved.appearance.discussionView).toBe("FULLSCREEN");
     expect(readFileSync(file, "utf8")).not.toContain("must-not-survive");
     expect(store.load()).toEqual(saved);
+  });
+
+  it("defaults unknown discussion presentation to the right drawer", () => {
+    expect(parseSettings({ ...defaultSettings, appearance: { ...defaultSettings.appearance, discussionView: "WINDOW" } }).appearance.discussionView)
+      .toBe("RIGHT_DRAWER");
   });
 
   it("rejects unsafe values", () => {

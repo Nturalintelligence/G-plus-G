@@ -143,6 +143,7 @@ interface AppSettingsView {
     theme: "dark" | "light" | "system";
     density: "comfortable" | "compact";
     fontScale: number;
+    discussionView: "RIGHT_DRAWER" | "FULLSCREEN";
   };
 }
 

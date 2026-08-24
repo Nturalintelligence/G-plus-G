@@ -307,6 +307,20 @@ export function SettingsModal({
                 <h2>Параметры оркестрации и лимиты</h2>
                 <div className="form-grid">
                   <label className="form-field">
+                    <span className="field-label">Отображение хода обсуждения</span>
+                    <select
+                      aria-label="Отображение хода обсуждения"
+                      value={settings.appearance.discussionView ?? "RIGHT_DRAWER"}
+                      onChange={(e) => setSettings((val: any) => ({
+                        ...val,
+                        appearance: { ...val.appearance, discussionView: e.target.value },
+                      }))}
+                    >
+                      <option value="RIGHT_DRAWER">Боковая панель</option>
+                      <option value="FULLSCREEN">На весь экран</option>
+                    </select>
+                  </label>
+                  <label className="form-field">
                     <span className="field-label">Максимум ходов на раунд</span>
                     <input
                       type="number"

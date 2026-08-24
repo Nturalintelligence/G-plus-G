@@ -43,3 +43,12 @@ After: `id`, `messageId`, `projectId`, `kind`, `fileName`, `mimeType`, `sizeByte
 - A Windows clipboard does not consistently expose copied documents as trusted `File` objects. Picker/drop is the explicit fallback.
 - Provider delivery evidence is not part of Phase B and remains untrusted until Phase C.
 - Response artifact receiving remains Phase D.
+
+## Phase B.1 UI polish — 2026-08-24
+
+- Composer images are fixed 64×64 thumbnails with cover crop, tooltip, remove action and modal preview; documents remain compact rectangular cards.
+- Preview is bounded to 90vw × 90vh, uses contain sizing, and closes by button, Escape or backdrop.
+- Intermediate model turns no longer expand inline. They open in a persistent-scroll right drawer (420–650 px, default) or application fullscreen view; narrow windows force fullscreen presentation.
+- Discussion presentation is persisted in local settings as `RIGHT_DRAWER` or `FULLSCREEN`.
+- READY view remains limited to user entries plus the explicit final/system result.
+- Seven turns for a trivial prompt remains a separate semantic-stopping defect; orchestration was not changed.

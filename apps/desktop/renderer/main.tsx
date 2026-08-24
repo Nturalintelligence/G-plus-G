@@ -87,7 +87,7 @@ const fallbackSettings: AppSettingsView = {
       requireConfirmation: false,
     },
   },
-  appearance: { theme: "dark", density: "comfortable", fontScale: 100 },
+  appearance: { theme: "dark", density: "comfortable", fontScale: 100, discussionView: "RIGHT_DRAWER" },
 };
 
 function getSessionStatusDisplay(session?: string): { text: string; type: "online" | "warning" | "busy" | "offline" } {
@@ -160,7 +160,7 @@ function App(): React.JSX.Element {
     () => `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
   );
   const [viewMode, setViewMode] = useState<"SYNTHESIZED" | "LIVE">("SYNTHESIZED");
-  const [showTurnsSpoiler, setShowTurnsSpoiler] = useState(false);
+  const [discussionOpen, setDiscussionOpen] = useState(false);
   const [finalizerMode, setFinalizerMode] = useState<"MANUAL" | "LEAD_SELECTS" | "PEER_AGREEMENT">("MANUAL");
   const [composerExpanded, setComposerExpanded] = useState(false);
   const [newProjectDescriptionInput, setNewProjectDescriptionInput] = useState("");
@@ -393,6 +393,16 @@ function App(): React.JSX.Element {
   useEffect(() => {
     if (settingsOpen) void loadQualityDashboard();
   }, [settingsOpen]);
+  useEffect(() => {
+    if (!previewImageModalUrl && !discussionOpen) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      if (previewImageModalUrl) setPreviewImageModalUrl(null);
+      else setDiscussionOpen(false);
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [previewImageModalUrl, discussionOpen]);
 
   async function openProject(id: string): Promise<void> {
     const [details, tasks] = await Promise.all([
@@ -903,22 +913,11 @@ function App(): React.JSX.Element {
               <>
                 {viewMode === "SYNTHESIZED" ? (
                   <>
-                    <details className="turns-spoiler" open={showTurnsSpoiler} onToggle={(e) => setShowTurnsSpoiler((e.target as HTMLDetailsElement).open)}>
-                      <summary className="turns-spoiler-summary">
-                        🔍 {showTurnsSpoiler ? "Скрыть ход обсуждения ИИ-моделей" : "Показать ход обсуждения ИИ-моделей"} ({(current?.transcript || []).filter(t => t.role === "ASSISTANT").length} ходов)
-                      </summary>
-                      <div className="turns-spoiler-content">
-                        {assistantTranscript.filter((entry) => entry.id !== explicitFinalEntry?.id).map((entry) => (
-                          <section className={`message assistant ${entry.providerId ?? ""}`} key={`spoiler-${entry.id}`}>
-                            <header>
-                              <strong>{entry.providerId ?? "ASSISTANT"}</strong>
-                              {entry.round ? <small>ход {entry.round}</small> : null}
-                            </header>
-                            <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml>{entry.content}</ReactMarkdown>
-                          </section>
-                        ))}
-                      </div>
-                    </details>
+                    {assistantTranscript.some((entry) => entry.id !== explicitFinalEntry?.id) ? (
+                      <button type="button" className="open-discussion-btn" onClick={() => setDiscussionOpen(true)}>
+                        Показать ход обсуждения · {assistantTranscript.filter((entry) => entry.id !== explicitFinalEntry?.id).length} ходов
+                      </button>
+                    ) : null}
                     {readyAnswerEntries.map((entry) => (
                       <section className={`message ${entry.role.toLowerCase()} ${entry.providerId ?? ""}`} key={entry.id}>
                         <header>
@@ -1079,29 +1078,28 @@ function App(): React.JSX.Element {
             {attachedFiles.length > 0 ? (
               <div className="attached-files-row">
                 {attachedFiles.map((f) => (
-                  <span key={f.id} className="attached-file-tag">
-                    {f.previewUrl ? (
-                      <img
-                        src={f.previewUrl}
-                        alt={f.fileName}
-                        className="attached-file-preview interactive"
-                        onClick={() => setPreviewImageModalUrl(f.previewUrl!)}
-                        title="Нажмите для полноэкранного просмотра"
-                      />
-                    ) : (
+                  f.previewUrl ? (
+                    <span key={f.id} className="attachment-thumbnail" title={`${f.fileName} · ${f.mimeType} · ${formatAttachmentSize(f.sizeBytes)} · ${f.status}`}>
+                      <button type="button" className="attachment-thumbnail-open" aria-label={`Открыть изображение ${f.fileName}`} onClick={() => setPreviewImageModalUrl(f.previewUrl!)}>
+                        <img src={f.previewUrl} alt="" />
+                      </button>
+                      <button type="button" className="attachment-thumbnail-remove" aria-label={`Удалить вложение ${f.fileName}`} onClick={() => void removeFile(f.id)}>×</button>
+                    </span>
+                  ) : (
+                    <span key={f.id} className="attached-file-tag document-attachment-card">
                       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                         <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z" />
                         <polyline points="13 2 13 9 20 9" />
                       </svg>
-                    )}{" "}
-                    <span className="attached-file-details">
-                      <span className="attached-file-name">{f.fileName}</span>
-                      <small>{f.mimeType} · {formatAttachmentSize(f.sizeBytes)} · {f.status}</small>
-                      {f.error ? <small className="attachment-error">{f.error}</small> : null}
+                      <span className="attached-file-details">
+                        <span className="attached-file-name">{f.fileName}</span>
+                        <small>{f.fileName.includes(".") ? f.fileName.split(".").pop()?.toUpperCase() : f.mimeType} · {formatAttachmentSize(f.sizeBytes)} · {f.status}</small>
+                        {f.error ? <small className="attachment-error">{f.error}</small> : null}
+                      </span>
+                      {f.status === "FAILED" ? <button aria-label={`Повторить вложение ${f.fileName}`} onClick={() => void retryFile(f.id)}>↻</button> : null}
+                      <button aria-label={`Удалить вложение ${f.fileName}`} onClick={() => void removeFile(f.id)}>×</button>
                     </span>
-                    {f.status === "FAILED" ? <button aria-label={`Повторить вложение ${f.fileName}`} onClick={() => void retryFile(f.id)}>↻</button> : null}
-                    <button aria-label={`Удалить вложение ${f.fileName}`} onClick={() => removeFile(f.id)}>×</button>
-                  </span>
+                  )
                 ))}
               </div>
             ) : null}
@@ -1409,10 +1407,38 @@ function App(): React.JSX.Element {
         </div>
       ) : null}
 
+      {assistantTranscript.some((entry) => entry.id !== explicitFinalEntry?.id) ? (
+        <aside
+          className={`discussion-view ${settings.appearance.discussionView === "FULLSCREEN" ? "fullscreen" : "right-drawer"} ${discussionOpen ? "open" : "closed"}`}
+          aria-hidden={!discussionOpen}
+          aria-label="Ход обсуждения моделей"
+        >
+          <header className="discussion-view-header">
+            <div>
+              <strong>Ход обсуждения моделей</strong>
+              <small>{assistantTranscript.filter((entry) => entry.id !== explicitFinalEntry?.id).length} ходов</small>
+            </div>
+            <button type="button" className="close-modal-btn" aria-label="Вернуться к итоговому ответу" onClick={() => setDiscussionOpen(false)}>×</button>
+          </header>
+          <div className="discussion-view-scroll">
+            {assistantTranscript.filter((entry) => entry.id !== explicitFinalEntry?.id).map((entry) => (
+              <section className={`discussion-turn ${entry.providerId ?? ""}`} key={`discussion-${entry.id}`}>
+                <header>
+                  <strong>{entry.providerId ?? "ASSISTANT"}</strong>
+                  <span>{entry.round ? `Ход ${entry.round}` : "Промежуточный ответ"}</span>
+                  {entry.createdAt ? <time dateTime={entry.createdAt}>{new Date(entry.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time> : null}
+                </header>
+                <div className="discussion-turn-content"><ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml>{entry.content}</ReactMarkdown></div>
+              </section>
+            ))}
+          </div>
+        </aside>
+      ) : null}
+
       {previewImageModalUrl ? (
-        <div className="modal-backdrop" onClick={() => setPreviewImageModalUrl(null)}>
-          <div className="image-preview-modal-card" onClick={(e) => e.stopPropagation()}>
-            <button className="close-modal-btn" onClick={() => setPreviewImageModalUrl(null)}>×</button>
+        <div className="modal-backdrop image-preview-backdrop" role="presentation" onClick={() => setPreviewImageModalUrl(null)}>
+          <div className="image-preview-modal-card" role="dialog" aria-modal="true" aria-label="Просмотр изображения" onClick={(e) => e.stopPropagation()}>
+            <button className="close-modal-btn" aria-label="Закрыть просмотр" onClick={() => setPreviewImageModalUrl(null)}>×</button>
             <img src={previewImageModalUrl} alt="Полноэкранный просмотр" className="full-preview-image" />
           </div>
         </div>
