@@ -19,6 +19,7 @@ import { bundledChromiumExecutable } from "./browser/runtime.js";
 import {
   AmbiguousElementError,
   ChallengeRequiredError,
+  ConversationUnavailableError,
   LoginCancelledError,
   LoginRequiredError,
   LoginTimeoutError,
@@ -69,7 +70,8 @@ const USER_MESSAGES = [
 export const GEMINI_UPLOAD_SELECTORS = {
   providerId: "gemini",
   fileInputs: ['input[type="file"]', 'uploader-file-input input[type="file"]'],
-  attachmentButtons: ['button[aria-label*="Upload" i]', 'button[aria-label*="Прикреп" i]', 'button[aria-label*="Add file" i]', 'button[data-test-id*="upload" i]'],
+  attachmentButtons: ['button[aria-label*="Upload" i]', 'button[aria-label*="Прикреп"]', 'button[aria-label*="Загруз"]', 'button[aria-label*="Add file" i]', 'button[data-test-id*="upload" i]'],
+  fileMenuItems: ['[role="menuitem"]:has-text("Загрузить файлы")', '[role="menuitem"]:has-text("Upload files")', 'button:has-text("Загрузить файлы")', 'button:has-text("Upload files")'],
   attachmentEvidence: [
     'file-chip',
     'mat-chip:has([class*="file" i])',
@@ -195,7 +197,13 @@ export class GeminiAdapter implements ModelAdapter {
     if (!ref.url.startsWith("https://gemini.google.com/")) {
       throw new Error("Conversation URL must belong to gemini.google.com");
     }
-    await (await this.ensurePage()).goto(ref.url, { waitUntil: "domcontentloaded" });
+    const page = await this.ensurePage();
+    await page.goto(ref.url, { waitUntil: "domcontentloaded" });
+    const expectedPath = new URL(ref.url).pathname;
+    await page.waitForTimeout(750);
+    const available = new URL(page.url()).pathname === expectedPath
+      && (await this.visibleComposers()).length === 1;
+    if (!available) throw new ConversationUnavailableError("Сохранённый диалог Gemini удалён или недоступен");
   }
 
   async getCurrentConversation(): Promise<ConversationRef> {

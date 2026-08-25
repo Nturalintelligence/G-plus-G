@@ -68,6 +68,33 @@ describe("provider attachment upload evidence", () => {
     await page.close();
   });
 
+  it("recognizes filenames exposed by descendant accessibility metadata", async () => {
+    await fixture(`document.querySelector('input').addEventListener('change', (event) => {
+      const chip = document.createElement('div'); chip.className = 'attachment-chip';
+      const remove = document.createElement('button'); remove.setAttribute('aria-label', 'Remove file ' + event.target.files[0].name);
+      chip.appendChild(remove); document.querySelector('#chips').appendChild(chip);
+    });`);
+    await expect(uploadAttachmentsToComposer(page, [first], capabilities, selectors, store)).resolves.toMatchObject({ attachmentIds: [first.id] });
+    await page.close();
+  });
+
+  it("accepts ChatGPT file-tile groups with provider filename suffixes", async () => {
+    await fixture(`document.querySelector('input').addEventListener('change', (event) => {
+      const form = document.createElement('form');
+      for (const [index, file] of Array.from(event.target.files).entries()) {
+        const tile = document.createElement('div'); tile.setAttribute('role', 'group');
+        const dot = file.name.lastIndexOf('.');
+        tile.setAttribute('aria-label', file.name.slice(0, dot) + '(' + (index + 2) + ')' + file.name.slice(dot));
+        tile.textContent = file.name;
+        form.appendChild(tile);
+      }
+      document.querySelector('#chips').appendChild(form);
+    });`);
+    await expect(uploadAttachmentsToComposer(page, [first, second], capabilities, { ...CHATGPT_UPLOAD_SELECTORS, timeoutMs: 600 }, store))
+      .resolves.toMatchObject({ attachmentIds: [first.id, second.id] });
+    await page.close();
+  });
+
   it("fails closed when the provider exposes no stable upload evidence", async () => {
     await fixture(`document.querySelector('input').addEventListener('change', () => undefined);`);
     await expect(uploadAttachmentsToComposer(page, [first], capabilities, { ...selectors, timeoutMs: 250 }, store)).rejects.toThrow(/did not expose stable composer evidence/);
@@ -101,6 +128,32 @@ describe("provider attachment upload evidence", () => {
   ] as const)("matches the production %s composer evidence selectors", async (_provider, productionSelectors, evidenceMarkup) => {
     await fixture(`document.querySelector('input').addEventListener('change', (event) => { const host = document.querySelector('#chips'); host.innerHTML = ${JSON.stringify(evidenceMarkup)}; host.firstElementChild.textContent = event.target.files[0].name; });`);
     await expect(uploadAttachmentsToComposer(page, [second], capabilities, { ...productionSelectors, timeoutMs: 600 }, store)).resolves.toMatchObject({ attachmentIds: [second.id] });
+    await page.close();
+  });
+
+  it("opens the localized Gemini upload control", async () => {
+    await fixture(`document.querySelector('button[aria-label="Загрузить файлы"]').addEventListener('click', () => {
+      const input = document.createElement('input'); input.type = 'file'; input.multiple = true;
+      input.addEventListener('change', (event) => { for (const file of event.target.files) { const chip = document.createElement('file-chip'); chip.textContent = file.name; document.querySelector('#chips').appendChild(chip); } });
+      document.body.appendChild(input);
+    });`, '<button aria-label="Загрузить файлы">files</button>');
+    await expect(uploadAttachmentsToComposer(page, [first], capabilities, { ...GEMINI_UPLOAD_SELECTORS, timeoutMs: 600 }, store))
+      .resolves.toMatchObject({ attachmentIds: [first.id] });
+    await page.close();
+  });
+
+  it("selects the Gemini upload-files menu item before waiting for the input", async () => {
+    await fixture(`document.querySelector('button[aria-label="Загрузить"]').addEventListener('click', () => {
+      const menu = document.createElement('button'); menu.setAttribute('role', 'menuitem'); menu.textContent = 'Загрузить файлы';
+      menu.addEventListener('click', () => {
+        const input = document.createElement('input'); input.type = 'file'; input.multiple = true;
+        input.addEventListener('change', (event) => { for (const file of event.target.files) { const chip = document.createElement('file-chip'); chip.textContent = file.name; document.querySelector('#chips').appendChild(chip); } });
+        document.body.appendChild(input);
+      });
+      document.body.appendChild(menu);
+    });`, '<button aria-label="Загрузить">open</button>');
+    await expect(uploadAttachmentsToComposer(page, [first], capabilities, { ...GEMINI_UPLOAD_SELECTORS, timeoutMs: 600 }, store))
+      .resolves.toMatchObject({ attachmentIds: [first.id] });
     await page.close();
   });
 

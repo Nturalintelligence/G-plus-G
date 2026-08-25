@@ -8,6 +8,7 @@ export interface ProviderUploadSelectors {
   providerId: string;
   fileInputs: readonly string[];
   attachmentButtons: readonly string[];
+  fileMenuItems?: readonly string[];
   attachmentEvidence: readonly string[];
   uploadBusy: readonly string[];
   uploadErrors: readonly string[];
@@ -103,23 +104,31 @@ async function waitForCompatibleFileInputs(page: Page, selectors: readonly strin
 }
 
 async function combinedEvidenceText(page: Page, selectors: readonly string[]): Promise<{ count: number; text: string }> {
+  let count = 0;
+  const values: string[] = [];
   for (const selector of selectors) {
     const candidates = page.locator(selector);
-    const count = await candidates.count().catch(() => 0);
-    if (count === 0) continue;
-    const values: string[] = [];
-    for (let index = 0; index < count; index += 1) {
+    const candidateCount = await candidates.count().catch(() => 0);
+    for (let index = 0; index < candidateCount; index += 1) {
       const item = candidates.nth(index);
       if (!(await item.isVisible().catch(() => false))) continue;
-      values.push([
-        await item.innerText().catch(() => ""),
-        await item.getAttribute("aria-label").catch(() => ""),
-        await item.getAttribute("title").catch(() => ""),
-      ].filter(Boolean).join(" "));
+      count += 1;
+      values.push(await item.evaluate((element) => {
+        const attributes = ["aria-label", "title", "alt", "data-name", "data-file-name", "data-testid"]
+          .map((name) => element.getAttribute(name) ?? "");
+        const descendants = Array.from(element.querySelectorAll("[aria-label], [title], [alt], [data-name], [data-file-name]"))
+          .flatMap((child) => [
+            child.getAttribute("aria-label") ?? "",
+            child.getAttribute("title") ?? "",
+            child.getAttribute("alt") ?? "",
+            child.getAttribute("data-name") ?? "",
+            child.getAttribute("data-file-name") ?? "",
+          ]);
+        return [(element as HTMLElement).innerText ?? "", ...attributes, ...descendants].filter(Boolean).join(" ");
+      }).catch(() => ""));
     }
-    if (values.length > 0) return { count: values.length, text: values.join(" ").normalize("NFC").toLowerCase() };
   }
-  return { count: 0, text: "" };
+  return { count, text: values.join(" ").normalize("NFC").toLowerCase() };
 }
 
 function fileEvidenceMatches(evidence: { count: number; text: string }, attachments: readonly AttachmentRefV1[]): boolean {
@@ -153,22 +162,33 @@ export async function uploadAttachmentsToComposer(
     if (!button) throw new Error(`${selectors.providerId} attachment control was not found`);
     await button.click();
     inputs = await waitForCompatibleFileInputs(page, selectors.fileInputs, attachments);
+    if (inputs.length === 0 && selectors.fileMenuItems?.length) {
+      const menuItem = await visibleUnique(page, selectors.fileMenuItems);
+      if (menuItem) {
+        await menuItem.click();
+        inputs = await waitForCompatibleFileInputs(page, selectors.fileInputs, attachments);
+      }
+    }
   }
   if (inputs.length !== 1) throw new Error(`${selectors.providerId} file input is ${inputs.length === 0 ? "missing" : "ambiguous"}`);
   const input = inputs[0]!;
-  await input.setInputFiles(absolutePaths);
-  const inputFiles = await input.evaluate((node) => Array.from((node as HTMLInputElement).files ?? []).map((file) => ({ name: file.name, size: file.size })));
+  const inputHandle = await input.elementHandle();
+  if (!inputHandle) throw new Error(`${selectors.providerId} file input detached before upload`);
+  await inputHandle.setInputFiles(absolutePaths);
+  const inputFiles = await inputHandle.evaluate((node) => Array.from((node as HTMLInputElement).files ?? []).map((file) => ({ name: file.name, size: file.size })));
   if (inputFiles.length !== attachments.length || inputFiles.some((file, index) => file.name !== path.basename(absolutePaths[index]!) || file.size !== attachments[index]!.sizeBytes)) {
     throw new Error(`${selectors.providerId} file input did not accept the exact attachment set`);
   }
 
   const evidenceAttachments = attachments.map((attachment, index) => ({ ...attachment, fileName: path.basename(absolutePaths[index]!) }));
   const deadline = Date.now() + (selectors.timeoutMs ?? 45_000);
+  let lastEvidence = { count: 0, text: "" };
   while (Date.now() < deadline) {
     const error = await firstVisible(page, selectors.uploadErrors);
     if (error) throw new Error(`${selectors.providerId} reported attachment upload failure: ${await error.innerText().catch(() => "unknown error")}`);
     const busy = await firstVisible(page, selectors.uploadBusy);
     const evidence = await combinedEvidenceText(page, selectors.attachmentEvidence);
+    lastEvidence = evidence;
     if (!busy && fileEvidenceMatches(evidence, evidenceAttachments)) {
       return {
         attachmentIds: attachments.map((attachment) => attachment.id),
@@ -179,5 +199,9 @@ export async function uploadAttachmentsToComposer(
     }
     await page.waitForTimeout(150);
   }
-  throw new Error(`${selectors.providerId} did not expose stable composer evidence for all uploaded files`);
+  const expectedNames = evidenceAttachments.map((attachment) => attachment.fileName);
+  throw new Error(
+    `${selectors.providerId} did not expose stable composer evidence for all uploaded files `
+    + `(cards=${lastEvidence.count}, expected=${JSON.stringify(expectedNames)}, evidence=${JSON.stringify(lastEvidence.text.slice(0, 500))})`,
+  );
 }

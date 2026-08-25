@@ -27,6 +27,7 @@ import { newId } from "./ids.js";
 import {
   AmbiguousElementError,
   ChallengeRequiredError,
+  ConversationUnavailableError,
   LoginCancelledError,
   LoginRequiredError,
   LoginTimeoutError,
@@ -72,10 +73,13 @@ export const CHATGPT_UPLOAD_SELECTORS = {
   fileInputs: ['input[type="file"]'],
   attachmentButtons: ['button[aria-label*="Attach" i]', 'button[aria-label*="Прикреп" i]', 'button[data-testid="attach-button"]'],
   attachmentEvidence: [
-    '[data-testid*="attachment" i]',
-    '[data-testid*="file" i]',
-    'button[aria-label*="remove file" i]',
-    'button[aria-label*="удалить файл" i]',
+    'form [role="group"][aria-label]',
+    '[data-testid="composer-attachment"]',
+    'form [data-testid*="attachment" i]',
+    'form button[aria-label*="remove file" i]',
+    'form button[aria-label*="remove attachment" i]',
+    'form button[aria-label*="Удалить файл"]',
+    'form button[aria-label*="удалить влож" i]',
     'form [class*="attachment" i]',
   ],
   uploadBusy: ['[aria-label*="uploading" i]', '[aria-label*="загруз" i][aria-busy="true"]', '[role="progressbar"]'],
@@ -172,7 +176,13 @@ export class ChatGptAdapter implements ModelAdapter {
     if (!ref.url.startsWith("https://chatgpt.com/")) {
       throw new Error("Conversation URL must belong to chatgpt.com");
     }
-    await (await this.ensurePage()).goto(ref.url, { waitUntil: "domcontentloaded" });
+    const page = await this.ensurePage();
+    await page.goto(ref.url, { waitUntil: "domcontentloaded" });
+    const expectedPath = new URL(ref.url).pathname;
+    await page.waitForTimeout(750);
+    const available = new URL(page.url()).pathname === expectedPath
+      && (await this.findVisibleComposers()).length === 1;
+    if (!available) throw new ConversationUnavailableError("Сохранённый диалог ChatGPT удалён или недоступен");
   }
 
   async getCurrentConversation(): Promise<ConversationRef> {
