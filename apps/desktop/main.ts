@@ -6,10 +6,12 @@ import {
   BrowserWindow,
   dialog,
   ipcMain,
+  Menu,
   net,
   protocol,
   shell,
   type IpcMainInvokeEvent,
+  type MenuItemConstructorOptions,
 } from "electron";
 import { createAdapter, parseProvider } from "../../src/adapters/adapter-registry.js";
 import { SpecExporter } from "../../src/artifacts/spec-exporter.js";
@@ -210,8 +212,15 @@ function createWindow(): void {
     height: 980,
     minWidth: 1100,
     minHeight: 700,
+    autoHideMenuBar: true,
+    titleBarStyle: "hidden",
+    titleBarOverlay: {
+      color: "#151516",
+      symbolColor: "#F7F6F2",
+      height: 56,
+    },
     backgroundColor: "#0d1117",
-    icon: join(app.getAppPath(), "dist/desktop/logo.png"),
+    icon: join(app.getAppPath(), "build", "icon.png"),
     webPreferences: {
       preload: join(app.getAppPath(), "apps/desktop/preload.cjs"),
       contextIsolation: true,
@@ -219,6 +228,7 @@ function createWindow(): void {
       sandbox: true,
     },
   });
+  mainWindow.setMenuBarVisibility(false);
   const openExternal = (url: string): void => {
     try {
       const parsed = new URL(url);
@@ -1095,6 +1105,25 @@ function registerIpc(): void {
     fs.writeFileSync(saveRes.filePath, buf);
     return { success: true, fileName: path.basename(saveRes.filePath) };
   });
+  handle("window:setTheme", (_event, theme: unknown) => {
+    if (theme !== "dark" && theme !== "light") throw new Error("Unsupported title bar theme");
+    mainWindow?.setTitleBarOverlay({
+      color: theme === "light" ? "#FFFFFF" : "#151516",
+      symbolColor: theme === "light" ? "#121212" : "#F7F6F2",
+      height: 56,
+    });
+    return { success: true };
+  });
+}
+
+function configureApplicationMenu(): void {
+  const template: MenuItemConstructorOptions[] = [
+    { label: "Файл", submenu: [{ role: "quit" }] },
+    { role: "editMenu" },
+    { role: "viewMenu" },
+    { role: "windowMenu" },
+  ];
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
 app.whenReady().then(() => {
@@ -1107,6 +1136,7 @@ app.whenReady().then(() => {
     dataRoot: dataPath(),
   });
   registerIpc();
+  configureApplicationMenu();
   createWindow();
 });
 

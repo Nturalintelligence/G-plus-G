@@ -58,9 +58,11 @@
     "appId": "local.gplusg.orchestrator",
     "productName": "G plus G",
     "directories": {
-      "output": "release"
+      "output": "release",
+      "buildResources": "build"
     },
     "files": [
+      "build/icon.png",
       "dist/desktop/**/*",
       "dist-electron/**/*",
       "apps/desktop/preload.cjs",
@@ -80,7 +82,15 @@
     ],
     "asar": true,
     "win": {
-      "target": "nsis"
+      "target": "nsis",
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "installerHeaderIcon": "build/icon.ico",
+      "createStartMenuShortcut": true,
+      "shortcutName": "G plus G"
     },
     "mac": {
       "target": "dmg"

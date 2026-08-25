@@ -57,6 +57,9 @@ const api = {
     get: () => ipcRenderer.invoke("settings:get"),
     save: (value) => ipcRenderer.invoke("settings:save", value),
   },
+  window: {
+    setTheme: (theme) => ipcRenderer.invoke("window:setTheme", theme),
+  },
   composerDraft: {
     get: (projectId) => ipcRenderer.invoke("composerDraft:get", projectId),
     save: (value) => ipcRenderer.invoke("composerDraft:save", value),

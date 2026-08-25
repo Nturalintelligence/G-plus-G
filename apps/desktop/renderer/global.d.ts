@@ -5,6 +5,9 @@ declare module "*.svg" {
 
 interface Window {
   orchestrator: {
+    window: {
+      setTheme(theme: "dark" | "light"): Promise<{ success: boolean }>;
+    };
     system: {
       preflight(): Promise<Array<{
         name: string;

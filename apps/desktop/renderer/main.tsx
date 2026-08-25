@@ -153,6 +153,7 @@ function App(): React.JSX.Element {
     () => new Set(["acceptanceCriteria"]),
   );
   const [status, setStatus] = useState("Готово");
+  const [statusNotificationVisible, setStatusNotificationVisible] = useState(false);
   const [running, setRunning] = useState(false);
   const [settings, setSettings] = useState<AppSettingsView>(fallbackSettings);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -195,6 +196,9 @@ function App(): React.JSX.Element {
   const outputRef = useRef<HTMLElement>(null);
   const draftHydratedProjectRef = useRef<string | null>(null);
   const draftPersistenceSuspendedRef = useRef(false);
+  const effectiveAppearanceTheme: "dark" | "light" = settings.appearance.theme === "system"
+    ? (window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark")
+    : settings.appearance.theme;
 
   function composerDraftPayload(projectId: string): Omit<ComposerDraftView, "updatedAt"> {
     return {
@@ -429,10 +433,21 @@ function App(): React.JSX.Element {
   }, []);
   useEffect(() => {
     const root = document.documentElement;
-    root.dataset.theme = settings.appearance.theme;
+    root.dataset.theme = effectiveAppearanceTheme;
     root.dataset.density = settings.appearance.density;
     root.style.fontSize = `${settings.appearance.fontScale}%`;
-  }, [settings.appearance]);
+    void window.orchestrator.window.setTheme(effectiveAppearanceTheme).catch(() => undefined);
+  }, [settings.appearance, effectiveAppearanceTheme]);
+  useEffect(() => {
+    if (status === "Готово") {
+      setStatusNotificationVisible(false);
+      return;
+    }
+    setStatusNotificationVisible(true);
+    if (/ошиб|не удалось|failed|captcha|капч|недоступ/i.test(status)) return;
+    const timer = window.setTimeout(() => setStatusNotificationVisible(false), 6_000);
+    return () => window.clearTimeout(timer);
+  }, [status]);
   useEffect(() => {
     outputRef.current?.scrollTo({ top: outputRef.current.scrollHeight, behavior: "smooth" });
   }, [current?.transcript.length, optimisticUserTask, Object.values(streaming).join("").length, running]);
@@ -853,6 +868,7 @@ function App(): React.JSX.Element {
   }
 
   const assistantTranscript = (current?.transcript ?? []).filter((entry) => entry.role === "ASSISTANT");
+  const headerLogoSrc = effectiveAppearanceTheme === "light" ? logoLight : logoDark;
   const {
     finalEntry: explicitFinalEntry,
     visibleEntries: readyAnswerEntries,
@@ -873,12 +889,16 @@ function App(): React.JSX.Element {
               <line x1="3" y1="18" x2="21" y2="18" />
             </svg>
           </button>
-          <h1 className="header-title">G+G Workspace</h1>
+          <img className="header-logo" src={headerLogoSrc} alt="" aria-hidden="true" />
+          <h1 className="header-title">G+G</h1>
         </div>
         <div className="header-actions">
-          <span className="status" role="status" aria-live="polite">{status}</span>
+          <span className={`status-summary ${running ? "busy" : ""}`} title={status}>
+            <span className="status-summary-dot" />
+            {running ? "Выполняется" : "Готово"}
+          </span>
           <button
-            className={`icon-header-btn ${inspectorOpen ? "active" : ""}`}
+            className={`icon-header-btn specification-btn ${inspectorOpen ? "active" : ""}`}
             title="Конструктор спецификации"
             onClick={() => setInspectorOpen(!inspectorOpen)}
           >
@@ -891,6 +911,20 @@ function App(): React.JSX.Element {
           </button>
         </div>
       </header>
+      {statusNotificationVisible ? (
+        <div className="app-notification" role="status" aria-live="polite">
+          <span className="app-notification-text" title={status}>{status}</span>
+          <button
+            className="app-notification-close"
+            type="button"
+            aria-label="Закрыть уведомление"
+            title="Закрыть уведомление"
+            onClick={() => setStatusNotificationVisible(false)}
+          >
+            ×
+          </button>
+        </div>
+      ) : null}
       <div className={`layout ${!sidebarOpen ? "collapsed-sidebar" : ""} ${inspectorOpen ? "has-inspector" : ""}`}>
         {sidebarOpen ? (
           <aside className="sidebar-pane">

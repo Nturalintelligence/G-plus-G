@@ -6,6 +6,8 @@ const read = (file: string) => fs.readFileSync(path.join(process.cwd(), file), "
 const renderer = read("apps/desktop/renderer/main.tsx");
 const styles = read("apps/desktop/renderer/styles.css");
 const settingsModal = read("apps/desktop/renderer/components/SettingsModal.tsx");
+const desktopMain = read("apps/desktop/main.ts");
+const preload = read("apps/desktop/preload.cjs");
 
 describe("Phase B.1 UI contracts", () => {
   it("constrains composer thumbnails and full image preview", () => {
@@ -55,5 +57,21 @@ describe("Phase B.1 UI contracts", () => {
     expect(styles).toMatch(/\.sidebar-models-section,[\s\S]*?\.sidebar-footer\s*\{[\s\S]*?flex-shrink:\s*0;/);
     expect(styles).toMatch(/\.project-name\s*\{[\s\S]*?text-overflow:\s*ellipsis;/);
     expect(styles).toMatch(/\.project-menu-btn\s*\{[\s\S]*?flex:\s*0 0 34px;/);
+  });
+
+  it("keeps native window controls and specification geometry independent from notifications", () => {
+    expect(desktopMain).toContain('titleBarStyle: "hidden"');
+    expect(desktopMain).toContain("titleBarOverlay:");
+    expect(desktopMain).toContain("autoHideMenuBar: true");
+    expect(desktopMain).toContain("Menu.setApplicationMenu");
+    expect(preload).toContain('ipcRenderer.invoke("window:setTheme", theme)');
+    expect(renderer).toContain("statusNotificationVisible");
+    expect(renderer).toContain('className="app-notification"');
+    expect(renderer).toContain('className={`icon-header-btn specification-btn');
+    expect(styles).toMatch(/header\s*\{[\s\S]*?-webkit-app-region:\s*drag;/);
+    expect(styles).toMatch(/\.header-actions\s*\{[\s\S]*?-webkit-app-region:\s*no-drag;/);
+    expect(styles).toMatch(/\.specification-btn\s*\{[\s\S]*?flex-shrink:\s*0;/);
+    expect(styles).toMatch(/\.app-notification\s*\{[\s\S]*?position:\s*fixed;[\s\S]*?max-width:/);
+    expect(styles).toMatch(/\.app-notification-text\s*\{[\s\S]*?-webkit-line-clamp:\s*2;/);
   });
 });
