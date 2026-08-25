@@ -74,4 +74,13 @@ describe("Phase B.1 UI contracts", () => {
     expect(styles).toMatch(/\.app-notification\s*\{[\s\S]*?position:\s*fixed;[\s\S]*?max-width:/);
     expect(styles).toMatch(/\.app-notification-text\s*\{[\s\S]*?-webkit-line-clamp:\s*2;/);
   });
+
+  it("gives specification a fixed header, scrollable content and fixed footer", () => {
+    expect(renderer).toContain('className="inspector-content"');
+    expect(renderer).toContain('className="controls state-actions inspector-footer"');
+    expect(renderer).toContain('aria-modal="true"');
+    expect(renderer).toContain('className="spec-icon"');
+    expect(styles).toMatch(/\.inspector-content\s*\{[\s\S]*?min-height:\s*0;[\s\S]*?overflow-y:\s*auto;/);
+    expect(styles).toMatch(/\.project-row\.selected \.project-btn\s*\{[\s\S]*?border-radius:\s*12px;/);
+  });
 });

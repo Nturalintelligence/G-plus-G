@@ -47,6 +47,32 @@ const stateSections: Array<{
   { key: "acceptanceCriteria", title: "Критерии приёмки", empty: "Добавьте критерий", rationale: false },
 ];
 
+type SpecIconId = StateSection;
+
+function SpecIcon({ id }: { id: SpecIconId }) {
+  const paths: Record<SpecIconId, React.ReactNode> = {
+    requirements: <><path d="M9 5h6"/><path d="M9 9h6"/><path d="M9 13h4"/><path d="M5 3h14v18H5z"/></>,
+    constraints: <><circle cx="12" cy="12" r="9"/><path d="m8 8 8 8"/></>,
+    decisions: <><circle cx="12" cy="12" r="9"/><path d="m8 12 2.5 2.5L16 9"/></>,
+    rejectedOptions: <><circle cx="12" cy="12" r="9"/><path d="m9 9 6 6m0-6-6 6"/></>,
+    openQuestions: <><circle cx="12" cy="12" r="9"/><path d="M9.8 9a2.3 2.3 0 1 1 3.5 2c-.8.5-1.3 1-1.3 2"/><path d="M12 16h.01"/></>,
+    acceptanceCriteria: <><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><path d="M12 3v3m9 6h-3m-6 6v3M6 12H3"/></>,
+  };
+  return <svg className="spec-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[id]}</svg>;
+}
+
+function eventTitle(type: string): string {
+  const titles: Record<string, string> = {
+    TRANSCRIPT_ENTRY_RECORDED: "Сообщение сохранено",
+    TRANSCRIPT_ENTRY_UPDATED: "Ответ обновлён",
+    TURN_STATUS_CHANGED: "Статус хода изменён",
+    CONVERSATION_CREATED: "Диалог создан",
+    CONVERSATION_REF_UPDATED: "Диалог привязан",
+    PROJECT_STATE_SAVED: "Спецификация сохранена",
+  };
+  return titles[type] ?? type.replaceAll("_", " ").toLocaleLowerCase("ru-RU");
+}
+
 const metricLabels: Record<string, string> = {
   "provider.turn.success": "Успешность",
   "provider.turn.elapsed_ms": "Время ответа",
@@ -173,6 +199,8 @@ function App(): React.JSX.Element {
   const [deleteTarget, setDeleteTarget] = useState<ProjectView | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [activeSpecSection, setActiveSpecSection] = useState<string | null>(null);
+  const [eventFilter, setEventFilter] = useState("ALL");
+  const [eventLimit, setEventLimit] = useState(20);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [attachedFiles, setAttachedFiles] = useState<AttachedFileItem[]>([]);
@@ -194,11 +222,46 @@ function App(): React.JSX.Element {
   const [cliTasks, setCliTasks] = useState<CliTaskView[]>([]);
   const [busyCliTaskId, setBusyCliTaskId] = useState<string | null>(null);
   const outputRef = useRef<HTMLElement>(null);
+  const specificationButtonRef = useRef<HTMLButtonElement>(null);
+  const specModalRef = useRef<HTMLElement>(null);
   const draftHydratedProjectRef = useRef<string | null>(null);
   const draftPersistenceSuspendedRef = useRef(false);
   const effectiveAppearanceTheme: "dark" | "light" = settings.appearance.theme === "system"
     ? (window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark")
     : settings.appearance.theme;
+
+  function closeSpecSection(): void {
+    setActiveSpecSection(null);
+    window.setTimeout(() => specificationButtonRef.current?.focus(), 0);
+  }
+
+  useEffect(() => {
+    if (!activeSpecSection || !specModalRef.current) return;
+    const modal = specModalRef.current;
+    const focusable = () => [...modal.querySelectorAll<HTMLElement>('button:not([disabled]), textarea:not([disabled]), select:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])')];
+    focusable()[0]?.focus();
+    const trapFocus = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeSpecSection();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const items = focusable();
+      if (items.length === 0) return;
+      const first = items[0]!;
+      const last = items.at(-1)!;
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    modal.addEventListener("keydown", trapFocus);
+    return () => modal.removeEventListener("keydown", trapFocus);
+  }, [activeSpecSection]);
 
   function composerDraftPayload(projectId: string): Omit<ComposerDraftView, "updatedAt"> {
     return {
@@ -898,6 +961,7 @@ function App(): React.JSX.Element {
             {running ? "Выполняется" : "Готово"}
           </span>
           <button
+            ref={specificationButtonRef}
             className={`icon-header-btn specification-btn ${inspectorOpen ? "active" : ""}`}
             title="Конструктор спецификации"
             onClick={() => setInspectorOpen(!inspectorOpen)}
@@ -1233,7 +1297,7 @@ function App(): React.JSX.Element {
         </section>
         {inspectorOpen ? (
           <aside className="inspector">
-          <div className="state-heading">
+          <header className="state-heading inspector-header">
             <div>
               <h2>Конструктор спецификации</h2>
               <small>
@@ -1245,7 +1309,8 @@ function App(): React.JSX.Element {
             <span className="state-progress">
               {Object.values(projectState).flat().filter((item) => item.text.trim()).length} пунктов
             </span>
-          </div>
+          </header>
+          <div className="inspector-content">
           <div className="spec-cards-grid">
             {stateSections.map((section) => {
               const count = projectState[section.key].length;
@@ -1256,16 +1321,10 @@ function App(): React.JSX.Element {
                   onClick={() => setActiveSpecSection(section.key)}
                 >
                   <div className="spec-chip-header">
-                    <strong>
-                      {section.key === "requirements" && "📋 "}
-                      {section.key === "constraints" && "🛑 "}
-                      {section.key === "decisions" && "✅ "}
-                      {section.key === "rejectedOptions" && "❌ "}
-                      {section.key === "openQuestions" && "❓ "}
-                      {section.key === "acceptanceCriteria" && "🎯 "}
-                      {section.title}
-                    </strong>
+                    <SpecIcon id={section.key} />
+                    <strong>{section.title}</strong>
                     <span className="spec-chip-badge">{count}</span>
+                    <svg className="spec-chip-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
                   </div>
                   <small className="spec-chip-desc">{count > 0 ? `${count} пунктов заполнено` : "Нажмите для добавления"}</small>
                 </button>
@@ -1282,7 +1341,28 @@ function App(): React.JSX.Element {
             />
             <button onClick={applyAdvancedState}>Применить JSON</button>
           </details>
-          <div className="controls state-actions">
+          <section className="events-section">
+            <div className="events-heading">
+              <h2>События</h2>
+              <select aria-label="Фильтр событий" value={eventFilter} onChange={(event) => { setEventFilter(event.target.value); setEventLimit(20); }}>
+                <option value="ALL">Все события</option>
+                {[...new Set((current?.events ?? []).map((event) => event.eventType))].sort().map((type) => <option value={type} key={type}>{eventTitle(type)}</option>)}
+              </select>
+            </div>
+            <ol className="timeline">
+              {(current?.events ?? []).slice().reverse().filter((event) => eventFilter === "ALL" || event.eventType === eventFilter).slice(0, eventLimit).map((event) => (
+                <li key={event.sequence}>
+                  <details>
+                    <summary><strong>{eventTitle(event.eventType)}</strong><time>{new Date(event.occurredAt).toLocaleString("ru-RU")}</time></summary>
+                    <div className="event-details"><code>{event.eventType}</code><button type="button" onClick={() => void navigator.clipboard.writeText(JSON.stringify(event, null, 2)).then(() => setStatus("Технические данные события скопированы")).catch((error) => setStatus(`Не удалось скопировать событие: ${String(error)}`))}>Копировать данные</button><pre>{JSON.stringify(event, null, 2)}</pre></div>
+                  </details>
+                </li>
+              ))}
+            </ol>
+            {(current?.events ?? []).filter((event) => eventFilter === "ALL" || event.eventType === eventFilter).length > eventLimit ? <button type="button" className="show-more-events" onClick={() => setEventLimit((value) => value + 20)}>Показать ещё</button> : null}
+          </section>
+          </div>
+          <footer className="controls state-actions inspector-footer">
             <button
               disabled={!current}
               onClick={() => void saveState()}
@@ -1305,13 +1385,7 @@ function App(): React.JSX.Element {
                   .then((value) => setStatus(`Экспортировано: ${value.directory}`))
               }
             >Экспорт</button>
-          </div>
-          <h2>События</h2>
-          <ol className="timeline">
-            {current?.events.slice().reverse().map((event) => (
-              <li key={event.sequence}><strong>{event.eventType}</strong><small>{event.occurredAt}</small></li>
-            ))}
-          </ol>
+          </footer>
         </aside>
         ) : null}
       </div>
@@ -1354,18 +1428,11 @@ function App(): React.JSX.Element {
         onClose={() => setActiveUserError(null)}
       />
       {activeSpecSection ? (
-        <div className="modal-backdrop" role="presentation" onMouseDown={() => setActiveSpecSection(null)}>
-          <section className="settings-modal spec-modal" role="dialog" onMouseDown={(event) => event.stopPropagation()}>
+        <div className="modal-backdrop" role="presentation" onMouseDown={closeSpecSection}>
+          <section ref={specModalRef} className="settings-modal spec-modal" role="dialog" aria-modal="true" aria-labelledby="spec-modal-title" onMouseDown={(event) => event.stopPropagation()}>
             <header>
-              <h2>
-                {activeSpecSection === "requirements" && "📋 Требования"}
-                {activeSpecSection === "constraints" && "🛑 Ограничения"}
-                {activeSpecSection === "decisions" && "✅ Принятые решения"}
-                {activeSpecSection === "rejectedOptions" && "❌ Отклонения"}
-                {activeSpecSection === "openQuestions" && "❓ Открытые вопросы"}
-                {activeSpecSection === "acceptanceCriteria" && "🎯 Критерии приёмки"}
-              </h2>
-              <button onClick={() => setActiveSpecSection(null)}>×</button>
+              <h2 id="spec-modal-title"><SpecIcon id={activeSpecSection as StateSection} />{stateSections.find((section) => section.key === activeSpecSection)?.title}</h2>
+              <button aria-label="Закрыть раздел спецификации" onClick={closeSpecSection}>×</button>
             </header>
             <div className="settings-pane spec-modal-body">
               {projectState[activeSpecSection as keyof typeof projectState].map((item, index) => (
@@ -1446,7 +1513,7 @@ function App(): React.JSX.Element {
               </button>
             </div>
             <footer>
-              <button className="primary" onClick={() => setActiveSpecSection(null)}>Готово</button>
+              <button className="primary" onClick={closeSpecSection}>Готово</button>
             </footer>
           </section>
         </div>
