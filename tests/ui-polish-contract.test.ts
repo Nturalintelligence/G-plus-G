@@ -102,4 +102,15 @@ describe("Phase B.1 UI contracts", () => {
     expect(renderer).toContain("Внешние веб-чаты затронуты не будут");
     expect(styles).toMatch(/\.project-search input\s*\{[\s\S]*?width:\s*100%;/);
   });
+
+  it("opens an accessible provider management panel and safe catalog", () => {
+    expect(renderer).toContain('setSettingsTab("models")');
+    expect(renderer).toContain("+ Добавить модель");
+    expect(settingsModal).toContain("initialModelId");
+    expect(settingsModal).toContain("provider-capabilities");
+    expect(settingsModal).toContain("Входящие и исходящие файлы");
+    expect(settingsModal).toContain("Будут удалены только локальные данные входа");
+    expect(settingsModal).toContain("Перепривязать диалог");
+    expect(styles).toContain(".provider-capabilities");
+  });
 });

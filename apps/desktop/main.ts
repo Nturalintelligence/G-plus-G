@@ -555,6 +555,28 @@ function registerIpc(): void {
     logEvent("INFO", "projects.trash.deleted_permanently", { projectIds });
     return { success: true };
   });
+  handle("provider:openWebChat", async (_event, providerValue: unknown, conversationIdValue: unknown) => {
+    const provider = parseProvider(requireString(providerValue, "provider", 20));
+    const conversationId = conversationIdValue ? requireString(conversationIdValue, "conversationId", 200) : null;
+    const conversation = conversationId
+      ? db().raw.prepare("SELECT external_ref FROM conversations WHERE id = ? AND provider_id = ?").get(conversationId, provider) as { external_ref?: string | null } | undefined
+      : undefined;
+    const fallback = provider === "chatgpt" ? "https://chatgpt.com/" : "https://gemini.google.com/app";
+    const target = conversation?.external_ref || fallback;
+    const parsed = new URL(target);
+    const allowedHosts = provider === "chatgpt" ? new Set(["chatgpt.com", "chat.openai.com"]) : new Set(["gemini.google.com"]);
+    if (parsed.protocol !== "https:" || !allowedHosts.has(parsed.hostname)) throw new Error("Unsafe provider conversation URL");
+    await shell.openExternal(parsed.toString());
+    return { success: true };
+  });
+  handle("provider:rebindConversation", (_event, providerValue: unknown, conversationIdValue: unknown) => {
+    const provider = parseProvider(requireString(providerValue, "provider", 20));
+    const conversationId = requireString(conversationIdValue, "conversationId", 200);
+    const result = db().raw.prepare("UPDATE conversations SET external_ref = NULL, updated_at = ? WHERE id = ? AND provider_id = ?").run(new Date().toISOString(), conversationId, provider);
+    if (result.changes !== 1) throw new Error("Conversation not found");
+    logEvent("INFO", "provider.conversation.rebind_requested", { provider, conversationId });
+    return { success: true };
+  });
   handle("projects:create", (_event, nameOrInput: unknown, providersValue: unknown) => {
     const input = nameOrInput && typeof nameOrInput === "object"
       ? nameOrInput as Record<string, unknown>

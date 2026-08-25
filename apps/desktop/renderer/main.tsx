@@ -175,7 +175,7 @@ function App(): React.JSX.Element {
   const [current, setCurrent] = useState<ProjectDetails | null>(null);
   const selectedProjectRowRef = useRef<HTMLDivElement | null>(null);
   const restoredProjectSelectionRef = useRef(false);
-  const [providerStatuses, setProviderStatuses] = useState<Record<string, { session: string; ready: boolean }>>({
+  const [providerStatuses, setProviderStatuses] = useState<Record<string, { session: string; ready: boolean; checkedAt?: string; lastError?: string }>>({
     chatgpt: { session: "UNKNOWN", ready: false },
     gemini: { session: "UNKNOWN", ready: false },
     deepseek: { session: "UNSUPPORTED", ready: false },
@@ -199,6 +199,7 @@ function App(): React.JSX.Element {
   const [settings, setSettings] = useState<AppSettingsView>(fallbackSettings);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<"profile" | "models" | "behavior" | "appearance" | "quality" | "diagnostics">("profile");
+  const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
   const [releaseInfo, setReleaseInfo] = useState<ReleaseInfoView | null>(null);
   const [preflight, setPreflight] = useState<Array<{
     name: string;
@@ -471,13 +472,13 @@ function App(): React.JSX.Element {
         if (cancelled) return;
         setProviderStatuses((previous) => ({
           ...previous,
-          [provider]: { session: result.session, ready: result.ready },
+          [provider]: { session: result.session, ready: result.ready, checkedAt: new Date().toISOString() },
         }));
-      } catch {
+      } catch (error) {
         if (cancelled) return;
         setProviderStatuses((previous) => ({
           ...previous,
-          [provider]: { session: "UNKNOWN", ready: false },
+          [provider]: { session: "UNKNOWN", ready: false, checkedAt: new Date().toISOString(), lastError: error instanceof Error ? error.message : String(error) },
         }));
       }
     };
@@ -675,13 +676,13 @@ function App(): React.JSX.Element {
     setStatus(`Войдите в ${getProviderDisplayName(provider)} в открывшемся окне…`);
     setProviderStatuses((previous) => ({
       ...previous,
-      [provider]: { session: "BUSY", ready: false },
+      [provider]: { ...previous[provider], session: "BUSY", ready: false },
     }));
     try {
       const session = await window.orchestrator.provider.login(provider);
       setProviderStatuses((previous) => ({
         ...previous,
-        [provider]: { session, ready: session === "AUTHENTICATED" },
+        [provider]: { session, ready: session === "AUTHENTICATED", checkedAt: new Date().toISOString() },
       }));
       setStatus(`Сессия ${getProviderDisplayName(provider)} активна: ${session}`);
     } catch (error: any) {
@@ -691,7 +692,7 @@ function App(): React.JSX.Element {
         : "UNKNOWN";
       setProviderStatuses((previous) => ({
         ...previous,
-        [provider]: { session: failedSession, ready: false },
+        [provider]: { session: failedSession, ready: false, checkedAt: new Date().toISOString(), lastError: errorText },
       }));
       if (error?.code === "LOGIN_ALREADY_ACTIVE" || String(error).includes("LOGIN_ALREADY_ACTIVE")) {
         setStatus(error.message || "Уже выполняется вход в другой браузер.");
@@ -940,6 +941,26 @@ function App(): React.JSX.Element {
     }
   }
 
+  async function openProviderWebChat(provider: string, conversationId?: string): Promise<void> {
+    try {
+      await window.orchestrator.provider.openWebChat(provider, conversationId);
+      setStatus(`Веб-чат ${getProviderDisplayName(provider)} открыт`);
+    } catch (error) {
+      setStatus(`Не удалось открыть веб-чат: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  async function rebindProviderConversation(provider: string, conversationId: string): Promise<void> {
+    if (!window.confirm(`Перепривязать диалог ${getProviderDisplayName(provider)}? Текущая локальная ссылка будет очищена, а новый веб-диалог определится при следующей отправке. Transcript проекта сохранится.`)) return;
+    try {
+      await window.orchestrator.provider.rebindConversation(provider, conversationId);
+      if (current) await openProject(current.project.id);
+      setStatus(`Диалог ${getProviderDisplayName(provider)} будет перепривязан при следующей отправке`);
+    } catch (error) {
+      setStatus(`Не удалось перепривязать диалог: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
   async function copyMessage(id: string, content: string): Promise<void> {
     try {
       await navigator.clipboard.writeText(content);
@@ -1177,17 +1198,18 @@ function App(): React.JSX.Element {
                       providerId={pId}
                       statusText={statusInfo.text}
                       statusType={statusInfo.type}
-                      onClick={() => setSettingsOpen(true)}
+                      onClick={() => { setSettingsTab("models"); setSelectedModelId(pId); setSettingsOpen(true); }}
                     />
                   );
                 })}
               </div>
+              <button type="button" className="add-model-btn" onClick={() => { setSettingsTab("models"); setSelectedModelId(null); setSettingsOpen(true); }}>+ Добавить модель</button>
             </div>
 
             <footer className="sidebar-footer">
               <div
                 className="profile-chip interactive"
-                onClick={() => setSettingsOpen(true)}
+                onClick={() => { setSettingsTab("profile"); setSelectedModelId(null); setSettingsOpen(true); }}
                 title="Нажмите для настройки профиля и системы"
               >
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -1520,6 +1542,11 @@ function App(): React.JSX.Element {
         maintenanceBusy={maintenanceBusy}
         createBackup={createBackup}
         providerStatuses={providerStatuses}
+        initialTab={settingsTab}
+        initialModelId={selectedModelId}
+        conversations={current?.conversations ?? []}
+        openWebChat={openProviderWebChat}
+        rebindConversation={rebindProviderConversation}
       />
 
       <DeleteProjectDialog

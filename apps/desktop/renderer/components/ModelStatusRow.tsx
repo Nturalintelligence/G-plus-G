@@ -35,6 +35,12 @@ export function ModelStatusRow({
     <div
       className={`model-status-row ${onClick ? "interactive" : ""} ${className}`}
       onClick={onClick}
+      onKeyDown={onClick ? (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onClick();
+        }
+      } : undefined}
       role={onClick ? "button" : undefined}
       tabIndex={onClick ? 0 : undefined}
     >

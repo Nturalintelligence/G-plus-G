@@ -606,6 +606,67 @@ h2 {
   margin-top: 8px;
 }
 
+.add-model-btn {
+  width: 100%;
+  margin-top: 7px;
+  padding: 7px 9px;
+  border: 1px dashed var(--border-color-input);
+  color: var(--text-secondary);
+  background: transparent;
+  font-size: 12px;
+}
+
+.add-model-btn:hover,
+.add-model-btn:focus-visible {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--bg-selected);
+}
+
+.provider-capabilities {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.provider-capabilities > div {
+  min-width: 0;
+  padding: 9px;
+  border: 1px solid var(--border-color-card);
+  border-radius: 9px;
+  background: var(--bg-card);
+}
+
+.provider-capabilities span,
+.provider-capabilities strong {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.provider-capabilities span {
+  margin-bottom: 3px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.provider-capabilities strong {
+  font-size: 12px;
+}
+
+.provider-panel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+@media (max-width: 760px) {
+  .provider-capabilities {
+    grid-template-columns: 1fr;
+  }
+}
+
 .sidebar-footer {
   margin-top: auto;
   padding-top: 14px;

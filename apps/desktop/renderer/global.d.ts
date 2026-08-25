@@ -45,6 +45,8 @@ interface Window {
     provider: {
       login(provider: string): Promise<string>;
       status(provider: string): Promise<{ provider: string; session: string; ready: boolean }>;
+      openWebChat(provider: string, conversationId?: string): Promise<{ success: boolean }>;
+      rebindConversation(provider: string, conversationId: string): Promise<{ success: boolean }>;
       send(provider: string, message: string): Promise<{ response: string }>;
     };
     orchestration: {

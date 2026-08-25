@@ -27,6 +27,8 @@ const api = {
   provider: {
     login: (provider) => ipcRenderer.invoke("provider:login", provider),
     status: (provider) => ipcRenderer.invoke("provider:status", provider),
+    openWebChat: (provider, conversationId) => ipcRenderer.invoke("provider:openWebChat", provider, conversationId),
+    rebindConversation: (provider, conversationId) => ipcRenderer.invoke("provider:rebindConversation", provider, conversationId),
     send: (provider, message) =>
       ipcRenderer.invoke("provider:send", provider, message),
   },

@@ -17,7 +17,12 @@ export interface SettingsModalProps {
   runPreflight: () => void;
   maintenanceBusy: boolean;
   createBackup: () => Promise<void>;
-  providerStatuses?: Record<string, { session: string; ready: boolean }>;
+  providerStatuses?: Record<string, { session: string; ready: boolean; checkedAt?: string; lastError?: string }>;
+  initialTab?: "profile" | "models" | "behavior" | "appearance" | "quality" | "diagnostics";
+  initialModelId?: string | null;
+  conversations?: Array<{ id: string; providerId: string; externalRef: string | null }>;
+  openWebChat?: (provider: string, conversationId?: string) => Promise<void>;
+  rebindConversation?: (provider: string, conversationId: string) => Promise<void>;
 }
 
 export function SettingsModal({
@@ -35,6 +40,11 @@ export function SettingsModal({
   maintenanceBusy,
   createBackup,
   providerStatuses,
+  initialTab = "profile",
+  initialModelId = null,
+  conversations = [],
+  openWebChat,
+  rebindConversation,
 }: SettingsModalProps) {
   const [activeTab, setActiveTab] = useState<
     "profile" | "models" | "behavior" | "appearance" | "quality" | "diagnostics"
@@ -42,6 +52,12 @@ export function SettingsModal({
   const [modelFilter, setModelFilter] = useState<"all" | "supported" | "experimental">("all");
   const [searchQuery, setSearchQuery] = useState("");
   const [expandedModelId, setExpandedModelId] = useState<string | null>(null);
+
+  React.useEffect(() => {
+    if (!isOpen) return;
+    setActiveTab(initialTab);
+    setExpandedModelId(initialModelId);
+  }, [isOpen, initialTab, initialModelId]);
 
   if (!isOpen) return null;
 
@@ -187,6 +203,7 @@ export function SettingsModal({
                       const meta = PROVIDER_METADATA_MAP[pId];
                       const currentCustom = settings.models?.[pId] || { role: "Автоматически", customPrompt: "" };
                       const isExpanded = expandedModelId === pId;
+                      const conversation = conversations.find((item) => item.providerId === pId);
 
                       return (
                         <div key={pId} className={`model-setting-card accordion-card ${isExpanded ? "expanded" : ""}`}>
@@ -234,7 +251,7 @@ export function SettingsModal({
                                 onClick={(e) => {
                                   e.preventDefault();
                                   e.stopPropagation();
-                                  void resetSession(pId);
+                                  if (window.confirm(`Сбросить локальную сессию ${meta.displayName}? Будут удалены только локальные данные входа. Веб-аккаунт, проекты и transcript сохранятся; потребуется повторный вход.`)) void resetSession(pId);
                                 }}
                                 title="Очистить профиль браузера"
                               >
@@ -253,6 +270,19 @@ export function SettingsModal({
 
                           {isExpanded && (
                             <div className="model-card-body accordion-body">
+                              <div className="provider-capabilities">
+                                <div><span>Поддержка</span><strong>{meta.isSupported ? "Стабильный адаптер" : pId === "deepseek" ? "Экспериментальный" : "Планируется"}</strong></div>
+                                <div><span>Авторизация</span><strong>{providerStatuses?.[pId]?.session ?? "Не проверено"}</strong></div>
+                                <div><span>Последняя проверка</span><strong>{providerStatuses?.[pId]?.checkedAt ? new Date(providerStatuses[pId].checkedAt!).toLocaleString("ru-RU") : "Ещё не выполнялась"}</strong></div>
+                                <div><span>Активный диалог</span><strong>{conversation?.externalRef ? "Привязан" : "Не привязан"}</strong></div>
+                                <div><span>Вложения</span><strong>{meta.isSupported ? "Входящие и исходящие файлы" : "Не подтверждены"}</strong></div>
+                                <div><span>Подключение</span><strong>{meta.availabilityNote}</strong></div>
+                                {providerStatuses?.[pId]?.lastError ? <div className="provider-last-error"><span>Последняя ошибка</span><strong>{providerStatuses[pId].lastError}</strong></div> : null}
+                              </div>
+                              {meta.isSupported ? <div className="provider-panel-actions">
+                                <button type="button" className="btn btn-secondary btn-sm" onClick={() => void openWebChat?.(pId, conversation?.id)}>Открыть веб-чат</button>
+                                <button type="button" className="btn btn-secondary btn-sm" disabled={!conversation} onClick={() => conversation && void rebindConversation?.(pId, conversation.id)}>Перепривязать диалог</button>
+                              </div> : null}
                               <label className="form-field">
                                 <span className="field-label">Назначенная роль</span>
                                 <select
