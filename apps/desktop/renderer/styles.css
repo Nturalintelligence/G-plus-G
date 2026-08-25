@@ -624,6 +624,7 @@ h2 {
 }
 
 .provider-capabilities {
+  grid-column: 1 / -1;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
@@ -655,10 +656,18 @@ h2 {
 }
 
 .provider-panel-actions {
+  grid-column: 1 / -1;
+  align-self: start;
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
   margin-bottom: 12px;
+}
+
+.provider-panel-actions .btn {
+  width: auto;
+  min-height: 34px;
+  align-self: center;
 }
 
 @media (max-width: 760px) {

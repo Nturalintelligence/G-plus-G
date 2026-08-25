@@ -963,7 +963,7 @@ function App(): React.JSX.Element {
 
   async function copyMessage(id: string, content: string): Promise<void> {
     try {
-      await navigator.clipboard.writeText(content);
+      await window.orchestrator.system.copyText(content);
       setCopiedMessageId(id);
       window.setTimeout(() => setCopiedMessageId((currentId) => currentId === id ? null : currentId), 1_800);
     } catch (error) {

@@ -16,6 +16,7 @@ interface Window {
       }>>;
       info(): Promise<ReleaseInfoView>;
       openDataFolder(): Promise<string>;
+      copyText(text: string): Promise<{ success: boolean }>;
     };
     maintenance: {
       backup(): Promise<string>;

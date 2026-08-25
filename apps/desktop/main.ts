@@ -4,6 +4,7 @@ import { pathToFileURL } from "node:url";
 import {
   app,
   BrowserWindow,
+  clipboard,
   dialog,
   ipcMain,
   Menu,
@@ -478,6 +479,11 @@ function registerIpc(): void {
       density: settings.appearance.density,
     });
     return settings;
+  });
+  handle("system:copyText", (_event, textValue: unknown) => {
+    const text = requireString(textValue, "clipboard text", 2_000_000, true);
+    clipboard.writeText(text);
+    return { success: true };
   });
   handle("composerDraft:get", (_event, projectIdValue: unknown) => {
     const projectId = requireString(projectIdValue, "projectId", 200);

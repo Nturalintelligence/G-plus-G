@@ -5,6 +5,7 @@ const api = {
     preflight: () => ipcRenderer.invoke("system:preflight"),
     info: () => ipcRenderer.invoke("system:info"),
     openDataFolder: () => ipcRenderer.invoke("system:openDataFolder"),
+    copyText: (text) => ipcRenderer.invoke("system:copyText", text),
   },
   maintenance: {
     backup: () => ipcRenderer.invoke("maintenance:backup"),
