@@ -20,6 +20,7 @@ import { CliTaskPanel, type CliTaskView } from "./components/CliTaskPanel.js";
 import { formatProviderList, getProviderDisplayName, getProviderMetadata } from "./provider-metadata.js";
 import { selectReadyAnswerEntries } from "./ready-answer.js";
 import { toUserFacingError, UserFacingError } from "./user-errors.js";
+import { messageTextForClipboard } from "./message-copy.js";
 
 const initialState: ProjectStateView = {
   requirements: [],
@@ -963,7 +964,9 @@ function App(): React.JSX.Element {
 
   async function copyMessage(id: string, content: string): Promise<void> {
     try {
-      await window.orchestrator.system.copyText(content);
+      const copyText = messageTextForClipboard(content);
+      if (!copyText) throw new Error("В сообщении нет пользовательского текста для копирования");
+      await window.orchestrator.system.copyText(copyText);
       setCopiedMessageId(id);
       window.setTimeout(() => setCopiedMessageId((currentId) => currentId === id ? null : currentId), 1_800);
     } catch (error) {
@@ -1256,7 +1259,7 @@ function App(): React.JSX.Element {
                       </button>
                     ) : null}
                     {readyAnswerEntries.map((entry) => (
-                      <section className={`message ${entry.role.toLowerCase()} ${entry.providerId ?? ""}`} key={entry.id}>
+                      <section className={`message ${entry.role.toLowerCase()} ${entry.providerId ?? ""} ${entry.id === explicitFinalEntry?.id ? "final" : ""} ${entry.id.startsWith("entry_stopped_") ? "cancelled" : ""}`} key={entry.id}>
                         <header>
                           <strong>{entry.role === "USER" ? "Вы" : entry.providerId === "system" ? "Системный отчёт" : `Итоговый ответ (${entry.providerId})`}</strong>
                           {entry.round ? <small>ход {entry.round}</small> : null}
@@ -1269,7 +1272,7 @@ function App(): React.JSX.Element {
                   </>
                 ) : (
                   (current?.transcript || []).map((entry) => (
-                    <section className={`message ${entry.role.toLowerCase()} ${entry.providerId ?? ""}`} key={entry.id}>
+                    <section className={`message ${entry.role.toLowerCase()} ${entry.providerId ?? ""} ${entry.id.startsWith("entry_stopped_") ? "cancelled" : ""}`} key={entry.id}>
                       <header>
                         <strong>{entry.role === "USER" ? "Вы" : entry.providerId ?? entry.role}</strong>
                         {entry.round ? <small>ход {entry.round}</small> : null}
@@ -1315,7 +1318,7 @@ function App(): React.JSX.Element {
                   );
                   if (alreadyPersisted) return null;
                   return (
-                    <section className={`message assistant ${providerId}`} key={`streaming-${providerId}`}>
+                    <section className={`message assistant partial ${providerId}`} key={`streaming-${providerId}`}>
                       <header>
                         <strong>{providerId}</strong>
                         <small>печатает...</small>

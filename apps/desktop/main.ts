@@ -481,9 +481,19 @@ function registerIpc(): void {
     return settings;
   });
   handle("system:copyText", (_event, textValue: unknown) => {
-    const text = requireString(textValue, "clipboard text", 2_000_000, true);
-    clipboard.writeText(text);
-    return { success: true };
+    if (typeof textValue !== "string") throw new Error("clipboard text must be a string");
+    if (textValue.length > 2_000_000) throw new Error("clipboard text exceeds 2000000 characters");
+    const text = textValue;
+    try {
+      clipboard.writeText(text);
+      return { success: true };
+    } catch (error) {
+      logEvent("ERROR", "renderer.clipboard.write_failed", {
+        textLength: text.length,
+        errorName: error instanceof Error ? error.name : "UnknownError",
+      });
+      throw new Error("Не удалось записать текст в системный буфер обмена");
+    }
   });
   handle("composerDraft:get", (_event, projectIdValue: unknown) => {
     const projectId = requireString(projectIdValue, "projectId", 200);

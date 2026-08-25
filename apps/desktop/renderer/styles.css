@@ -939,6 +939,7 @@ h2 {
 
 .message.user {
   width: fit-content;
+  min-width: 150px;
   max-width: min(85%, 720px);
   margin-left: auto;
   border-color: var(--border-message-user);
@@ -964,13 +965,36 @@ h2 {
   background: var(--bg-message-deepseek);
 }
 
+.message.system,
+.message.cancelled {
+  max-width: min(88%, 760px);
+  margin-inline: auto;
+  border-style: dashed;
+  background: var(--bg-card);
+  color: var(--text-secondary);
+}
+
+.message.partial {
+  border-style: dashed;
+  opacity: 0.9;
+}
+
+.message.final {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border-color-card));
+  box-shadow: 0 8px 26px var(--accent-glow);
+}
+
 .message>header {
+  position: static;
+  z-index: auto;
   height: auto;
   padding: 0 0 10px;
   border: 0;
   justify-content: flex-start;
   gap: 10px;
   background: transparent;
+  padding-right: 96px;
+  -webkit-app-region: no-drag;
 }
 
 .message>header strong {
@@ -1002,17 +1026,23 @@ h2 {
 }
 
 .message-actions {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 2;
   display: flex;
   justify-content: flex-end;
   min-height: 28px;
-  margin: 8px -6px -8px 0;
+  margin: 0;
   opacity: 0;
+  pointer-events: none;
   transition: opacity 0.15s ease;
 }
 
 .message:hover .message-actions,
 .message:focus-within .message-actions {
   opacity: 1;
+  pointer-events: auto;
 }
 
 .message-copy {
@@ -1044,6 +1074,7 @@ h2 {
 @media (hover: none), (pointer: coarse) {
   .message-actions {
     opacity: 1;
+    pointer-events: auto;
   }
 }
 

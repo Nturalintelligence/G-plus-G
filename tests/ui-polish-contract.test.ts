@@ -86,11 +86,16 @@ describe("Phase B.1 UI contracts", () => {
 
   it("keeps short user messages compact and exposes a real copy action", () => {
     expect(renderer).toContain("function MessageCopyAction");
-    expect(renderer).toContain("window.orchestrator.system.copyText(content)");
+    expect(renderer).toContain("window.orchestrator.system.copyText(copyText)");
     expect(renderer).toContain("Не удалось скопировать сообщение");
     expect(styles).toMatch(/\.message\.user\s*\{[\s\S]*?width:\s*fit-content;[\s\S]*?max-width:\s*min\(85%, 720px\);[\s\S]*?margin-left:\s*auto;/);
     expect(styles).toMatch(/\.message:hover \.message-actions,[\s\S]*?\.message:focus-within \.message-actions\s*\{[\s\S]*?opacity:\s*1;/);
     expect(styles).toMatch(/@media \(hover: none\), \(pointer: coarse\)[\s\S]*?\.message-actions\s*\{[\s\S]*?opacity:\s*1;/);
+    expect(styles).toMatch(/\.message-actions\s*\{[\s\S]*?position:\s*absolute;[\s\S]*?opacity:\s*0;[\s\S]*?pointer-events:\s*none;/);
+    expect(styles).not.toMatch(/\.message-actions\s*\{[^}]*visibility:\s*hidden;/);
+    expect(styles).toMatch(/\.message>header\s*\{[^}]*position:\s*static;[^}]*-webkit-app-region:\s*no-drag;/);
+    expect(renderer).toContain('className={`message assistant partial');
+    expect(renderer).toContain('entry.id.startsWith("entry_stopped_")');
   });
 
   it("provides explicit bulk selection and a recoverable local trash", () => {
