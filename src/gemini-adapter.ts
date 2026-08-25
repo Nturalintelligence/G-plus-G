@@ -39,6 +39,7 @@ import type {
 } from "./types.js";
 import { uploadAttachmentsToComposer } from "./adapters/provider-attachment-upload.js";
 import { classifyProviderResult, ProviderResultProgress } from "./adapters/provider-result-state.js";
+import { selectComposerIndex } from "./adapters/composer-selection.js";
 
 const GEMINI_URL = "https://gemini.google.com/app";
 const COMPOSERS = [
@@ -317,12 +318,19 @@ export class GeminiAdapter implements ModelAdapter {
     }
     const before = await this.responses();
     const userMessagesBefore = await this.captureUserMessageSignatures();
-    const candidates = composers;
-    if (candidates.length !== 1) {
-      throw new AmbiguousElementError(`Expected one Gemini composer, found ${candidates.length}`);
+    const states = await Promise.all(composers.map((candidate) => candidate.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      const control = element as HTMLInputElement;
+      return { visible: rect.width > 0 && rect.height > 0, editable: element instanceof HTMLTextAreaElement || element.getAttribute("contenteditable") === "true", enabled: !control.disabled && element.getAttribute("aria-disabled") !== "true", active: element === document.activeElement || element.contains(document.activeElement), bottom: rect.bottom };
+    }).catch(() => ({ visible: false, editable: false, enabled: false, active: false, bottom: 0 }))));
+    const selectedComposer = selectComposerIndex(states);
+    if (selectedComposer === null) {
+      const generating = await page.getByRole("button", { name: /stop|останов/i }).isVisible().catch(() => false);
+      if (generating) throw new TurnTimeoutError("Gemini ещё генерирует результат; поле ввода временно недоступно");
+      throw new AmbiguousElementError("Поле ввода Gemini не найдено или перекрыто; возможно, интерфейс провайдера изменился");
     }
-    await fillComposerSafely(candidates[0]!, message);
-    await this.submitComposer(candidates[0]!, message);
+    await fillComposerSafely(composers[selectedComposer]!, message);
+    await this.submitComposer(composers[selectedComposer]!, message);
     await this.waitUntilUserMessage(userMessagesBefore);
     channel?.publish({ type: "MESSAGE_SUBMITTED", at: new Date().toISOString() });
 

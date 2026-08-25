@@ -43,6 +43,7 @@ import type {
 import { logEvent } from "./observability/logger.js";
 import { uploadAttachmentsToComposer } from "./adapters/provider-attachment-upload.js";
 import { classifyProviderResult, ProviderResultProgress } from "./adapters/provider-result-state.js";
+import { selectComposerIndex } from "./adapters/composer-selection.js";
 
 const CHATGPT_URL = "https://chatgpt.com/";
 const RESPONSE_SELECTORS = [
@@ -515,12 +516,22 @@ export class ChatGptAdapter implements ModelAdapter {
 
   private async getUniqueComposer(): Promise<Locator> {
     const candidates = await this.findVisibleComposers();
-    if (candidates.length !== 1) {
-      throw new AmbiguousElementError(
-        `Expected exactly one visible composer, found ${candidates.length}`,
-      );
-    }
-    return candidates[0]!;
+    const states = await Promise.all(candidates.map((candidate) => candidate.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      const control = element as HTMLInputElement;
+      return {
+        visible: rect.width > 0 && rect.height > 0,
+        editable: element instanceof HTMLTextAreaElement || element.getAttribute("contenteditable") === "true",
+        enabled: !control.disabled && element.getAttribute("aria-disabled") !== "true",
+        active: element === document.activeElement || element.contains(document.activeElement),
+        bottom: rect.bottom,
+      };
+    }).catch(() => ({ visible: false, editable: false, enabled: false, active: false, bottom: 0 }))));
+    const selected = selectComposerIndex(states);
+    if (selected !== null) return candidates[selected]!;
+    const generation = await this.requirePage().getByRole("button", { name: /stop generating|остановить создание/i }).isVisible().catch(() => false);
+    if (generation) throw new TurnTimeoutError("ChatGPT ещё генерирует результат; поле ввода временно недоступно");
+    throw new AmbiguousElementError("Поле ввода ChatGPT не найдено или перекрыто; возможно, интерфейс провайдера изменился");
   }
 
   private async captureResponses(): Promise<ResponseSnapshot[]> {
