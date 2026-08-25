@@ -519,6 +519,28 @@ describe("Orchestrator", () => {
     ).rejects.toThrow(/userMessageId cannot be empty/);
   });
 
+  it("does not spend seven discussion turns on the trivial prompt 'тест'", async () => {
+    const { database, projectId } = setup();
+    const chatgpt: string[] = [];
+    const gemini: string[] = [];
+    const result = await new Orchestrator(
+      database,
+      new Map([
+        ["chatgpt", fakeAdapter("chatgpt", chatgpt)],
+        ["gemini", fakeAdapter("gemini", gemini)],
+      ]),
+    ).run(projectId, "DEBATE", "тест", ["chatgpt", "gemini"], {
+      ...limits,
+      maxTurns: 7,
+    });
+
+    expect(result.responses.filter((response) => response.phase === "DISCUSSION")).toHaveLength(2);
+    expect(result.responses.filter((response) => response.phase === "FINALIZE")).toHaveLength(1);
+    expect(result.outcome).toBe("COMPLETED");
+    expect(chatgpt).toHaveLength(2);
+    expect(gemini).toHaveLength(1);
+  });
+
   it("binds response artifact targets to the persisted assistant transcript entry", async () => {
     const { database, projectId } = setup();
     let target: MessageInput["responseArtifactTarget"];

@@ -262,3 +262,14 @@ Live ChatGPT/Gemini UAT: **NOT RUN — BLOCKED_BY_OWNER_APPROVAL**.
 | Full check | PASS | 53 files, 235/235 tests. Security: 37/37; source guard: 95 production files. |
 
 Live ChatGPT/Gemini response-file UAT: **NOT RUN — BLOCKED_BY_OWNER_APPROVAL**.
+
+## Semantic stopping checkpoint — 2026-08-25
+
+| Check | Result | Evidence |
+|---|---|---|
+| `тест`, two providers, requested 7 turns | PASS_LOCAL | Exactly two `DISCUSSION` rows and one `FINALIZE` row; outcome is `COMPLETED`. |
+| Conservative boundary | PASS_LOCAL | Attachments and implementation prompts remain STANDARD and retain their requested budget. |
+| Existing orchestration behavior | PASS_LOCAL | Autonomous/approval, peer relay, consensus and finalizer focused regressions remain green. |
+| Full regression gate | PASS | 54 files, 238/238 tests; security 37/37. |
+
+Live provider validation: **NOT RUN — BLOCKED_BY_OWNER_APPROVAL**.

@@ -102,3 +102,14 @@ do not start the experimental runtime or full soak.
 - Local tests/build only. Real provider controls/URLs remain
   `BLOCKED_BY_AUTH`; do not run live UAT without owner confirmation.
 - Branch is intended to be pushed for continuation from another computer.
+
+# Semantic stopping checkpoint — 2026-08-25
+
+- Explicit trivial prompts (`тест`, presence checks, greetings and simple
+  arithmetic) are capped at one discussion turn per selected provider followed
+  by final synthesis. A two-provider `тест` run therefore has two discussion
+  turns, not seven.
+- Classification is deliberately conservative: attachments, implementation
+  requests and all non-whitelisted short prompts keep the configured budget.
+- This is locally tested only. Visible provider-message count remains part of
+  the owner-gated live UAT.

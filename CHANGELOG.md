@@ -34,6 +34,9 @@ All notable project checkpoints are recorded here.
 - Wired ChatGPT/Gemini response files from the bound assistant turn through the
   authenticated browser context into validated managed storage, persistent
   transcript result cards, preview/open and explicit Save As actions.
+- Added a conservative semantic stopping budget so explicit test/presence,
+  greeting and simple arithmetic prompts use at most one discussion turn per
+  selected provider before final synthesis instead of exhausting seven turns.
 
 ### Security and cleanup
 

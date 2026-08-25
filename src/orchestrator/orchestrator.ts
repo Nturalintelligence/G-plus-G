@@ -42,6 +42,7 @@ import { globalEventBus } from "../events/event-bus.js";
 import { TaskCompiler } from "./task-compiler.js";
 import { TaskFsmRepository } from "../storage/task-fsm-repository.js";
 import { dataPath } from "../paths.js";
+import { classifyTaskComplexity, discussionTurnBudget } from "./semantic-stopping.js";
 
 export type RunMode = "MANUAL" | "SEQUENTIAL" | "PARALLEL" | "DEBATE";
 export type FinalizerMode = "MANUAL" | "LEAD_SELECTS" | "PEER_AGREEMENT";
@@ -219,6 +220,7 @@ export class Orchestrator {
       providerIds.length === 1 && (mode === "DEBATE" || mode === "SEQUENTIAL")
         ? "MANUAL"
         : mode;
+    const taskComplexity = classifyTaskComplexity(task, Boolean(options.attachments?.length));
     const selectedFinalizerProvider = effectiveMode === "MANUAL"
       ? providerIds[0]!
       : selectFinalizerProvider(providerIds, options);
@@ -335,6 +337,7 @@ export class Orchestrator {
       providers: providerIds,
       taskLength: task.length,
       turnLimit: effectiveMode === "SEQUENTIAL" ? providerIds.length : limits.maxTurns,
+      taskComplexity,
     });
 
     try {
@@ -443,8 +446,12 @@ export class Orchestrator {
         const seen = new Set<string>();
         const consensusToken = `[[G_PLUS_G_DONE:${runId}]]`;
         const agreedProviders = new Set<string>();
-        const turnLimit =
-          effectiveMode === "SEQUENTIAL" ? providerIds.length : limits.maxTurns;
+        const requestedTurnLimit = effectiveMode === "SEQUENTIAL" ? providerIds.length : limits.maxTurns;
+        const turnLimit = discussionTurnBudget({
+          requestedTurns: requestedTurnLimit,
+          providerCount: providerIds.length,
+          complexity: taskComplexity,
+        });
         let termination: "COMPLETED" | "CONSENSUS" | "DUPLICATE" | "LIMIT" | "USER_STOPPED" =
           effectiveMode === "DEBATE" ? "LIMIT" : "COMPLETED";
         for (let turn = 0; turn < turnLimit; turn += 1) {
@@ -524,7 +531,7 @@ export class Orchestrator {
         }
         if (termination === "USER_STOPPED" || this.stopped) outcome = "USER_STOPPED";
         else if (termination === "CONSENSUS") outcome = "CONSENSUS_REACHED";
-        else if (termination === "LIMIT") outcome = "LIMIT_REACHED";
+        else if (termination === "LIMIT") outcome = taskComplexity === "TRIVIAL" ? "COMPLETED" : "LIMIT_REACHED";
         else if (termination === "DUPLICATE") outcome = "NO_CONSENSUS";
       }
 
