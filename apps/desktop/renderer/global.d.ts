@@ -37,6 +37,10 @@ interface Window {
         localDeleted?: boolean;
         remoteResults?: Array<{ providerId: string; conversationId: string; deleted: boolean; error?: string }>;
       }>;
+      trashList(): Promise<Array<{ projectId: string; trashedAt: string; localFileCount: number }>>;
+      trash(ids: string[]): Promise<Array<{ projectId: string; trashedAt: string; localFileCount: number }>>;
+      restore(ids: string[]): Promise<{ success: boolean }>;
+      deletePermanent(ids: string[]): Promise<{ success: boolean }>;
     };
     provider: {
       login(provider: string): Promise<string>;

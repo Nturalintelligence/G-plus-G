@@ -167,6 +167,11 @@ function getSessionStatusDisplay(session?: string): { text: string; type: "onlin
 
 function App(): React.JSX.Element {
   const [projects, setProjects] = useState<ProjectView[]>([]);
+  const [projectSearch, setProjectSearch] = useState("");
+  const [projectSelectionMode, setProjectSelectionMode] = useState(false);
+  const [selectedProjectIds, setSelectedProjectIds] = useState<Set<string>>(() => new Set());
+  const [showProjectTrash, setShowProjectTrash] = useState(false);
+  const [trashSummaries, setTrashSummaries] = useState<Array<{ projectId: string; trashedAt: string; localFileCount: number }>>([]);
   const [current, setCurrent] = useState<ProjectDetails | null>(null);
   const selectedProjectRowRef = useRef<HTMLDivElement | null>(null);
   const restoredProjectSelectionRef = useRef(false);
@@ -426,7 +431,14 @@ function App(): React.JSX.Element {
     });
   }, []);
 
-  const refresh = async (): Promise<void> => setProjects(await window.orchestrator.projects.list());
+  const refresh = async (): Promise<void> => {
+    const [nextProjects, nextTrash] = await Promise.all([
+      window.orchestrator.projects.list(),
+      window.orchestrator.projects.trashList(),
+    ]);
+    setProjects(nextProjects);
+    setTrashSummaries(nextTrash);
+  };
   useEffect(() => {
     void refresh();
     const timer = setTimeout(() => setShowSplash(false), 2500);
@@ -439,7 +451,7 @@ function App(): React.JSX.Element {
     if (restoredProjectSelectionRef.current || current || projects.length === 0) return;
     restoredProjectSelectionRef.current = true;
     const selectedId = window.localStorage.getItem("gplusg.selectedProjectId");
-    if (selectedId && projects.some((project) => project.id === selectedId)) {
+    if (selectedId && projects.some((project) => project.id === selectedId && project.status !== "ARCHIVED")) {
       void openProject(selectedId).catch(() => window.localStorage.removeItem("gplusg.selectedProjectId"));
     } else if (selectedId) {
       window.localStorage.removeItem("gplusg.selectedProjectId");
@@ -938,6 +950,54 @@ function App(): React.JSX.Element {
     }
   }
 
+  function toggleProjectSelection(projectId: string): void {
+    setSelectedProjectIds((previous) => {
+      const next = new Set(previous);
+      if (next.has(projectId)) next.delete(projectId); else next.add(projectId);
+      return next;
+    });
+  }
+
+  async function moveProjectsToTrash(projectIds: string[]): Promise<void> {
+    if (projectIds.length === 0) return;
+    try {
+      await window.orchestrator.projects.trash(projectIds);
+      if (current && projectIds.includes(current.project.id)) setCurrent(null);
+      setSelectedProjectIds(new Set());
+      setProjectSelectionMode(false);
+      await refresh();
+      setStatus(`${projectIds.length} проект(а) перемещено в корзину. Веб-чаты не удалялись.`);
+    } catch (error) {
+      setStatus(`Не удалось переместить проекты в корзину: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  async function restoreProjects(projectIds: string[]): Promise<void> {
+    if (projectIds.length === 0) return;
+    try {
+      await window.orchestrator.projects.restore(projectIds);
+      setSelectedProjectIds(new Set());
+      await refresh();
+      setStatus(`${projectIds.length} проект(а) восстановлено`);
+    } catch (error) {
+      setStatus(`Не удалось восстановить проекты: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  async function permanentlyDeleteProjects(projectIds: string[]): Promise<void> {
+    if (projectIds.length === 0) return;
+    const localFileCount = trashSummaries.filter((item) => projectIds.includes(item.projectId)).reduce((sum, item) => sum + item.localFileCount, 0);
+    if (!window.confirm(`Окончательно удалить ${projectIds.length} проект(а) и ${localFileCount} связанных локальных файл(а)? Это действие нельзя отменить. Внешние веб-чаты затронуты не будут.`)) return;
+    try {
+      await window.orchestrator.projects.deletePermanent(projectIds);
+      setSelectedProjectIds(new Set());
+      await refresh();
+      setStatus(`${projectIds.length} проект(а) окончательно удалено`);
+    } catch (error) {
+      setStatus(`Не удалось окончательно удалить проекты: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
   if (showSplash) {
     const logoSrc = settings.appearance.theme === "light" ? logoLight : logoDark;
     return (
@@ -951,6 +1011,10 @@ function App(): React.JSX.Element {
   }
 
   const assistantTranscript = (current?.transcript ?? []).filter((entry) => entry.role === "ASSISTANT");
+  const visibleProjects = projects
+    .filter((project) => (showProjectTrash ? project.status === "ARCHIVED" : project.status !== "ARCHIVED"))
+    .filter((project) => project.name.toLocaleLowerCase("ru-RU").includes(projectSearch.trim().toLocaleLowerCase("ru-RU")))
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   const headerLogoSrc = effectiveAppearanceTheme === "light" ? logoLight : logoDark;
   const {
     finalEntry: explicitFinalEntry,
@@ -1013,7 +1077,7 @@ function App(): React.JSX.Element {
         {sidebarOpen ? (
           <aside className="sidebar-pane">
             <div className="sidebar-header">
-              <h2>Проекты</h2>
+              <h2>{showProjectTrash ? "Корзина" : "Проекты"}</h2>
               <button
                 className="new-project-btn"
                 title="Создать новый проект"
@@ -1030,21 +1094,47 @@ function App(): React.JSX.Element {
                 <span>Новый</span>
               </button>
             </div>
+            <div className="projects-toolbar">
+              <label className="project-search">
+                <span className="sr-only">Поиск проектов</span>
+                <input value={projectSearch} onChange={(event) => setProjectSearch(event.target.value)} placeholder="Поиск проектов" />
+                {projectSearch ? <button type="button" onClick={() => setProjectSearch("")} aria-label="Очистить поиск">×</button> : null}
+              </label>
+              <div className="project-list-actions">
+                <button type="button" onClick={() => { setShowProjectTrash((value) => !value); setSelectedProjectIds(new Set()); }}>
+                  {showProjectTrash ? "К проектам" : `Корзина${trashSummaries.length ? ` · ${trashSummaries.length}` : ""}`}
+                </button>
+                <button type="button" onClick={() => { setProjectSelectionMode((value) => !value); setSelectedProjectIds(new Set()); }}>
+                  {projectSelectionMode ? "Отмена" : "Выбрать"}
+                </button>
+              </div>
+              {projectSelectionMode ? <div className="project-batch-bar">
+                <span>Выбрано: {selectedProjectIds.size}</span>
+                <button type="button" onClick={() => setSelectedProjectIds(new Set(visibleProjects.map((project) => project.id)))}>Все видимые</button>
+                <button type="button" onClick={() => setSelectedProjectIds(new Set())}>Снять</button>
+                {showProjectTrash ? <>
+                  <button type="button" disabled={!selectedProjectIds.size} onClick={() => void restoreProjects([...selectedProjectIds])}>Восстановить</button>
+                  <button type="button" className="danger" disabled={!selectedProjectIds.size} onClick={() => void permanentlyDeleteProjects([...selectedProjectIds])}>Удалить</button>
+                </> : <button type="button" disabled={!selectedProjectIds.size} onClick={() => void moveProjectsToTrash([...selectedProjectIds])}>В корзину</button>}
+              </div> : null}
+            </div>
             <nav className="projects-list-nav">
-              {projects.map((project) => (
+              {visibleProjects.map((project) => (
                 <div
                   className={`project-row ${current?.project.id === project.id ? "selected" : ""}`}
                   key={project.id}
                   ref={current?.project.id === project.id ? selectedProjectRowRef : undefined}
                 >
+                  {projectSelectionMode ? <input className="project-select-checkbox" type="checkbox" checked={selectedProjectIds.has(project.id)} onChange={() => toggleProjectSelection(project.id)} aria-label={`Выбрать проект ${project.name}`} /> : null}
                   <button
                     className="project-btn"
                     aria-current={current?.project.id === project.id ? "page" : undefined}
-                    onClick={() => void openProject(project.id)}
+                    onClick={() => projectSelectionMode ? toggleProjectSelection(project.id) : void openProject(project.id)}
                   >
                     <span className="project-name" title={project.name}>{project.name}</span>
+                    <time className="project-updated" dateTime={project.updatedAt}>{new Date(project.updatedAt).toLocaleDateString("ru-RU", { day: "2-digit", month: "short" })}</time>
                   </button>
-                  <button
+                  {!projectSelectionMode ? <button
                     className="project-menu-btn"
                     title="Действия с проектом"
                     onClick={(event) => {
@@ -1057,21 +1147,23 @@ function App(): React.JSX.Element {
                       <circle cx="12" cy="12" r="2" />
                       <circle cx="12" cy="19" r="2" />
                     </svg>
-                  </button>
+                  </button> : null}
                   {projectMenuOpenId === project.id ? (
                     <div className="project-context-menu">
                       <button
                         onClick={() => {
                           setProjectMenuOpenId(null);
-                          setDeleteTarget(project);
+                          void (showProjectTrash ? restoreProjects([project.id]) : moveProjectsToTrash([project.id]));
                         }}
                       >
-                        Удалить проект
+                        {showProjectTrash ? "Восстановить" : "В корзину"}
                       </button>
+                      {showProjectTrash ? <button className="danger" onClick={() => { setProjectMenuOpenId(null); void permanentlyDeleteProjects([project.id]); }}>Удалить навсегда</button> : null}
                     </div>
                   ) : null}
                 </div>
               ))}
+              {visibleProjects.length === 0 ? <p className="projects-empty">{projectSearch ? "Ничего не найдено" : showProjectTrash ? "Корзина пуста" : "Нет проектов"}</p> : null}
             </nav>
 
             <div className="sidebar-models-section">

@@ -92,4 +92,14 @@ describe("Phase B.1 UI contracts", () => {
     expect(styles).toMatch(/\.message:hover \.message-actions,[\s\S]*?\.message:focus-within \.message-actions\s*\{[\s\S]*?opacity:\s*1;/);
     expect(styles).toMatch(/@media \(hover: none\), \(pointer: coarse\)[\s\S]*?\.message-actions\s*\{[\s\S]*?opacity:\s*1;/);
   });
+
+  it("provides explicit bulk selection and a recoverable local trash", () => {
+    expect(renderer).toContain("projectSelectionMode");
+    expect(renderer).toContain("Все видимые");
+    expect(renderer).toContain("Снять");
+    expect(renderer).toContain("Восстановить");
+    expect(renderer).toContain("deletePermanent");
+    expect(renderer).toContain("Внешние веб-чаты затронуты не будут");
+    expect(styles).toMatch(/\.project-search input\s*\{[\s\S]*?width:\s*100%;/);
+  });
 });

@@ -56,6 +56,7 @@ import {
 } from "../../src/attachments/attachment-staging.js";
 import { AttachmentDraftLifecycle } from "../../src/attachments/attachment-draft-lifecycle.js";
 import { ComposerDraftRepository, type ComposerDraftInput } from "../../src/composer-draft.js";
+import { ProjectTrashService } from "../../src/project-trash.js";
 
 let mainWindow: BrowserWindow | null = null;
 let database: AppDatabase | null = null;
@@ -526,6 +527,34 @@ function registerIpc(): void {
     return { success: true };
   });
   handle("projects:list", () => new ProjectRepository(db()).listProjects());
+  handle("projects:trash:list", () => new ProjectTrashService(db()).summaries());
+  handle("projects:trash", async (_event, idsValue: unknown) => {
+    if (!Array.isArray(idsValue) || idsValue.length === 0 || idsValue.length > 500) throw new Error("Select 1 to 500 projects");
+    const projectIds = idsValue.map((id) => requireString(id, "projectId", 200));
+    await activeOrchestrator?.stop();
+    const moved = new ProjectTrashService(db()).move(projectIds);
+    logEvent("INFO", "projects.trash.moved", { projectIds, count: moved.length });
+    return moved;
+  });
+  handle("projects:restore", (_event, idsValue: unknown) => {
+    if (!Array.isArray(idsValue) || idsValue.length === 0 || idsValue.length > 500) throw new Error("Select 1 to 500 projects");
+    const projectIds = idsValue.map((id) => requireString(id, "projectId", 200));
+    new ProjectTrashService(db()).restore(projectIds);
+    logEvent("INFO", "projects.trash.restored", { projectIds });
+    return { success: true };
+  });
+  handle("projects:deletePermanent", (_event, idsValue: unknown) => {
+    if (!Array.isArray(idsValue) || idsValue.length === 0 || idsValue.length > 500) throw new Error("Select 1 to 500 projects");
+    const projectIds = idsValue.map((id) => requireString(id, "projectId", 200));
+    const repository = new ProjectRepository(db());
+    for (const projectId of projectIds) {
+      const project = repository.openProject(projectId);
+      if (!project || project.status !== "ARCHIVED") throw new Error(`Project is not in trash: ${projectId}`);
+      repository.deleteProject(projectId);
+    }
+    logEvent("INFO", "projects.trash.deleted_permanently", { projectIds });
+    return { success: true };
+  });
   handle("projects:create", (_event, nameOrInput: unknown, providersValue: unknown) => {
     const input = nameOrInput && typeof nameOrInput === "object"
       ? nameOrInput as Record<string, unknown>
