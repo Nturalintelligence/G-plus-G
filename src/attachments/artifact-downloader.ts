@@ -343,12 +343,44 @@ export class ResponseArtifactDownloader {
     trigger: Locator,
     options: Omit<ArtifactDownloadOptions, "url" | "label">,
   ): Promise<DownloadedArtifactRecord> {
-    const [download] = await Promise.all([
-      page.waitForEvent("download", { timeout: Math.min(Math.max(options.downloadEventTimeoutMs ?? 5_000, 250), 15_000) }),
-      trigger.click(),
-    ]);
-    const url = download.url();
+    const timeout = Math.min(Math.max(options.downloadEventTimeoutMs ?? 5_000, 250), 15_000);
     const domains = this.allowedDomains(options.providerId, options.allowedDomainSuffixes);
+    const downloadPromise = page.waitForEvent("download", { timeout }).then((download) => ({ kind: "download" as const, download }));
+    const responsePromise = typeof page.waitForResponse === "function"
+      ? page.waitForResponse(async (response) => {
+          if (!response.ok()) return false;
+          const mime = contentTypeWithoutParameters(response.headers()["content-type"]);
+          if (!mime.startsWith("image/")) return false;
+          const responseUrl = new URL(response.url());
+          if (options.providerId === "gemini") {
+            const generatedPath = responseUrl.pathname.includes("/gg/") || responseUrl.pathname.includes("/rd-gg/");
+            if (!generatedPath || !/=s0-d-I(?:$|[&#])/i.test(responseUrl.href)) return false;
+          }
+          try {
+            await validateDownloadUrl(response.url(), { allowedDomainSuffixes: domains, resolveHostname: this.resolveHostname });
+            return true;
+          } catch {
+            return false;
+          }
+        }, { timeout }).then((response) => ({ kind: "response" as const, response }))
+      : null;
+    await trigger.click();
+    const captured = await Promise.any([
+      downloadPromise,
+      ...(responsePromise ? [responsePromise] : []),
+    ]);
+    if (captured.kind === "response") {
+      const url = captured.response.url();
+      const declaredMime = contentTypeWithoutParameters(captured.response.headers()["content-type"]);
+      const extension = declaredMime === "image/jpeg" ? ".jpg" : declaredMime === "image/webp" ? ".webp" : ".png";
+      return this.persistBuffer(await captured.response.body(), {
+        ...options,
+        url,
+        label: `generated-image${extension}`,
+      }, declaredMime);
+    }
+    const download = captured.download;
+    const url = download.url();
     if (url.startsWith("blob:")) {
       const embedded = url.slice("blob:".length);
       await validateDownloadUrl(embedded, { allowedDomainSuffixes: domains, resolveHostname: this.resolveHostname });

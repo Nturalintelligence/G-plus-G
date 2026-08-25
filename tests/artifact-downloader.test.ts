@@ -193,6 +193,45 @@ describe("ResponseArtifactDownloader deterministic download pipeline", () => {
     expect(control.click).toHaveBeenCalledOnce();
   });
 
+  it("captures Gemini full-size image responses when its download control uses fetch", async () => {
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
+    const trigger = { click: vi.fn().mockResolvedValue(undefined) };
+    const networkResponse = {
+      ok: () => true,
+      url: () => "https://lh3.googleusercontent.com/gg/generated=s0-d-I",
+      headers: () => ({ "content-type": "image/png" }),
+      body: async () => png,
+    };
+    const page = {
+      waitForEvent: vi.fn().mockRejectedValue(new Error("no download event")),
+      waitForResponse: vi.fn().mockImplementation(async (predicate: (response: typeof networkResponse) => Promise<boolean>) => {
+        expect(await predicate(networkResponse)).toBe(true);
+        return networkResponse;
+      }),
+    } as unknown as Page;
+    const result = await downloader.captureDownloadFromLocator(page, trigger as unknown as Locator, {
+      projectId: "project-1",
+      messageId: "assistant-image",
+      providerId: "gemini",
+    });
+    expect(result).toMatchObject({ status: "READY", mimeType: "image/png", fileName: "generated-image.png", sizeBytes: png.length });
+    expect(result.sha256).toHaveLength(64);
+  });
+
+  it("rejects profile avatars while waiting for a Gemini full-size generated image", async () => {
+    const avatar = { ok: () => true, url: () => "https://lh3.googleusercontent.com/a/avatar=s128-b16-cc-rp-mo", headers: () => ({ "content-type": "image/png" }) };
+    const page = {
+      waitForEvent: vi.fn().mockRejectedValue(new Error("no download event")),
+      waitForResponse: vi.fn().mockImplementation(async (predicate: (response: typeof avatar) => Promise<boolean>) => {
+        expect(await predicate(avatar)).toBe(false);
+        throw new Error("no matching generated response");
+      }),
+    } as unknown as Page;
+    await expect(downloader.captureDownloadFromLocator(page, { click: vi.fn() } as unknown as Locator, {
+      projectId: "project-1", messageId: "assistant-image", providerId: "gemini",
+    })).rejects.toThrow();
+  });
+
   it("includes an explicit uppercase Cyrillic download selector for localized providers", async () => {
     const requestedSelectors: string[] = [];
     const turn = {
