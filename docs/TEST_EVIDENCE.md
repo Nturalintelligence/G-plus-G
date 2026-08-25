@@ -274,6 +274,36 @@ Live ChatGPT/Gemini response-file UAT: **NOT RUN — BLOCKED_BY_OWNER_APPROVAL**
 
 Live provider validation: **NOT RUN — BLOCKED_BY_OWNER_APPROVAL**.
 
+## Owner-approved attachment/file live UAT — 2026-08-25
+
+The authenticated desktop profile was used with bounded sequential traffic.
+The file-UAT sent exactly six messages total: three to ChatGPT and three to
+Gemini (one PNG+MD upload and two response-file requests per provider). Failed
+pre-submit selector probes sent zero messages. There was no parallel traffic,
+CAPTCHA bypass or blind retry after UNKNOWN/timeout.
+
+| Check | Result | Evidence |
+|---|---|---|
+| ChatGPT PNG+MD send | PASS_LIVE | Submission `CONFIRMED`; both real provider cards visible; model named and read both files. |
+| Gemini PNG+MD send | PASS_LIVE | Submission `CONFIRMED`; both real provider chips visible; model named and read both files. |
+| Marker normalization | PASS | Structural expected-marker extraction accepts provider prose and rejects wrong/conflicting markers; 10/10 tests. |
+| Deleted remote chat recovery | PASS_LOCAL | Only `ConversationUnavailableError` clears/rebinds the missing external ref; unrelated errors do not create duplicate chats. Persisted user message IDs are reused safely. |
+| ChatGPT response file | FAIL_LIVE | One fresh request timed out after 180 s with no retry. Read-only reopen found an older `Скачать gplusg-provider-result.txt` button, but it emitted no Playwright download event and remained `FAILED`. |
+| Gemini response file | FAIL_LIVE | Fresh response completed but exposed `Скачать код`, not a provider file attachment; no download event occurred and status remained `FAILED`. |
+| Decorative icon regression | PASS_LOCAL / PRIOR_LIVE_FALSE_POSITIVE | Unconditional plain `<img>` discovery was removed. The earlier 286-byte `Значок TXT-файла` PNG is recorded as invalid historical UAT evidence, not a successful result. 13/13 downloader tests cover icon rejection, localized controls and Gemini card expansion. |
+| Crash-safe draft | PASS_DEV_ELECTRON | Text, attachment order, mode/participants/settings recover after forced close; `automaticRuns=0`, `automaticSubmissions=0`. |
+| Project deletion/shared blob | PASS_DEV_ELECTRON | Deleting one project through the real development UI preserves the other project and shared content-addressed blob. |
+| Full local gate | PASS | Final `npm run check`: 55 files, 257/257 tests; downloader 13/13; security 37/37; source guard 99 production files; development Electron build and `git diff --check` pass. |
+
+Because response-file live UAT is not PASS for both providers, no installer was
+built, `release/` was not changed, no GitHub Release was created and updater
+implementation remains blocked. The architecture-only plan is documented in
+`docs/GITHUB_UPDATE_AND_ROLLBACK_PLAN_RU.md`.
+
+Current Phase D disposition after the bounded run:
+`IMPLEMENTED_LOCALLY / LIVE_UAT_BLOCKED_EXTERNAL`. Do not repeat provider
+traffic until the network is stable and the Cloudflare challenge is gone.
+
 ## Minimal live provider canary — 2026-08-25
 
 Owner approval was explicit and traffic was intentionally limited to at most
