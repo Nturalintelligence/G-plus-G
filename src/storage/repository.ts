@@ -199,16 +199,7 @@ export class ProjectRepository {
          ORDER BY created_at, rowid`,
       )
       .all(projectId)
-      .map((row) => ({
-        id: String(row.id),
-        projectId: String(row.project_id),
-        runId: row.run_id === null ? null : String(row.run_id),
-        role: String(row.role) as MessageRole,
-        providerId: row.provider_id === null ? null : String(row.provider_id),
-        round: row.round === null ? null : Number(row.round),
-        content: String(row.content),
-        createdAt: String(row.created_at),
-      }));
+      .map(mapConversationEntry);
   }
 
   getConversationsForProject(projectId: string): Conversation[] {
@@ -337,6 +328,25 @@ export class ProjectRepository {
       )
       .get(id);
     return mapConversation(row!);
+  }
+
+  clearConversationExternalRef(id: string): void {
+    const updatedAt = new Date().toISOString();
+    const result = this.database.raw
+      .prepare("UPDATE conversations SET external_ref = NULL, updated_at = ? WHERE id = ? AND status = 'ACTIVE'")
+      .run(updatedAt, id);
+    if (result.changes !== 1) throw new Error(`Active conversation not found: ${id}`);
+    this.appendEventInternal("Conversation", id, "CONVERSATION_REF_CLEARED", {
+      reason: "REMOTE_UNAVAILABLE",
+    });
+  }
+
+  conversationEntryById(id: string): ConversationEntry | null {
+    const row = this.database.raw.prepare(`
+      SELECT id, project_id, run_id, role, provider_id, round, content, created_at
+      FROM conversation_entries WHERE id = ?
+    `).get(id);
+    return row ? mapConversationEntry(row) : null;
   }
 
   beginTurn(conversationId: string): { turn: Turn; attempt: Attempt } {
@@ -664,6 +674,19 @@ function mapConversation(row: Record<string, unknown>): Conversation {
     status: String(row.status) as Conversation["status"],
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
+  };
+}
+
+function mapConversationEntry(row: Record<string, unknown>): ConversationEntry {
+  return {
+    id: String(row.id),
+    projectId: String(row.project_id),
+    runId: row.run_id === null ? null : String(row.run_id),
+    role: String(row.role) as MessageRole,
+    providerId: row.provider_id === null ? null : String(row.provider_id),
+    round: row.round === null ? null : Number(row.round),
+    content: String(row.content),
+    createdAt: String(row.created_at),
   };
 }
 

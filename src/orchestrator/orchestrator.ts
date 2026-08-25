@@ -42,6 +42,7 @@ import { globalEventBus } from "../events/event-bus.js";
 import { TaskCompiler } from "./task-compiler.js";
 import { TaskFsmRepository } from "../storage/task-fsm-repository.js";
 import { dataPath } from "../paths.js";
+import { ConversationUnavailableError } from "../errors.js";
 import { classifyTaskComplexity, discussionTurnBudget } from "./semantic-stopping.js";
 
 export type RunMode = "MANUAL" | "SEQUENTIAL" | "PARALLEL" | "DEBATE";
@@ -355,7 +356,17 @@ export class Orchestrator {
     try {
       this.setStatus(runId, "RUNNING");
       memoryContext = await options.contextHooks?.loadPromptContext?.({ projectId, runId });
-      const userEntry = repository.appendConversationEntry({
+      const existingUserEntry = userMessageId
+        ? repository.conversationEntryById(userMessageId)
+        : null;
+      if (existingUserEntry && (
+        existingUserEntry.projectId !== projectId
+        || existingUserEntry.role !== "USER"
+        || existingUserEntry.content !== task
+      )) {
+        throw new Error("Saved message id belongs to different project content");
+      }
+      const userEntry = existingUserEntry ?? repository.appendConversationEntry({
         ...(userMessageId ? { id: userMessageId } : {}),
         projectId,
         runId,
@@ -987,7 +998,19 @@ export class Orchestrator {
         conversationId,
       });
       const ref: ConversationRef = { id: conversationId, url: externalRef };
-      await adapter.openConversation(ref);
+      try {
+        await adapter.openConversation(ref);
+      } catch (error) {
+        if (!(error instanceof ConversationUnavailableError)) throw error;
+        logEvent("WARN", "provider.conversation.remote_unavailable", {
+          runId: this.activeRunId,
+          providerId: adapter.providerId,
+          conversationId,
+        });
+        repository.clearConversationExternalRef(conversationId);
+        const created = await adapter.createConversation();
+        if (created.url) repository.updateConversationExternalRef(conversationId, created.url);
+      }
     } else {
       logEvent("INFO", "provider.conversation.creating", {
         runId: this.activeRunId,

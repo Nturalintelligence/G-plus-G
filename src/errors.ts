@@ -39,3 +39,10 @@ export class LoginTimeoutError extends Error {
     this.name = "LoginTimeoutError";
   }
 }
+
+export class ConversationUnavailableError extends Error {
+  constructor(message = "Сохранённый веб-диалог удалён или недоступен") {
+    super(message);
+    this.name = "ConversationUnavailableError";
+  }
+}

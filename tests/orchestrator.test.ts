@@ -11,6 +11,7 @@ import { Orchestrator } from "../src/orchestrator/orchestrator.js";
 import type { OrchestrationLimits } from "../src/orchestrator/limits.js";
 import { AppDatabase } from "../src/storage/database.js";
 import { ProjectRepository } from "../src/storage/repository.js";
+import { ConversationUnavailableError } from "../src/errors.js";
 
 const open: AppDatabase[] = [];
 const limits: OrchestrationLimits = {
@@ -517,6 +518,64 @@ describe("Orchestrator", () => {
         { limits, userMessageId: "   " },
       ),
     ).rejects.toThrow(/userMessageId cannot be empty/);
+  });
+
+  it("reuses an already persisted matching user message after a failed run", async () => {
+    const { database, projectId } = setup();
+    const repository = new ProjectRepository(database);
+    repository.appendConversationEntry({
+      id: "msg_retry-safe",
+      projectId,
+      role: "USER",
+      content: "retry safely",
+    });
+
+    await new Orchestrator(database, new Map([["a", fakeAdapter("a", [])]])).run(
+      projectId,
+      "MANUAL",
+      "retry safely",
+      ["a"],
+      { limits, userMessageId: "msg_retry-safe" },
+    );
+
+    expect(database.raw.prepare("SELECT COUNT(*) AS count FROM conversation_entries WHERE id = 'msg_retry-safe'").get()?.count).toBe(1);
+    await expect(new Orchestrator(database, new Map([["a", fakeAdapter("a", [])]])).run(
+      projectId,
+      "MANUAL",
+      "different content",
+      ["a"],
+      { limits, userMessageId: "msg_retry-safe" },
+    )).rejects.toThrow(/different project content/);
+  });
+
+  it("rebinds a deleted remote conversation before submitting", async () => {
+    const { database, projectId } = setup();
+    const repository = new ProjectRepository(database);
+    const conversation = repository.createConversation(projectId, "a");
+    repository.updateConversationExternalRef(conversation.id, "https://example.com/a/deleted");
+    const received: string[] = [];
+    const adapter = fakeAdapter("a", received);
+    let createCount = 0;
+    adapter.openConversation = async () => {
+      throw new ConversationUnavailableError();
+    };
+    adapter.createConversation = async () => {
+      createCount += 1;
+      return { id: "replacement", url: "https://example.com/a/replacement" };
+    };
+
+    await new Orchestrator(database, new Map([["a", adapter]])).run(
+      projectId,
+      "MANUAL",
+      "continue",
+      ["a"],
+      limits,
+    );
+
+    expect(createCount).toBe(1);
+    expect(received).toHaveLength(1);
+    expect(repository.getConversationsForProject(projectId)[0]?.externalRef).toBe("https://example.com/a");
+    expect(repository.projectEvents(projectId).map((event) => event.eventType)).toContain("CONVERSATION_REF_CLEARED");
   });
 
   it("does not spend seven discussion turns on the trivial prompt 'тест'", async () => {
