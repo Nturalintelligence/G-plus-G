@@ -273,3 +273,19 @@ Live ChatGPT/Gemini response-file UAT: **NOT RUN — BLOCKED_BY_OWNER_APPROVAL**
 | Full regression gate | PASS | 54 files, 238/238 tests; security 37/37. |
 
 Live provider validation: **NOT RUN — BLOCKED_BY_OWNER_APPROVAL**.
+
+## Minimal live provider canary — 2026-08-25
+
+Owner approval was explicit and traffic was intentionally limited to at most
+one unique request per provider. No retry, parallel run, attachment upload,
+response download or orchestration run was attempted.
+
+| Provider | Result | Submitted messages | Redacted evidence |
+|---|---|---:|---|
+| ChatGPT | BLOCKED_BY_AUTH | 0 | Pre-submit session gate returned `LOGIN_REQUIRED`; authenticated composer was not accepted and no message reached the provider. Diagnostic `diagnostic-1787644171914.json`. |
+| Gemini | FAIL_FORMAT / BINDING_MARKER_PRESENT | 1 | Response contained the unique marker but added provider prose, so strict exact-response verification failed. Post-failure diagnostic also reported `LOGIN_REQUIRED`. Diagnostic `diagnostic-1787644223869.json`. |
+
+CAPTCHA/challenge and rate-limit signals were not observed. Testing stopped
+immediately after the canaries to avoid repeated traffic. The remaining live
+matrix stays **BLOCKED_BY_AUTH** until both persistent sessions are explicitly
+re-authorized and a new owner-approved run is requested.

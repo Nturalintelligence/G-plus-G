@@ -113,3 +113,14 @@ do not start the experimental runtime or full soak.
   requests and all non-whitelisted short prompts keep the configured budget.
 - This is locally tested only. Visible provider-message count remains part of
   the owner-gated live UAT.
+
+# Live UAT canary — 2026-08-25
+
+- Owner authorized a low-traffic run. ChatGPT stopped before submission with
+  `LOGIN_REQUIRED` (zero messages). Gemini received one unique marker request;
+  binding was evident, but exact output failed because the provider added prose.
+- No retries, attachment cases, orchestration, downloads or further live calls
+  were run. No challenge/rate-limit signal was observed.
+- Both persistent profiles require manual re-authorization before the remaining
+  matrix. Keep exact binding acceptance strict and do not normalize the Gemini
+  response merely to make the test pass.
