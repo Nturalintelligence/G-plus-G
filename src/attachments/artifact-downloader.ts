@@ -238,13 +238,19 @@ export class ResponseArtifactDownloader {
       if ((await turnLocator.count().catch(() => 0)) === 0) return [];
       return await turnLocator.evaluate((el) => {
         const results: Array<{ label: string; url: string; isImage: boolean }> = [];
-        el.querySelectorAll("img").forEach((img) => {
-          const src = img.src || img.getAttribute("data-src");
-          if (src?.startsWith("https://")) results.push({ label: img.alt || "Generated Image", url: src, isImage: true });
-        });
+        // A plain image is presentation content, not proof of a downloadable
+        // artifact. Provider file cards commonly contain decorative HTTPS
+        // icons; treating every <img> as a file persisted those icons as user
+        // results. Generated images remain supported when the provider exposes
+        // an explicit download link/control around them.
         el.querySelectorAll("a[href]").forEach((anchor) => {
           const href = anchor.getAttribute("href");
-          const explicitlyDownloadable = anchor.hasAttribute("download") || /download|file|attachment/i.test(anchor.getAttribute("aria-label") || "");
+          const accessibleName = [
+            anchor.getAttribute("aria-label"),
+            anchor.getAttribute("title"),
+            anchor.getAttribute("data-testid"),
+          ].filter(Boolean).join(" ");
+          const explicitlyDownloadable = anchor.hasAttribute("download") || /download|file|attachment|скач|файл/i.test(accessibleName);
           if (href?.startsWith("https://") && explicitlyDownloadable) {
             results.push({ label: anchor.textContent?.trim() || "Downloadable File", url: href, isImage: false });
           }
@@ -273,7 +279,17 @@ export class ResponseArtifactDownloader {
       }
     }
     const turn = page.locator(turnSelector).last();
-    const controls = turn.locator('a[download], button[aria-label*="download" i], button[aria-label*="скач" i], a[aria-label*="download" i], a[aria-label*="скач" i]');
+    // CSS `i` matching is not reliable for Cyrillic case folding in Chromium.
+    // Keep explicit upper/lower Russian stems so `Скачать …` is not missed.
+    const controls = turn.locator([
+      "a[download]",
+      'button[aria-label*="download" i]',
+      'button[aria-label*="скач"]',
+      'button[aria-label*="Скач"]',
+      'a[aria-label*="download" i]',
+      'a[aria-label*="скач"]',
+      'a[aria-label*="Скач"]',
+    ].join(", "));
     const count = Math.min(await controls.count().catch(() => 0), 10);
     for (let index = 0; index < count; index += 1) {
       const control = controls.nth(index);
@@ -283,6 +299,35 @@ export class ResponseArtifactDownloader {
         records.push(await this.captureDownloadFromLocator(page, control, options));
       } catch {
         records.push(this.persistFailure({ ...options, url: href?.startsWith("https://") ? href : "", label: await control.textContent().catch(() => null) || "downloaded_artifact" }));
+      }
+    }
+    // Gemini may render a generated file as an assistant-bound card whose
+    // Open action reveals the actual download control in an app-level overlay.
+    // Scope the expansion trigger to the bound turn, then scope the resulting
+    // control to an explicit accessible download action. This is never a send
+    // or retry operation.
+    if (options.providerId === "gemini" && !records.some((record) => record.status === "READY")) {
+      const expand = turn.locator('[data-test-id="open-button"]').first();
+      if ((await expand.count().catch(() => 0)) === 1) {
+        await expand.click().catch(() => undefined);
+        await page.waitForTimeout(250).catch(() => undefined);
+        const expandedControls = page.locator([
+          '[role="button"][aria-label="Скачать"]',
+          '[role="button"][aria-label="Download"]',
+          'button[aria-label="Скачать"]',
+          'button[aria-label="Download"]',
+        ].join(", "));
+        await expandedControls.first().waitFor({ state: "visible", timeout: 3_000 }).catch(() => undefined);
+        const expandedCount = Math.min(await expandedControls.count().catch(() => 0), 3);
+        for (let index = 0; index < expandedCount; index += 1) {
+          const control = expandedControls.nth(index);
+          try {
+            records.push(await this.captureDownloadFromLocator(page, control, options));
+            break;
+          } catch {
+            records.push(this.persistFailure({ ...options, url: "", label: "downloaded_artifact" }));
+          }
+        }
       }
     }
     return records;

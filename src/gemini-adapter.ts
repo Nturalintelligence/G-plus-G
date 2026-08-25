@@ -38,6 +38,7 @@ import type {
   TurnResult,
 } from "./types.js";
 import { uploadAttachmentsToComposer } from "./adapters/provider-attachment-upload.js";
+import { classifyProviderResult, ProviderResultProgress } from "./adapters/provider-result-state.js";
 
 const GEMINI_URL = "https://gemini.google.com/app";
 const COMPOSERS = [
@@ -402,9 +403,20 @@ export class GeminiAdapter implements ModelAdapter {
     let stable = "";
     let stableSince = 0;
     let started = false;
+    const lifecycle = new ProviderResultProgress(Date.now(), this.timeoutMs);
     while (Date.now() < deadline) {
       if (await this.hasChallenge()) throw new ChallengeRequiredError();
       const selected = selectNewResponse(before, await this.responses());
+      const resultState = classifyProviderResult({
+        generationActive: await page.getByRole("button", { name: /stop|останов/i }).isVisible().catch(() => false),
+        selectionCount: await page.locator('[role="dialog"] button:has(img)').count().catch(() => 0),
+        responsePresent: Boolean(selected),
+        downloadControlCount: await page.locator('message-content:last-of-type button[aria-label*="download" i], message-content:last-of-type button[aria-label*="Скач"], message-content:last-of-type [data-test-id="open-button"]').count().catch(() => 0),
+        failureVisible: await page.locator('[role="alert"]:visible').filter({ hasText: /generation failed|не удалось|ошибка/i }).count().then((count) => count > 0).catch(() => false),
+      });
+      if (lifecycle.update(resultState, Date.now()) && resultState !== "SUBMITTED") {
+        channel?.publish({ type: resultState, at: new Date().toISOString() });
+      }
       if (selected) {
         if (!started) {
           started = true;
@@ -420,10 +432,11 @@ export class GeminiAdapter implements ModelAdapter {
           });
         }
         const stop = page.getByRole("button", { name: /stop|останов/i });
-        const composerReady = (await this.visibleComposers()).length === 1;
+        const composerReady = (await this.visibleComposers()).length >= 1;
+        const artifactReady = lifecycle.current() === "DOWNLOAD_AVAILABLE";
         if (
           !(await stop.isVisible().catch(() => false)) &&
-          composerReady &&
+          (composerReady || artifactReady) &&
           Date.now() - stableSince >= 2_500
         ) {
           channel?.publish({

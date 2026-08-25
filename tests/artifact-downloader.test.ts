@@ -145,6 +145,25 @@ describe("ResponseArtifactDownloader deterministic download pipeline", () => {
       .toMatchObject({ file_name: "результат.pdf", mime_type: "application/pdf", size_bytes: pdf.length });
   });
 
+  it("does not treat a decorative provider file-card image as a response artifact", async () => {
+    const evaluate = vi.fn().mockImplementation((callback: (element: Element) => unknown) => {
+      const decorativeIcon = {
+        src: "https://www.gstatic.com/images/icons/material/system/2x/description.png",
+        alt: "Значок TXT-файла",
+        getAttribute: vi.fn().mockReturnValue(null),
+      };
+      const element = {
+        querySelectorAll: (selector: string) => selector === "img" ? [decorativeIcon] : [],
+      } as unknown as Element;
+      return callback(element);
+    });
+    const page = {
+      locator: () => ({ last: () => ({ count: async () => 1, evaluate }) }),
+    } as unknown as Page;
+
+    await expect(downloader.extractTurnArtifactsFromPage(page, ".bound-assistant")).resolves.toEqual([]);
+  });
+
   it("captures provider download controls from the bound response without replaying a URL", async () => {
     const pdf = Buffer.from("%PDF-1.7\nbutton-event");
     const control = {
@@ -172,6 +191,70 @@ describe("ResponseArtifactDownloader deterministic download pipeline", () => {
     });
     expect(results[0]).toMatchObject({ status: "READY", fileName: "button.pdf", originalUrl: "https://files.oaiusercontent.com/button.pdf" });
     expect(control.click).toHaveBeenCalledOnce();
+  });
+
+  it("includes an explicit uppercase Cyrillic download selector for localized providers", async () => {
+    const requestedSelectors: string[] = [];
+    const turn = {
+      count: async () => 1,
+      evaluate: async () => [],
+      locator: (selector: string) => {
+        requestedSelectors.push(selector);
+        return selector.includes("open-button")
+          ? { first: () => ({ count: async () => 0 }) }
+          : { count: async () => 0 };
+      },
+    };
+    const page = { locator: () => ({ last: () => turn }) } as unknown as Page;
+
+    await downloader.downloadTurnArtifactsFromPage(page, ".bound-assistant", {
+      projectId: "project-1",
+      messageId: "assistant-entry-ru",
+      providerId: "gemini",
+    });
+
+    expect(requestedSelectors.join(" ")).toContain('button[aria-label*="Скач"]');
+  });
+
+  it("opens a Gemini bound file card before capturing its app-level download control", async () => {
+    const txt = Buffer.from("G_PLUS_G_PROVIDER_FILE_RESULT_2026\n");
+    const open = { count: async () => 1, click: vi.fn().mockResolvedValue(undefined) };
+    const downloadControl = { click: vi.fn().mockResolvedValue(undefined) };
+    const controls = { count: async () => 0 };
+    const turn = {
+      count: async () => 1,
+      evaluate: async () => [],
+      locator: (selector: string) => selector.includes("open-button")
+        ? { first: () => open }
+        : controls,
+    };
+    const download = {
+      url: () => "https://gemini.google.com/download/result.txt",
+      suggestedFilename: () => "result.txt",
+      createReadStream: async () => Readable.from([txt]),
+    };
+    const page = {
+      locator: (selector: string) => selector === ".bound-assistant"
+        ? { last: () => turn }
+        : {
+            first: () => ({ waitFor: vi.fn().mockResolvedValue(undefined) }),
+            count: async () => 1,
+            nth: () => downloadControl,
+          },
+      waitForTimeout: vi.fn().mockResolvedValue(undefined),
+      waitForEvent: vi.fn().mockResolvedValue(download),
+    } as unknown as Page;
+
+    const results = await downloader.downloadTurnArtifactsFromPage(page, ".bound-assistant", {
+      projectId: "project-1",
+      messageId: "assistant-entry-gemini-card",
+      providerId: "gemini",
+    });
+
+    expect(open.click).toHaveBeenCalledOnce();
+    expect(downloadControl.click).toHaveBeenCalledOnce();
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({ status: "READY", fileName: "result.txt", mimeType: "text/plain" });
   });
 
   it("fails closed when a redirect resolves to private infrastructure", async () => {

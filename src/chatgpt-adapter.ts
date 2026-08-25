@@ -42,6 +42,7 @@ import type {
 } from "./types.js";
 import { logEvent } from "./observability/logger.js";
 import { uploadAttachmentsToComposer } from "./adapters/provider-attachment-upload.js";
+import { classifyProviderResult, ProviderResultProgress } from "./adapters/provider-result-state.js";
 
 const CHATGPT_URL = "https://chatgpt.com/";
 const RESPONSE_SELECTORS = [
@@ -701,6 +702,7 @@ export class ChatGptAdapter implements ModelAdapter {
     let stableText = "";
     let stableSince = 0;
     const startedAt = Date.now();
+    const lifecycle = new ProviderResultProgress(startedAt, this.timeoutMs);
     let nextUiTraceAt = startedAt + 10_000;
     let lastRecoveryAt = 0;
     let recoveryAttempts = 0;
@@ -709,6 +711,16 @@ export class ChatGptAdapter implements ModelAdapter {
       if (await this.hasChallenge()) throw new ChallengeRequiredError();
       const after = await this.captureResponses();
       const selected = selectNewResponse(before, after);
+      const resultState = classifyProviderResult({
+        generationActive: await page.getByRole("button", { name: /stop generating|остановить создание/i }).isVisible().catch(() => false),
+        selectionCount: await page.locator('[role="dialog"] button:has(img), [data-testid*="image" i] button:has(img)').count().catch(() => 0),
+        responsePresent: Boolean(selected),
+        downloadControlCount: await page.locator('[data-message-author-role="assistant"]:last-of-type a[download], [data-message-author-role="assistant"]:last-of-type button[aria-label*="download" i], [data-message-author-role="assistant"]:last-of-type button[aria-label*="Скач"]').count().catch(() => 0),
+        failureVisible: await page.locator('[role="alert"]:visible').filter({ hasText: /generation failed|не удалось создать|ошибка генерации/i }).count().then((count) => count > 0).catch(() => false),
+      });
+      if (lifecycle.update(resultState, Date.now()) && resultState !== "SUBMITTED") {
+        channel?.publish({ type: resultState, at: new Date().toISOString() });
+      }
 
       if (Date.now() >= nextUiTraceAt) {
         await this.logResponseUiState(before.length, after.length, Date.now() - startedAt);
@@ -763,10 +775,11 @@ export class ChatGptAdapter implements ModelAdapter {
           .getByRole("button", { name: /stop generating|остановить создание/i })
           .isVisible()
           .catch(() => false);
-        const composerReady = (await this.findVisibleComposers()).length === 1;
+        const composerReady = (await this.findVisibleComposers()).length >= 1;
+        const artifactReady = lifecycle.current() === "DOWNLOAD_AVAILABLE";
         if (
           !stopVisible &&
-          composerReady &&
+          (composerReady || artifactReady) &&
           stableText &&
           Date.now() - stableSince >= this.settleMs
         ) {
