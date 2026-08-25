@@ -289,3 +289,20 @@ CAPTCHA/challenge and rate-limit signals were not observed. Testing stopped
 immediately after the canaries to avoid repeated traffic. The remaining live
 matrix stays **BLOCKED_BY_AUTH** until both persistent sessions are explicitly
 re-authorized and a new owner-approved run is requested.
+
+## Authenticated GUI-profile canary — 2026-08-25
+
+Owner re-authorized the isolated GUI profiles and approved a new minimal live
+run. The CLI was explicitly bound to `%APPDATA%\g-plus-g`, matching the desktop
+application. Traffic was limited to one request per provider with no retry.
+
+| Provider | Result | Submitted messages | Redacted evidence |
+|---|---|---:|---|
+| ChatGPT | PASS | 1 | Exact unique marker was returned and bound on the first attempt. |
+| Gemini | FAIL_FORMAT / BINDING_MARKER_PRESENT | 1 | The correct unique marker was returned with provider-added prose. Strict exact-response verification rejected it; diagnostic `diagnostic-1787649683957.json`. |
+
+No CAPTCHA, challenge or rate-limit signal was observed. At commit `69991fa`,
+security tests passed 37/37, the source guard scanned 96 production files, the
+Electron production build and Windows package succeeded, and packaged smoke
+passed in an isolated profile. Project deletion regression passed on a separate
+temporary SQLite database; no owner project or live web conversation was deleted.
