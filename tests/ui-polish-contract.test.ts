@@ -42,4 +42,18 @@ describe("Phase B.1 UI contracts", () => {
     expect(styles).toMatch(/\.message-attachment-card\s*\{[\s\S]*?max-width:\s*min\(320px, 100%\);[\s\S]*?overflow/);
     expect(styles).toContain(".message-attachment-save");
   });
+
+  it("keeps sidebar chrome fixed around a dedicated project scroll container", () => {
+    expect(renderer).toMatch(/className="projects-list-nav"/);
+    expect(renderer).toMatch(/className="sidebar-models-section"/);
+    expect(renderer).toMatch(/className="sidebar-footer"/);
+    expect(renderer).toMatch(/scrollIntoView\(\{ block: "nearest", inline: "nearest" \}\)/);
+    expect(renderer).toContain('window.localStorage.setItem("gplusg.selectedProjectId", id)');
+    expect(renderer).toMatch(/className="project-name" title=\{project\.name\}/);
+    expect(styles).toMatch(/\.sidebar-pane\s*\{[\s\S]*?height:\s*100%;[\s\S]*?min-height:\s*0;[\s\S]*?overflow:\s*hidden;/);
+    expect(styles).toMatch(/\.projects-list-nav\s*\{[\s\S]*?flex:\s*1;[\s\S]*?min-height:\s*0;[\s\S]*?overflow-y:\s*auto;[\s\S]*?overflow-x:\s*hidden;/);
+    expect(styles).toMatch(/\.sidebar-models-section,[\s\S]*?\.sidebar-footer\s*\{[\s\S]*?flex-shrink:\s*0;/);
+    expect(styles).toMatch(/\.project-name\s*\{[\s\S]*?text-overflow:\s*ellipsis;/);
+    expect(styles).toMatch(/\.project-menu-btn\s*\{[\s\S]*?flex:\s*0 0 34px;/);
+  });
 });

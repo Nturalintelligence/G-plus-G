@@ -343,6 +343,9 @@ h2 {
   display: flex;
   flex-direction: column;
   height: 100%;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
   border-right: 1px solid var(--border-color);
   background: var(--bg-panel);
   padding: 16px;
@@ -353,6 +356,7 @@ h2 {
   align-items: center;
   justify-content: space-between;
   margin-bottom: 12px;
+  flex-shrink: 0;
 }
 
 .new-project-btn {
@@ -372,11 +376,44 @@ h2 {
 
 .projects-list-nav {
   flex: 1;
+  min-height: 0;
+  min-width: 0;
   overflow-y: auto;
+  overflow-x: hidden;
   display: flex;
   flex-direction: column;
   gap: 8px;
   margin-top: 10px;
+  padding-right: 3px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-color-input) transparent;
+  overscroll-behavior: contain;
+}
+
+.projects-list-nav::-webkit-scrollbar {
+  width: 5px;
+}
+
+.projects-list-nav::-webkit-scrollbar-thumb {
+  background: var(--border-color-input);
+}
+
+.sidebar-models-section,
+.sidebar-footer {
+  flex-shrink: 0;
+  min-width: 0;
+}
+
+.sidebar-models-section {
+  padding-top: 14px;
+  border-top: 1px solid var(--border-color);
+}
+
+.sidebar-models-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
 }
 
 .sidebar-footer {
@@ -412,10 +449,13 @@ h2 {
 
 /* Sidebar Project Row */
 .project-row {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 6px;
   width: 100%;
+  min-width: 0;
+  flex-shrink: 0;
 }
 
 .project-btn {
@@ -433,6 +473,43 @@ h2 {
   overflow: hidden;
   text-overflow: ellipsis;
   transition: all 0.2s ease;
+}
+
+.project-name {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-menu-btn {
+  width: 34px;
+  height: 34px;
+  min-width: 34px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  flex: 0 0 34px;
+  position: relative;
+  z-index: 2;
+}
+
+.project-context-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 20;
+  padding: 4px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--bg-panel);
+  box-shadow: var(--shadow-panel);
+}
+
+.project-context-menu button {
+  white-space: nowrap;
 }
 
 .project-btn strong {

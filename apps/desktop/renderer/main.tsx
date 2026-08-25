@@ -133,6 +133,8 @@ function getSessionStatusDisplay(session?: string): { text: string; type: "onlin
 function App(): React.JSX.Element {
   const [projects, setProjects] = useState<ProjectView[]>([]);
   const [current, setCurrent] = useState<ProjectDetails | null>(null);
+  const selectedProjectRowRef = useRef<HTMLDivElement | null>(null);
+  const restoredProjectSelectionRef = useRef(false);
   const [providerStatuses, setProviderStatuses] = useState<Record<string, { session: string; ready: boolean }>>({
     chatgpt: { session: "UNKNOWN", ready: false },
     gemini: { session: "UNKNOWN", ready: false },
@@ -354,6 +356,19 @@ function App(): React.JSX.Element {
     return () => clearTimeout(timer);
   }, []);
   useEffect(() => {
+    selectedProjectRowRef.current?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [current?.project.id]);
+  useEffect(() => {
+    if (restoredProjectSelectionRef.current || current || projects.length === 0) return;
+    restoredProjectSelectionRef.current = true;
+    const selectedId = window.localStorage.getItem("gplusg.selectedProjectId");
+    if (selectedId && projects.some((project) => project.id === selectedId)) {
+      void openProject(selectedId).catch(() => window.localStorage.removeItem("gplusg.selectedProjectId"));
+    } else if (selectedId) {
+      window.localStorage.removeItem("gplusg.selectedProjectId");
+    }
+  }, [projects, current]);
+  useEffect(() => {
     let cancelled = false;
 
     const checkProviderStatus = async (provider: "chatgpt" | "gemini"): Promise<void> => {
@@ -474,6 +489,7 @@ function App(): React.JSX.Element {
     const restoredAttachments = [...(attachmentDraft?.attachments ?? [])].sort((left, right) =>
       (attachmentOrder.get(left.id) ?? Number.MAX_SAFE_INTEGER) - (attachmentOrder.get(right.id) ?? Number.MAX_SAFE_INTEGER));
     setCurrent(details);
+    window.localStorage.setItem("gplusg.selectedProjectId", id);
     setCliTasks(tasks);
     setAttachedFiles(restoredAttachments);
     setDraftMessageId(savedDraft?.messageId ?? attachmentDraft?.messageId ?? `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`);
@@ -898,12 +914,17 @@ function App(): React.JSX.Element {
             </div>
             <nav className="projects-list-nav">
               {projects.map((project) => (
-                <div className={`project-row ${current?.project.id === project.id ? "selected" : ""}`} key={project.id}>
+                <div
+                  className={`project-row ${current?.project.id === project.id ? "selected" : ""}`}
+                  key={project.id}
+                  ref={current?.project.id === project.id ? selectedProjectRowRef : undefined}
+                >
                   <button
                     className="project-btn"
+                    aria-current={current?.project.id === project.id ? "page" : undefined}
                     onClick={() => void openProject(project.id)}
                   >
-                    <span className="project-name">{project.name}</span>
+                    <span className="project-name" title={project.name}>{project.name}</span>
                   </button>
                   <button
                     className="project-menu-btn"
