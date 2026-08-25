@@ -754,19 +754,22 @@ h2 {
 
 /* Transcript Messages */
 .message {
+  position: relative;
   min-width: 0;
   max-width: 100%;
   overflow-wrap: anywhere;
   border: 1px solid var(--border-color-card);
   border-radius: 16px;
-  padding: 16px 20px;
+  padding: 14px 18px;
   background: var(--bg-panel);
   box-shadow: var(--shadow-panel);
   transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
 
 .message.user {
-  margin-left: 15%;
+  width: fit-content;
+  max-width: min(85%, 720px);
+  margin-left: auto;
   border-color: var(--border-message-user);
   background: var(--bg-message-user);
 }
@@ -817,6 +820,60 @@ h2 {
   min-width: 0;
   max-width: 100%;
   overflow-wrap: anywhere;
+}
+
+.message > p:first-of-type {
+  margin-top: 0;
+}
+
+.message > p:last-of-type {
+  margin-bottom: 0;
+}
+
+.message-actions {
+  display: flex;
+  justify-content: flex-end;
+  min-height: 28px;
+  margin: 8px -6px -8px 0;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.message:hover .message-actions,
+.message:focus-within .message-actions {
+  opacity: 1;
+}
+
+.message-copy {
+  min-height: 28px;
+  padding: 4px 7px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: var(--text-muted);
+  background: transparent;
+  font-size: 12px;
+}
+
+.message-copy:hover,
+.message-copy:focus-visible {
+  color: var(--text-primary);
+  border-color: var(--border-color-card);
+  background: var(--bg-card);
+}
+
+.message-copy svg {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 15px;
+}
+
+@media (hover: none), (pointer: coarse) {
+  .message-actions {
+    opacity: 1;
+  }
 }
 
 .message p > img {

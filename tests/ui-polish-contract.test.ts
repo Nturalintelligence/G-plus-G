@@ -83,4 +83,13 @@ describe("Phase B.1 UI contracts", () => {
     expect(styles).toMatch(/\.inspector-content\s*\{[\s\S]*?min-height:\s*0;[\s\S]*?overflow-y:\s*auto;/);
     expect(styles).toMatch(/\.project-row\.selected \.project-btn\s*\{[\s\S]*?border-radius:\s*12px;/);
   });
+
+  it("keeps short user messages compact and exposes a real copy action", () => {
+    expect(renderer).toContain("function MessageCopyAction");
+    expect(renderer).toContain("navigator.clipboard.writeText(content)");
+    expect(renderer).toContain("Не удалось скопировать сообщение");
+    expect(styles).toMatch(/\.message\.user\s*\{[\s\S]*?width:\s*fit-content;[\s\S]*?max-width:\s*min\(85%, 720px\);[\s\S]*?margin-left:\s*auto;/);
+    expect(styles).toMatch(/\.message:hover \.message-actions,[\s\S]*?\.message:focus-within \.message-actions\s*\{[\s\S]*?opacity:\s*1;/);
+    expect(styles).toMatch(/@media \(hover: none\), \(pointer: coarse\)[\s\S]*?\.message-actions\s*\{[\s\S]*?opacity:\s*1;/);
+  });
 });

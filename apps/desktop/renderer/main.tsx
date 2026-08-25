@@ -115,6 +115,15 @@ function MessageAttachments({ files, onPreview }: { files: AttachmentRefView[]; 
   </div>;
 }
 
+function MessageCopyAction({ content, copied, onCopy }: { content: string; copied: boolean; onCopy: (content: string) => void }): React.JSX.Element {
+  return <div className="message-actions">
+    <button type="button" className="message-copy" onClick={() => onCopy(content)} aria-label="Копировать текст сообщения" title="Копировать текст сообщения">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>
+      <span>{copied ? "Скопировано" : "Копировать"}</span>
+    </button>
+  </div>;
+}
+
 const fallbackSettings: AppSettingsView = {
   schemaVersion: 1,
   profile: { displayName: "", realName: "", greetingStyle: "generic" },
@@ -179,6 +188,7 @@ function App(): React.JSX.Element {
     () => new Set(["acceptanceCriteria"]),
   );
   const [status, setStatus] = useState("Готово");
+  const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [statusNotificationVisible, setStatusNotificationVisible] = useState(false);
   const [running, setRunning] = useState(false);
   const [settings, setSettings] = useState<AppSettingsView>(fallbackSettings);
@@ -918,6 +928,16 @@ function App(): React.JSX.Element {
     }
   }
 
+  async function copyMessage(id: string, content: string): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(content);
+      setCopiedMessageId(id);
+      window.setTimeout(() => setCopiedMessageId((currentId) => currentId === id ? null : currentId), 1_800);
+    } catch (error) {
+      setStatus(`Не удалось скопировать сообщение: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
   if (showSplash) {
     const logoSrc = settings.appearance.theme === "light" ? logoLight : logoDark;
     return (
@@ -1129,6 +1149,7 @@ function App(): React.JSX.Element {
                         </header>
                         <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml>{entry.content}</ReactMarkdown>
                         {entry.attachments?.length ? <MessageAttachments files={entry.attachments} onPreview={setPreviewImageModalUrl} /> : null}
+                        <MessageCopyAction content={entry.content} copied={copiedMessageId === entry.id} onCopy={(content) => void copyMessage(entry.id, content)} />
                       </section>
                     ))}
                   </>
@@ -1141,6 +1162,7 @@ function App(): React.JSX.Element {
                       </header>
                       <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml>{entry.content}</ReactMarkdown>
                       {entry.attachments?.length ? <MessageAttachments files={entry.attachments} onPreview={setPreviewImageModalUrl} /> : null}
+                      <MessageCopyAction content={entry.content} copied={copiedMessageId === entry.id} onCopy={(content) => void copyMessage(entry.id, content)} />
                       {entry.role === "ASSISTANT" ? (
                         <button className="relay" onClick={() => relay(entry)}>
                           Передать дальше
@@ -1156,6 +1178,7 @@ function App(): React.JSX.Element {
                       <small>отправка…</small>
                     </header>
                     <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml>{optimisticUserTask}</ReactMarkdown>
+                    <MessageCopyAction content={optimisticUserTask} copied={copiedMessageId === "optimistic-user-task"} onCopy={(content) => void copyMessage("optimistic-user-task", content)} />
                   </section>
                 ) : null}
                 {running ? (
@@ -1184,6 +1207,7 @@ function App(): React.JSX.Element {
                         <small>печатает...</small>
                       </header>
                       <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml>{text}</ReactMarkdown>
+                      <MessageCopyAction content={text} copied={copiedMessageId === `streaming-${providerId}`} onCopy={(content) => void copyMessage(`streaming-${providerId}`, content)} />
                     </section>
                   );
                 }) : null}
