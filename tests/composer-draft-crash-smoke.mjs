@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 const executablePath = resolve("release/win-unpacked/G plus G.exe");
+const developmentMode = process.env.G_PLUS_G_DEV_SMOKE === "1";
 const dataRoot = await mkdtemp(join(tmpdir(), "g-plus-g-composer-crash-"));
 const firstBytes = new Uint8Array(await readFile(resolve("tests/fixtures/user-regression-screenshot.png")));
 const secondBytes = new Uint8Array(await readFile(resolve("tests/fixtures/remove-controls-regression.png")));
@@ -12,7 +13,9 @@ const assert = (condition, message) => { if (!condition) throw new Error(message
 let app;
 
 async function launch() {
-  app = await electron.launch({ executablePath, env: { ...process.env, G_PLUS_G_USER_DATA: dataRoot } });
+  app = await electron.launch(developmentMode
+    ? { args: ["."], cwd: resolve("."), env: { ...process.env, G_PLUS_G_USER_DATA: dataRoot } }
+    : { executablePath, env: { ...process.env, G_PLUS_G_USER_DATA: dataRoot } });
   const page = await app.firstWindow();
   await page.waitForLoadState("domcontentloaded");
   return page;
@@ -60,6 +63,10 @@ try {
   await page.getByText(projectName, { exact: true }).click();
   const textarea = page.getByLabel("Сообщение для моделей");
   await textarea.waitFor();
+  await page.waitForFunction(
+    (expected) => document.querySelector('textarea[aria-label="Сообщение для моделей"]')?.value === expected,
+    "Первоначальный crash-safe текст",
+  );
   assert(await textarea.inputValue() === "Первоначальный crash-safe текст", "Configured draft did not hydrate before crash scenario");
   await textarea.fill("Текст, сохранённый renderer debounce перед аварийным завершением");
   let beforeCrash;
