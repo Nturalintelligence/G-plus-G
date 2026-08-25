@@ -153,6 +153,33 @@ describe("SQLite project state", () => {
       role: "USER",
       content: "Hello",
     });
+    const now = new Date().toISOString();
+    database.raw.prepare(`INSERT INTO message_attachments
+      (id, message_id, project_id, kind, file_name, mime_type, size_bytes, sha256, local_relative_path, source, status, created_at, updated_at)
+      VALUES ('att-delete', 'draft-delete', ?, 'document', 'note.md', 'text/markdown', 4, 'hash', 'p/note.md', 'picker', 'READY', ?, ?)`)
+      .run(project.id, now, now);
+    database.raw.prepare(`INSERT INTO attachment_deliveries
+      (id, attachment_id, provider_id, conversation_id, status)
+      VALUES ('delivery-delete', 'att-delete', 'chatgpt', ?, 'PENDING')`)
+      .run(conversation.id);
+    database.raw.prepare(`INSERT INTO provider_submissions
+      (submission_id, message_id, provider_id, attachment_ids_json, state, created_at)
+      VALUES ('submission-delete', 'draft-delete', 'chatgpt', '["att-delete"]', 'PREPARING', ?)`)
+      .run(now);
+    database.raw.prepare(`INSERT INTO composer_drafts
+      (project_id, text, message_id, attachment_ids_json, mode, continuation_policy, starter,
+       providers_json, view_mode, finalizer_mode, final_responder, composer_expanded, updated_at)
+      VALUES (?, 'draft', 'draft-delete', '["att-delete"]', 'DEBATE', 'autonomous', 'chatgpt',
+              '["chatgpt"]', 'SYNTHESIZED', 'MANUAL', 'chatgpt', 0, ?)`)
+      .run(project.id, now);
+    database.raw.prepare(`INSERT INTO memory_items
+      (id, project_id, kind, text, status, source_message_ids_json, created_at, updated_at)
+      VALUES ('memory-delete', ?, 'REQUIREMENT', 'remember', 'ACTIVE', '[]', ?, ?)`)
+      .run(project.id, now, now);
+    database.raw.prepare(`INSERT INTO exports
+      (id, project_id, state_version, status, directory, manifest_hash, created_at)
+      VALUES ('export-delete', ?, 1, 'DRAFT', 'exports/test', 'hash', ?)`)
+      .run(project.id, now);
     database.raw.prepare(`INSERT INTO downloaded_artifacts
       (id, message_id, project_id, provider_id, original_url, sha256, local_relative_path, file_name, mime_type, size_bytes, status, downloaded_at)
       VALUES ('dl-delete', 'assistant-delete', ?, 'chatgpt', 'https://chatgpt.com/file', 'abc', 'p/file', 'file.txt', 'text/plain', 3, 'READY', ?)`)
@@ -167,5 +194,9 @@ describe("SQLite project state", () => {
     expect(repository.getConversationsForProject(project.id).length).toBe(0);
     expect(repository.conversationEntries(project.id).length).toBe(0);
     expect(database.raw.prepare("SELECT COUNT(*) AS count FROM downloaded_artifacts WHERE project_id = ?").get(project.id)?.count).toBe(0);
+    expect(database.raw.prepare("SELECT COUNT(*) AS count FROM message_attachments WHERE project_id = ?").get(project.id)?.count).toBe(0);
+    expect(database.raw.prepare("SELECT COUNT(*) AS count FROM composer_drafts WHERE project_id = ?").get(project.id)?.count).toBe(0);
+    expect(database.raw.prepare("SELECT COUNT(*) AS count FROM memory_items WHERE project_id = ?").get(project.id)?.count).toBe(0);
+    expect(database.raw.prepare("SELECT COUNT(*) AS count FROM exports WHERE project_id = ?").get(project.id)?.count).toBe(0);
   });
 });

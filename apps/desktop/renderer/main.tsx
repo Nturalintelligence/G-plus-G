@@ -311,13 +311,16 @@ function App(): React.JSX.Element {
     setDeleteBusy(true);
     setStatus(deleteRemote ? "Удаление проекта и чатов в веб-сервисах ИИ…" : "Удаление проекта из G+G…");
     try {
-      await window.orchestrator.projects.delete(deleteTarget.id, deleteRemote);
+      const result = await window.orchestrator.projects.delete(deleteTarget.id, deleteRemote);
       if (current?.project.id === deleteTarget.id) {
         setCurrent(null);
       }
       setDeleteTarget(null);
       await refresh();
-      setStatus("Проект успешно удалён");
+      const remoteFailures = result.remoteResults?.filter((item) => !item.deleted) ?? [];
+      setStatus(remoteFailures.length > 0
+        ? `Проект удалён локально. Приложение не увидело ${remoteFailures.length} веб-диалог(а); остальные доступные диалоги удалены.`
+        : "Проект успешно удалён");
     } catch (err) {
       setStatus(`Ошибка удаления: ${err instanceof Error ? err.message : String(err)}`);
     } finally {

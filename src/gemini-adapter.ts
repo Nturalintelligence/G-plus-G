@@ -707,6 +707,6 @@ export class GeminiAdapter implements ModelAdapter {
         return true;
       }
     }
-    return true;
+    return false;
   }
 }

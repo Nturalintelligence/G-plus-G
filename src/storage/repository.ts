@@ -170,6 +170,14 @@ export class ProjectRepository {
   deleteProject(projectId: string): void {
     this.database.transaction(() => {
       const conversations = this.getConversationsForProject(projectId);
+      const taskRows = this.database.raw
+        .prepare("SELECT id FROM cli_tasks WHERE project_id = ?")
+        .all(projectId) as Array<{ id: string }>;
+      for (const task of taskRows) {
+        this.database.raw.prepare("DELETE FROM execution_artifacts WHERE task_id = ?").run(task.id);
+        this.database.raw.prepare("DELETE FROM cli_task_events WHERE task_id = ?").run(task.id);
+        this.database.raw.prepare("DELETE FROM cli_task_attempts WHERE task_id = ?").run(task.id);
+      }
       for (const conversation of conversations) {
         const turns = this.database.raw
           .prepare("SELECT id FROM turns WHERE conversation_id = ?")
@@ -180,8 +188,25 @@ export class ProjectRepository {
         }
         this.database.raw.prepare("DELETE FROM turns WHERE conversation_id = ?").run(conversation.id);
       }
+      this.database.raw.prepare(`
+        DELETE FROM attachment_deliveries
+        WHERE attachment_id IN (SELECT id FROM message_attachments WHERE project_id = ?)
+      `).run(projectId);
+      this.database.raw.prepare(`
+        DELETE FROM provider_submissions
+        WHERE message_id IN (SELECT message_id FROM message_attachments WHERE project_id = ?)
+      `).run(projectId);
+      this.database.raw.prepare("DELETE FROM message_attachments WHERE project_id = ?").run(projectId);
+      this.database.raw.prepare("DELETE FROM composer_drafts WHERE project_id = ?").run(projectId);
       this.database.raw.prepare("DELETE FROM conversation_entries WHERE project_id = ?").run(projectId);
       this.database.raw.prepare("DELETE FROM conversations WHERE project_id = ?").run(projectId);
+      this.database.raw.prepare("DELETE FROM run_evaluations WHERE project_id = ?").run(projectId);
+      this.database.raw.prepare("DELETE FROM context_checkpoints WHERE project_id = ?").run(projectId);
+      this.database.raw.prepare("DELETE FROM conversation_rollovers WHERE project_id = ?").run(projectId);
+      this.database.raw.prepare("DELETE FROM rolling_briefs WHERE project_id = ?").run(projectId);
+      this.database.raw.prepare("DELETE FROM memory_items WHERE project_id = ?").run(projectId);
+      this.database.raw.prepare("DELETE FROM cli_tasks WHERE project_id = ?").run(projectId);
+      this.database.raw.prepare("DELETE FROM exports WHERE project_id = ?").run(projectId);
       this.database.raw.prepare("DELETE FROM orchestration_runs WHERE project_id = ?").run(projectId);
       this.database.raw.prepare("DELETE FROM project_state_versions WHERE project_id = ?").run(projectId);
       this.database.raw.prepare("DELETE FROM downloaded_artifacts WHERE project_id = ?").run(projectId);

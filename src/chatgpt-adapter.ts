@@ -910,6 +910,6 @@ export class ChatGptAdapter implements ModelAdapter {
         }
       }
     }
-    return true;
+    return false;
   }
 }

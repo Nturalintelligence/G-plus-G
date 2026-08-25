@@ -566,34 +566,60 @@ function registerIpc(): void {
 
     logEvent("INFO", "project.delete.started", { projectId, deleteRemote });
 
-    if (deleteRemote && activeOrchestrationAdapters) {
-      const repository = new ProjectRepository(db());
-      const conversations = repository.getConversationsForProject(projectId);
+    const repository = new ProjectRepository(db());
+    const conversations = repository.getConversationsForProject(projectId);
+    const remoteResults: Array<{ providerId: string; conversationId: string; deleted: boolean; error?: string }> = [];
 
-      for (const conv of conversations) {
-        if (!conv.externalRef) continue;
-        const adapter = activeOrchestrationAdapters.get(conv.providerId);
-        if (adapter && typeof adapter.deleteConversation === "function") {
+    if (deleteRemote) {
+      const adapters = new Map<string, ModelAdapter>();
+      try {
+        for (const conv of conversations) {
+          if (!conv.externalRef) continue;
           try {
+            let adapter = adapters.get(conv.providerId);
+            if (!adapter) {
+              adapter = createAdapter(parseProvider(conv.providerId), 30_000, true, db().raw);
+              adapters.set(conv.providerId, adapter);
+              await adapter.launch();
+            }
+            if (typeof adapter.deleteConversation !== "function") {
+              remoteResults.push({
+                providerId: conv.providerId,
+                conversationId: conv.id,
+                deleted: false,
+                error: "Провайдер не поддерживает автоматическое удаление",
+              });
+              continue;
+            }
             logEvent("INFO", "provider.conversation.deleting_remote", {
               providerId: conv.providerId,
               url: conv.externalRef,
             });
-            await adapter.deleteConversation({ id: conv.id, url: conv.externalRef });
+            const deleted = await adapter.deleteConversation({ id: conv.id, url: conv.externalRef });
+            remoteResults.push({
+              providerId: conv.providerId,
+              conversationId: conv.id,
+              deleted,
+              ...(!deleted ? { error: "Диалог не найден или недоступен в веб-интерфейсе" } : {}),
+            });
           } catch (err) {
+            const error = err instanceof Error ? err.message : String(err);
+            remoteResults.push({ providerId: conv.providerId, conversationId: conv.id, deleted: false, error });
             logEvent("WARN", "provider.conversation.delete_remote_failed", {
               providerId: conv.providerId,
-              error: err,
+              error,
             });
           }
         }
+      } finally {
+        await Promise.allSettled([...adapters.values()].map((adapter) => adapter.close()));
       }
     }
 
-    const repository = new ProjectRepository(db());
-    new ProjectRepository(db()).deleteProject(projectId);
-    logEvent("INFO", "project.delete.completed", { projectId });
-    return { success: true };
+    repository.deleteProject(projectId);
+    const remoteFailures = remoteResults.filter((result) => !result.deleted).length;
+    logEvent("INFO", "project.delete.completed", { projectId, remoteFailures });
+    return { success: true, localDeleted: true, remoteResults };
   });
 
   const activeProviderOperations = new Map<string, Promise<any>>();
