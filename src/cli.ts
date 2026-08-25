@@ -3,6 +3,7 @@ import { parseArgs } from "node:util";
 import { ChallengeRequiredError } from "./errors.js";
 import { runProjectCommand } from "./project-cli.js";
 import { createAdapter, parseProvider } from "./adapters/adapter-registry.js";
+import { extractExpectedVerificationMarker } from "./verification-marker.js";
 import {
   backupDatabase,
   resetProviderSession,
@@ -142,11 +143,8 @@ async function run(): Promise<void> {
         const prompt = `Ответь ровно этой строкой, без пояснений: ${token}`;
         const turn = await adapter.sendMessage({ content: prompt });
         const result = await adapter.getFinalResponse(turn);
-        const passed = result.response.trim() === token;
-        console.log(`${index}/${count} ${passed ? "PASS" : "FAIL"} ${token}`);
-        if (!passed) {
-          throw new Error(`Ответ не привязан корректно: ожидалось "${token}", получено "${result.response}"`);
-        }
+        extractExpectedVerificationMarker(result.response, token);
+        console.log(`${index}/${count} PASS ${token}`);
       }
       console.log(`PASS: ${count} последовательных запросов.`);
       return;
