@@ -294,6 +294,7 @@ export class Orchestrator {
       );
       charsSent += preparedMessage.length;
       const responseEntryId = newId("entry");
+      responseEntryIds.set(`${providerId}:${phase}:${round}`, responseEntryId);
       const rawText = await this.ask(
         projectId,
         repository,
@@ -306,8 +307,9 @@ export class Orchestrator {
         turnAttachments,
         persistedUserMessageId,
         responseEntryId,
+        runId,
+        round,
       );
-      responseEntryIds.set(`${providerId}:${phase}:${round}`, responseEntryId);
       protocolStates.markInitialized(
         providerId,
         conversation.id,
@@ -329,6 +331,16 @@ export class Orchestrator {
     const startedAt = Date.now();
     const runMetrics = new QualityMetrics(this.database);
     let consensusReached = false;
+    const persistStoppedMarker = (): void => {
+      const markerId = `entry_stopped_${runId}`;
+      repository.upsertConversationEntry({
+        id: markerId,
+        projectId,
+        runId,
+        role: "SYSTEM",
+        content: "Обсуждение остановлено пользователем",
+      });
+    };
 
     logEvent("INFO", "orchestration.run.started", {
       runId,
@@ -355,17 +367,19 @@ export class Orchestrator {
       let finalResponse: RunOutput["finalResponse"];
       const persistResponse = (response: RunOutput["responses"][number]): void => {
         responses.push(response);
-        repository.appendConversationEntry({
-          ...(responseEntryIds.get(`${response.sourceProviderId ?? response.providerId}:${response.phase ?? "DISCUSSION"}:${response.round}`)
-            ? { id: responseEntryIds.get(`${response.sourceProviderId ?? response.providerId}:${response.phase ?? "DISCUSSION"}:${response.round}`)! }
-            : {}),
+        const entryId = responseEntryIds.get(
+          `${response.sourceProviderId ?? response.providerId}:${response.phase ?? "DISCUSSION"}:${response.round}`,
+        );
+        const entry = {
           projectId,
           runId,
           role: "ASSISTANT",
           providerId: response.providerId,
           round: response.round,
           content: response.text,
-        });
+        } as const;
+        if (entryId) repository.upsertConversationEntry({ id: entryId, ...entry });
+        else repository.appendConversationEntry(entry);
       };
 
       if (effectiveMode === "PARALLEL") {
@@ -575,6 +589,7 @@ export class Orchestrator {
       }
 
       const status: RunStatus = outcome === "USER_STOPPED" || this.stopped ? "STOPPED" : "COMPLETED";
+      if (status === "STOPPED") persistStoppedMarker();
       this.setStatus(runId, status);
       runMetrics.record("orchestration.run.success", status === "COMPLETED" ? 1 : 0, {
         mode: effectiveMode,
@@ -615,6 +630,7 @@ export class Orchestrator {
       });
       await this.cancelActiveTurns();
       if (this.stopped) {
+        persistStoppedMarker();
         this.setStatus(runId, "STOPPED");
         runMetrics.record("orchestration.run.success", 0, { mode: effectiveMode });
         runMetrics.record("orchestration.run.elapsed_ms", Date.now() - startedAt, {
@@ -651,6 +667,8 @@ export class Orchestrator {
     attachments?: AttachmentRefV1[],
     messageId?: string,
     responseMessageId?: string,
+    runId?: string,
+    round?: number,
   ): Promise<string> {
     const adapter = this.adapters.get(providerId);
     if (!adapter) throw new Error(`Adapter is not registered: ${providerId}`);
@@ -806,26 +824,29 @@ export class Orchestrator {
                   markAttachmentFilesUploaded(event.attachmentIds);
                 } else if (event.type === "MESSAGE_SUBMITTED") {
                   markAttachmentMessageSubmitted();
-                } else if (event.type === "RESPONSE_UPDATED" && event.text && hooks.onResponseUpdate) {
+                } else if (event.type === "RESPONSE_UPDATED" && event.text) {
+                  const cleanText = sanitizeProgress(event.text);
+                  if (responseMessageId && cleanText.trim()) {
+                    repository.upsertConversationEntry({
+                      id: responseMessageId,
+                      projectId,
+                      runId: runId ?? this.activeRunId,
+                      role: "ASSISTANT",
+                      providerId,
+                      round: round ?? null,
+                      content: cleanText,
+                    });
+                  }
                   const progress: RunProgressEvent = {
                     projectId,
                     runId: this.activeRunId ?? "unknown-run",
                     turnId: started.turn.id,
                     providerId,
                     phase,
-                    text: sanitizeProgress(event.text),
+                    text: cleanText,
                   };
-                  hooks.onResponseUpdate(providerId, progress.text, progress);
+                  hooks.onResponseUpdate?.(providerId, progress.text, progress);
                   hooks.onProgress?.(progress);
-                } else if (event.type === "RESPONSE_UPDATED" && event.text && hooks.onProgress) {
-                  hooks.onProgress({
-                    projectId,
-                    runId: this.activeRunId ?? "unknown-run",
-                    turnId: started.turn.id,
-                    providerId,
-                    phase,
-                    text: sanitizeProgress(event.text),
-                  });
                 }
                 logEvent("INFO", "provider.turn.event", {
                   runId: this.activeRunId,
@@ -898,10 +919,10 @@ export class Orchestrator {
         markAttachmentSubmissionUnknown();
         repository.finishAttempt(
           attempt.id,
-          "FAILED",
+          this.stopped ? "INTERRUPTED" : "FAILED",
           error instanceof Error ? error.message : String(error),
         );
-        repository.updateTurnStatus(started.turn.id, "FAILED");
+        repository.updateTurnStatus(started.turn.id, this.stopped ? "CANCELLED" : "FAILED");
         metrics.record("provider.turn.success", 0, { providerId });
         metrics.record("provider.turn.elapsed_ms", Date.now() - metricStartedAt, {
           providerId,

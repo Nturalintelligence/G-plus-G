@@ -136,6 +136,60 @@ export class ProjectRepository {
     return entry;
   }
 
+  upsertConversationEntry(input: {
+    id: string;
+    projectId: string;
+    runId?: string | null;
+    role: MessageRole;
+    providerId?: string | null;
+    round?: number | null;
+    content: string;
+  }): ConversationEntry {
+    const existingRow = this.database.raw.prepare(`
+      SELECT id, project_id, run_id, role, provider_id, round, content, created_at
+      FROM conversation_entries WHERE id = ?
+    `).get(input.id);
+    const existing = existingRow ? {
+      id: String(existingRow.id),
+      projectId: String(existingRow.project_id),
+      runId: existingRow.run_id === null ? null : String(existingRow.run_id),
+      role: String(existingRow.role) as MessageRole,
+      providerId: existingRow.provider_id === null ? null : String(existingRow.provider_id),
+      round: existingRow.round === null ? null : Number(existingRow.round),
+      content: String(existingRow.content),
+      createdAt: String(existingRow.created_at),
+    } satisfies ConversationEntry : null;
+    if (!existing) return this.appendConversationEntry(input);
+    if (existing.projectId !== input.projectId || existing.role !== input.role) {
+      throw new Error(`Conversation entry identity mismatch: ${input.id}`);
+    }
+    const content = input.content;
+    this.database.transaction(() => {
+      this.database.raw
+        .prepare(
+          `UPDATE conversation_entries
+           SET run_id = ?, provider_id = ?, round = ?, content = ?
+           WHERE id = ?`,
+        )
+        .run(
+          input.runId ?? null,
+          input.providerId ?? null,
+          input.round ?? null,
+          content,
+          input.id,
+        );
+      this.appendEventInternal("Project", input.projectId, "TRANSCRIPT_ENTRY_UPDATED", {
+        entryId: input.id,
+        runId: input.runId ?? null,
+        role: input.role,
+        providerId: input.providerId ?? null,
+        round: input.round ?? null,
+        contentLength: content.length,
+      });
+    });
+    return { ...existing, runId: input.runId ?? null, providerId: input.providerId ?? null, round: input.round ?? null, content };
+  }
+
   conversationEntries(projectId: string): ConversationEntry[] {
     return this.database.raw
       .prepare(

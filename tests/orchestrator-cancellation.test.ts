@@ -149,4 +149,53 @@ describe("parallel cancellation", () => {
     ).toBe("STOPPED");
     database.close();
   });
+
+  it("persists streamed text and one stop marker when the user cancels", async () => {
+    const databasePath = join(mkdtempSync(join(tmpdir(), "stop-partial-")), "db.sqlite");
+    const database = new AppDatabase(databasePath);
+    database.migrate();
+    const repository = new ProjectRepository(database);
+    const project = repository.createProject("Stopped partial response");
+    let rejectTurn: ((error: Error) => void) | undefined;
+    let finishObservation: (() => void) | undefined;
+    const adapter = {
+      providerId: "slow",
+      async sendMessage() {
+        return { id: "slow-partial-turn" };
+      },
+      async *observeTurn() {
+        yield { type: "RESPONSE_UPDATED", text: "Полезная часть ответа" } as const;
+        await new Promise<void>((resolve) => { finishObservation = resolve; });
+      },
+      async getFinalResponse() {
+        return new Promise<never>((_resolve, reject) => { rejectTurn = reject; });
+      },
+      async cancel() {
+        finishObservation?.();
+        rejectTurn?.(new Error("cancelled"));
+      },
+    } as unknown as ModelAdapter;
+    const orchestrator = new Orchestrator(database, new Map([["slow", adapter]]));
+    const running = orchestrator.run(project.id, "MANUAL", "task", ["slow"], limits());
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await orchestrator.stop();
+    await expect(running).resolves.toMatchObject({ status: "STOPPED" });
+
+    const entries = repository.conversationEntries(project.id);
+    expect(entries.filter((entry) => entry.role === "ASSISTANT")).toHaveLength(1);
+    expect(entries.find((entry) => entry.role === "ASSISTANT")?.content).toBe("Полезная часть ответа");
+    expect(entries.filter((entry) => entry.content === "Обсуждение остановлено пользователем")).toHaveLength(1);
+    expect(database.raw.prepare("SELECT status FROM turns").get()?.status).toBe("CANCELLED");
+    database.close();
+
+    const reopened = new AppDatabase(databasePath);
+    reopened.migrate();
+    const restored = new ProjectRepository(reopened).conversationEntries(project.id);
+    expect(restored.map((entry) => entry.content)).toEqual([
+      "task",
+      "Полезная часть ответа",
+      "Обсуждение остановлено пользователем",
+    ]);
+    reopened.close();
+  });
 });
