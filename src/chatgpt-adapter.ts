@@ -45,6 +45,7 @@ import { logEvent } from "./observability/logger.js";
 import { uploadAttachmentsToComposer } from "./adapters/provider-attachment-upload.js";
 import { classifyProviderResult, ProviderResultProgress } from "./adapters/provider-result-state.js";
 import { selectComposerIndex } from "./adapters/composer-selection.js";
+import { classifyChatGptSubmissionEvidence, type SubmissionEvidenceDecision, type UserTurnEvidence } from "./adapters/chatgpt-submission-evidence.js";
 
 const CHATGPT_URL = "https://chatgpt.com/";
 const RESPONSE_SELECTORS = [
@@ -111,6 +112,7 @@ export class ChatGptAdapter implements ModelAdapter {
   private readonly settleMs: number;
   private readonly headless: boolean;
   private readonly artifactDatabase: DatabaseSync | undefined;
+  private lastSubmissionEvidence: SubmissionEvidenceDecision | undefined;
 
   constructor(options: AdapterOptions = {}) {
     this.profileDir = resolve(options.profileDir ?? dataPath("profiles", "chatgpt"));
@@ -402,6 +404,7 @@ export class ChatGptAdapter implements ModelAdapter {
       mutationCount: await page
         .evaluate(() => Number((window as unknown as { __orchestratorMutationCount?: number }).__orchestratorMutationCount ?? 0))
         .catch(() => 0),
+      ...(this.lastSubmissionEvidence ? { submissionEvidence: { level: this.lastSubmissionEvidence.level, signals: this.lastSubmissionEvidence.signals } } : {}),
     };
   }
 
@@ -426,13 +429,15 @@ export class ChatGptAdapter implements ModelAdapter {
     }
 
     const before = await this.captureResponses();
-    const userMessagesBefore = await this.captureUserMessageSignatures();
+    const userMessagesBefore = await this.captureUserTurns();
+    const assistantCountBefore = before.length;
+    const conversationBefore = this.conversationKey(page.url());
     const composer = await this.getUniqueComposer();
     const startedAt = Date.now();
 
     await fillComposerSafely(composer, message);
     await this.submitComposer(composer, message);
-    await this.waitUntilSubmitted(userMessagesBefore);
+    await this.waitUntilSubmitted(message, attachments ?? [], userMessagesBefore, composer, assistantCountBefore, conversationBefore);
     channel?.publish({ type: "MESSAGE_SUBMITTED", at: new Date().toISOString() });
 
     const response = await this.waitForBoundResponse(before, channel);
@@ -603,36 +608,67 @@ export class ChatGptAdapter implements ModelAdapter {
     return [];
   }
 
-  private async captureUserMessageSignatures(): Promise<Set<string>> {
-    const nodes = this.requirePage().locator('[data-message-author-role="user"]');
-    const signatures = new Set<string>();
-    for (let index = 0; index < (await nodes.count().catch(() => 0)); index += 1) {
-      const node = nodes.nth(index);
-      const id =
-        (await node.getAttribute("data-message-id").catch(() => null)) ??
-        (await node.getAttribute("id").catch(() => null));
-      const text = normalizeText(await node.innerText().catch(() => ""));
-      if (id || text) signatures.add(id ? `id:${id}` : `text:${fingerprint(text)}`);
+  private async captureUserTurns(): Promise<UserTurnEvidence[]> {
+    const selectors = [
+      '[data-message-author-role="user"]',
+      'article:has([data-message-author-role="user"])',
+      '[data-testid^="conversation-turn"]:has([data-message-author-role="user"])',
+    ];
+    for (const selector of selectors) {
+      const nodes = this.requirePage().locator(selector);
+      const count = await nodes.count().catch(() => 0);
+      if (count === 0) continue;
+      const turns: UserTurnEvidence[] = [];
+      for (let index = 0; index < count; index += 1) {
+        const node = nodes.nth(index);
+        const id = (await node.getAttribute("data-message-id").catch(() => null)) ?? (await node.getAttribute("id").catch(() => null));
+        const text = normalizeText(await node.innerText().catch(() => ""));
+        if (id || text) turns.push({ key: id ? `id:${id}` : `text:${fingerprint(text)}`, text });
+      }
+      if (turns.length > 0) return turns;
     }
-    return signatures;
+    return [];
   }
 
   private async waitUntilSubmitted(
-    userMessagesBefore: ReadonlySet<string>,
+    message: string,
+    attachments: readonly AttachmentRefV1[],
+    userMessagesBefore: readonly UserTurnEvidence[],
+    composer: Locator,
+    assistantCountBefore: number,
+    conversationBefore: string,
   ): Promise<void> {
     const page = this.requirePage();
     const deadline = Date.now() + 30_000;
+    const baselineTurnKeys = new Set(userMessagesBefore.map((turn) => turn.key));
 
     while (Date.now() < deadline) {
       if (await this.hasChallenge()) throw new ChallengeRequiredError();
 
-      const current = await this.captureUserMessageSignatures();
-      if ([...current].some((signature) => !userMessagesBefore.has(signature))) return;
+      const generationStarted = await page.locator('[data-testid="stop-button"], button[aria-label*="Stop" i], button[aria-label*="Останов" i]').first().isVisible().catch(() => false);
+      const currentTurns = await this.captureUserTurns();
+      const decision = classifyChatGptSubmissionEvidence({
+        expectedMessage: message,
+        expectedFileNames: attachments.map((attachment) => attachment.fileName),
+        baselineTurnKeys,
+        currentTurns,
+        composerCleared: await this.composerWasCleared(composer, 0),
+        generationStarted,
+        assistantCountIncreased: (await this.captureResponses()).length > assistantCountBefore,
+        conversationChanged: this.conversationKey(page.url()) !== conversationBefore,
+        uploadCompleted: attachments.length === 0 || attachments.every((attachment) => attachment.status !== "FAILED" && attachment.status !== "QUARANTINED"),
+      });
+      this.lastSubmissionEvidence = decision;
+      if (decision.level === "STRONG_CONFIRMED") return;
 
       await page.waitForTimeout(250);
     }
 
-    throw new TurnTimeoutError("ChatGPT did not confirm that the user message was submitted");
+    throw new TurnTimeoutError(`ChatGPT submission evidence is ${this.lastSubmissionEvidence?.level ?? "UNKNOWN"}; read-only reconciliation is required`);
+  }
+
+  private conversationKey(url: string): string {
+    try { return new URL(url).pathname; } catch { return ""; }
   }
 
   private async submitComposer(composer: Locator, message: string): Promise<void> {
@@ -660,9 +696,11 @@ export class ChatGptAdapter implements ModelAdapter {
     await composer.press("Enter");
   }
 
-  private async composerWasCleared(composer: Locator): Promise<boolean> {
-    const deadline = Date.now() + 3_000;
+  private async composerWasCleared(composer: Locator, waitMs = 3_000): Promise<boolean> {
+    const deadline = Date.now() + waitMs;
+    let checked = false;
     while (Date.now() < deadline) {
+      checked = true;
       const text = normalizeText(
         await composer
           .evaluate((element) =>
@@ -674,6 +712,10 @@ export class ChatGptAdapter implements ModelAdapter {
       );
       if (!text) return true;
       await this.requirePage().waitForTimeout(150);
+    }
+    if (!checked) {
+      const text = normalizeText(await composer.evaluate((element) => element instanceof HTMLTextAreaElement ? element.value : (element.textContent ?? "")).catch(() => ""));
+      return !text;
     }
     return false;
   }

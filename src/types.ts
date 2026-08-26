@@ -32,4 +32,8 @@ export interface DiagnosticReport {
   composerCandidates: number;
   assistantResponseCount: number;
   mutationCount?: number;
+  submissionEvidence?: {
+    level: "STRONG_CONFIRMED" | "PROBABLE_SUBMITTED" | "UNKNOWN" | "FAILED_BEFORE_SUBMIT";
+    signals: string[];
+  };
 }

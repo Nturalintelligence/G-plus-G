@@ -1,0 +1,10 @@
+{
+  "source": "diagnostic-1787743499818.json",
+  "sessionState": "AUTHENTICATED",
+  "composerCandidates": 1,
+  "assistantResponseCount": 0,
+  "mutationCount": 173,
+  "urlKind": "CHATGPT_HOME",
+  "error": "ChatGPT did not confirm that the user message was submitted",
+  "redacted": true
+}
