@@ -134,4 +134,23 @@ describe("Phase B.1 UI contracts", () => {
     expect(styles).toMatch(/\.models-settings-list\s*\{[^}]*min-height:\s*0;[^}]*overflow-x:\s*hidden;[^}]*overflow-y:\s*auto;/);
     expect(styles).not.toMatch(/\.model-setting-card\s*\{[^}]*z-index:/);
   });
+
+  it("keeps modal hit targets outside the native drag region", () => {
+    expect(styles).toMatch(/main > header\s*\{[^}]*-webkit-app-region:\s*drag;/);
+    expect(styles).not.toMatch(/(^|\n)header\s*\{/);
+    expect(styles).toMatch(/\.modal-backdrop\s*\{[^}]*-webkit-app-region:\s*no-drag;/);
+    expect(renderer).toContain('className="spec-modal-close" aria-label="Закрыть"');
+    expect(renderer).toContain('className="state-item-remove"');
+    expect(renderer).toContain("undoRemoveStateItem");
+  });
+
+  it("uses keyboard model cards and safe pinned-chat actions", () => {
+    expect(settingsModal).toContain('role="button"');
+    expect(settingsModal).toContain('tabIndex={0}');
+    expect(settingsModal).toContain('event.key !== "Enter" && event.key !== " "');
+    expect(renderer).toContain("openProviderWebChat(c.providerId, c.id)");
+    expect(renderer).not.toContain('href={c.externalRef}');
+    expect(renderer).toContain("Экспертный режим: JSON");
+    expect(renderer).toContain("Копировать JSON");
+  });
 });

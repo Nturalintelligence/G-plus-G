@@ -7,6 +7,7 @@ interface Window {
   orchestrator: {
     window: {
       setTheme(theme: "dark" | "light"): Promise<{ success: boolean }>;
+      toggleMaximize(): Promise<{ maximized: boolean }>;
     };
     system: {
       preflight(): Promise<Array<{

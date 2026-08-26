@@ -1181,6 +1181,11 @@ function registerIpc(): void {
     });
     return { success: true };
   });
+  handle("window:toggleMaximize", () => {
+    if (!mainWindow) return { maximized: false };
+    if (mainWindow.isMaximized()) mainWindow.unmaximize(); else mainWindow.maximize();
+    return { maximized: mainWindow.isMaximized() };
+  });
 }
 
 function configureApplicationMenu(): void {

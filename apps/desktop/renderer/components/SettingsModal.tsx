@@ -208,9 +208,17 @@ export function SettingsModal({
 
                       return (
                         <div key={pId} className={`model-setting-card accordion-card ${isExpanded ? "expanded" : ""}`}>
-                          <header
+                          <div
                             className="model-card-header accordion-header"
+                            role="button"
+                            tabIndex={0}
+                            aria-expanded={isExpanded}
                             onClick={() => setExpandedModelId(isExpanded ? null : pId)}
+                            onKeyDown={(event) => {
+                              if (event.target !== event.currentTarget || (event.key !== "Enter" && event.key !== " ")) return;
+                              event.preventDefault();
+                              setExpandedModelId(isExpanded ? null : pId);
+                            }}
                           >
                             <div className="model-identity">
                               <ProviderLogoIcon providerId={pId} size={22} />
@@ -270,7 +278,7 @@ export function SettingsModal({
                                 {isExpanded ? <ChevronUpIcon size={18} /> : <ChevronDownIcon size={18} />}
                               </button>
                             </div>
-                          </header>
+                          </div>
 
                           {isExpanded && (
                             <div className="model-card-body accordion-body">

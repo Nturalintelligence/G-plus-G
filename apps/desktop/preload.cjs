@@ -66,6 +66,7 @@ const api = {
   },
   window: {
     setTheme: (theme) => ipcRenderer.invoke("window:setTheme", theme),
+    toggleMaximize: () => ipcRenderer.invoke("window:toggleMaximize"),
   },
   composerDraft: {
     get: (projectId) => ipcRenderer.invoke("composerDraft:get", projectId),

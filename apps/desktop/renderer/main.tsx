@@ -11,7 +11,7 @@ import logoLight from "./assets/brand/gg-logo-light.svg";
 import { validateFileForProviders } from "../../../src/files/file-manager.js";
 import { DeleteProjectDialog } from "./components/DeleteProjectDialog.js";
 import { ErrorModal } from "./components/ErrorModal.js";
-import { AttachmentIcon, CloseIcon, ProfileIcon, SendIcon, SettingsIcon, StopIcon, TargetIcon, TrashIcon } from "./components/Icon.js";
+import { AttachmentIcon, CloseIcon, ProfileIcon, ProviderLogoIcon, SendIcon, SettingsIcon, StopIcon, TargetIcon, TrashIcon } from "./components/Icon.js";
 import { ModelStatusRow } from "./components/ModelStatusRow.js";
 import { ProjectRequiredToast } from "./components/ProjectRequiredToast.js";
 import { RunSummaryBar } from "./components/RunSummaryBar.js";
@@ -38,14 +38,16 @@ const stateSections: Array<{
   key: StateSection;
   title: string;
   empty: string;
+  description: string;
+  example: string;
   rationale: boolean;
 }> = [
-  { key: "requirements", title: "Требования", empty: "Добавьте требование", rationale: false },
-  { key: "constraints", title: "Ограничения", empty: "Добавьте ограничение", rationale: false },
-  { key: "decisions", title: "Принятые решения", empty: "Зафиксируйте решение", rationale: true },
-  { key: "rejectedOptions", title: "Отклонённые варианты", empty: "Зафиксируйте отклонённый вариант", rationale: true },
-  { key: "openQuestions", title: "Открытые вопросы", empty: "Добавьте вопрос", rationale: false },
-  { key: "acceptanceCriteria", title: "Критерии приёмки", empty: "Добавьте критерий", rationale: false },
+  { key: "requirements", title: "Требования", empty: "Добавьте требование", description: "Обязательные условия, которые ИИ должны учитывать в следующих ответах проекта.", example: "Приложение должно работать на Windows 10 и 11.", rationale: false },
+  { key: "constraints", title: "Ограничения", empty: "Добавьте ограничение", description: "То, что запрещено или ограничено при выполнении задачи.", example: "Не использовать платные API и внешние серверы.", rationale: false },
+  { key: "decisions", title: "Принятые решения", empty: "Зафиксируйте решение", description: "Согласованные решения, которые не нужно обсуждать заново без причины.", example: "Вложения хранятся локально в управляемом хранилище.", rationale: true },
+  { key: "rejectedOptions", title: "Отклонённые варианты", empty: "Зафиксируйте отклонённый вариант", description: "Подходы, от которых отказались, с указанием причины.", example: "Base64 отклонён из-за нагрузки на renderer и IPC.", rationale: true },
+  { key: "openQuestions", title: "Открытые вопросы", empty: "Добавьте вопрос", description: "Вопросы, по которым ещё требуется решение или проверка.", example: "Нужно ли поддерживать мобильный режим?", rationale: false },
+  { key: "acceptanceCriteria", title: "Критерии приёмки", empty: "Добавьте критерий", description: "Проверяемые условия, по которым определяется готовность результата.", example: "После перезапуска черновик и файлы сохраняются.", rationale: false },
 ];
 
 type SpecIconId = StateSection;
@@ -216,6 +218,7 @@ function App(): React.JSX.Element {
   const [deleteTarget, setDeleteTarget] = useState<ProjectView | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [activeSpecSection, setActiveSpecSection] = useState<string | null>(null);
+  const [removedSpecItem, setRemovedSpecItem] = useState<{ section: StateSection; item: ProjectStateItemView; index: number } | null>(null);
   const [eventFilter, setEventFilter] = useState("ALL");
   const [eventLimit, setEventLimit] = useState(20);
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -241,6 +244,7 @@ function App(): React.JSX.Element {
   const outputRef = useRef<HTMLElement>(null);
   const specificationButtonRef = useRef<HTMLButtonElement>(null);
   const specModalRef = useRef<HTMLElement>(null);
+  const specSectionTriggerRef = useRef<HTMLElement | null>(null);
   const draftHydratedProjectRef = useRef<string | null>(null);
   const draftPersistenceSuspendedRef = useRef(false);
   const effectiveAppearanceTheme: "dark" | "light" = settings.appearance.theme === "system"
@@ -249,7 +253,14 @@ function App(): React.JSX.Element {
 
   function closeSpecSection(): void {
     setActiveSpecSection(null);
-    window.setTimeout(() => specificationButtonRef.current?.focus(), 0);
+    setRemovedSpecItem(null);
+    window.setTimeout(() => specSectionTriggerRef.current?.focus(), 0);
+  }
+
+  function openSpecSection(section: StateSection): void {
+    specSectionTriggerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : specificationButtonRef.current;
+    setRemovedSpecItem(null);
+    setActiveSpecSection(section);
   }
 
   useEffect(() => {
@@ -900,6 +911,9 @@ function App(): React.JSX.Element {
   }
 
   function removeStateItem(section: StateSection, id: string): void {
+    const index = projectState[section].findIndex((item) => item.id === id);
+    if (index < 0) return;
+    setRemovedSpecItem({ section, item: projectState[section][index]!, index });
     replaceProjectState({
       ...projectState,
       [section]: projectState[section].filter((item) => item.id !== id),
@@ -908,11 +922,17 @@ function App(): React.JSX.Element {
 
   function applyAdvancedState(): void {
     try {
-      const parsed = JSON.parse(stateText) as ProjectStateView;
-      replaceProjectState(parsed);
+      const parsed = JSON.parse(stateText) as Record<string, unknown>;
+      for (const section of stateSections) {
+        const items = parsed[section.key];
+        if (!Array.isArray(items) || items.some((item) => !item || typeof item !== "object" || typeof (item as any).id !== "string" || typeof (item as any).text !== "string" || !Array.isArray((item as any).sourceTurnIds))) {
+          throw new Error(`Раздел «${section.title}» не соответствует схеме`);
+        }
+      }
+      replaceProjectState(parsed as unknown as ProjectStateView);
       setStatus("JSON применён к конструктору");
     } catch (error) {
-      setStatus(`Некорректный JSON: ${error instanceof Error ? error.message : String(error)}`);
+      setStatus(`JSON не применён: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
@@ -940,6 +960,14 @@ function App(): React.JSX.Element {
     } finally {
       setRunning(false);
     }
+  }
+
+  function undoRemoveStateItem(): void {
+    if (!removedSpecItem) return;
+    const items = [...projectState[removedSpecItem.section]];
+    items.splice(Math.min(removedSpecItem.index, items.length), 0, removedSpecItem.item);
+    replaceProjectState({ ...projectState, [removedSpecItem.section]: items });
+    setRemovedSpecItem(null);
   }
 
   async function openProviderWebChat(provider: string, conversationId?: string): Promise<void> {
@@ -1047,7 +1075,10 @@ function App(): React.JSX.Element {
 
   return (
     <main>
-      <header>
+      <header onDoubleClick={(event) => {
+        if ((event.target as HTMLElement).closest("button, input, select, textarea, a")) return;
+        void window.orchestrator.window.toggleMaximize();
+      }}>
         <div className="header-left">
           <button
             className="icon-header-btn hamburger-btn"
@@ -1227,7 +1258,7 @@ function App(): React.JSX.Element {
         <section className="workspace">
           {current?.conversations && current.conversations.length > 0 ? (
             <div className="web-chats-bar interactive" onClick={() => setWebChatsDrawerOpen(true)} title="Нажмите для открытия сессий ИИ в боковой панели">
-              <span className="web-chats-label">🔗 Закреплённые веб-чаты ({current.conversations.length}):</span>
+              <span className="web-chats-label">Закреплённые веб-чаты ({current.conversations.length})</span>
               {current.conversations.map((c) => (
                 <div className="web-chat-chip" key={c.providerId}>
                   <span className="web-chat-provider">{c.providerId}</span>
@@ -1459,7 +1490,7 @@ function App(): React.JSX.Element {
                 <button
                   className="spec-category-chip"
                   key={section.key}
-                  onClick={() => setActiveSpecSection(section.key)}
+                  onClick={() => openSpecSection(section.key)}
                 >
                   <div className="spec-chip-header">
                     <SpecIcon id={section.key} />
@@ -1467,20 +1498,21 @@ function App(): React.JSX.Element {
                     <span className="spec-chip-badge">{count}</span>
                     <svg className="spec-chip-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
                   </div>
-                  <small className="spec-chip-desc">{count > 0 ? `${count} пунктов заполнено` : "Нажмите для добавления"}</small>
+                  <small className="spec-chip-desc" title={`${section.description} Пример: ${section.example}`}>{section.description}</small>
                 </button>
               );
             })}
           </div>
           <details className="advanced-state" open={advancedStateOpen} onToggle={(event) =>
             setAdvancedStateOpen((event.currentTarget as HTMLDetailsElement).open)}>
-            <summary>Экспертный режим JSON</summary>
+            <summary>Экспертный режим: JSON</summary>
+            <p>Машинное представление спецификации для экспорта, импорта и диагностики. В обычной работе изменять его не требуется.</p>
             <textarea
               aria-label="Project State JSON"
               value={stateText}
               onChange={(event) => setStateText(event.target.value)}
             />
-            <button onClick={applyAdvancedState}>Применить JSON</button>
+            <div className="advanced-state-actions"><button type="button" onClick={() => void window.orchestrator.system.copyText(stateText).then(() => setStatus("JSON скопирован")).catch(() => setStatus("Не удалось скопировать JSON"))}>Копировать JSON</button><button type="button" onClick={applyAdvancedState}>Применить JSON</button></div>
           </details>
           <section className="events-section">
             <div className="events-heading">
@@ -1578,16 +1610,20 @@ function App(): React.JSX.Element {
           <section ref={specModalRef} className="settings-modal spec-modal" role="dialog" aria-modal="true" aria-labelledby="spec-modal-title" onMouseDown={(event) => event.stopPropagation()}>
             <header>
               <h2 id="spec-modal-title"><SpecIcon id={activeSpecSection as StateSection} />{stateSections.find((section) => section.key === activeSpecSection)?.title}</h2>
-              <button aria-label="Закрыть раздел спецификации" onClick={closeSpecSection}>×</button>
+              <button type="button" className="spec-modal-close" aria-label="Закрыть" onClick={closeSpecSection}><CloseIcon size={18} /></button>
             </header>
             <div className="settings-pane spec-modal-body">
+              <p className="spec-section-description">{stateSections.find((section) => section.key === activeSpecSection)?.description}</p>
+              {removedSpecItem?.section === activeSpecSection ? <div className="spec-undo" role="status"><span>Пункт удалён из черновика.</span><button type="button" onClick={undoRemoveStateItem}>Отменить</button></div> : null}
               {projectState[activeSpecSection as keyof typeof projectState].map((item, index) => (
                 <article className="state-card tree-leaf" key={item.id}>
                   <header>
                     <strong>Пункт {index + 1}</strong>
                     <button
+                      type="button"
+                      className="state-item-remove"
                       aria-label={`Удалить пункт ${index + 1}`}
-                      onClick={() => removeStateItem(activeSpecSection as any, item.id)}
+                      onClick={(event) => { event.stopPropagation(); removeStateItem(activeSpecSection as any, item.id); }}
                     >×</button>
                   </header>
                   <textarea
@@ -1788,18 +1824,17 @@ function App(): React.JSX.Element {
         <div className="modal-backdrop" onClick={() => setWebChatsDrawerOpen(false)}>
           <div className="web-chats-drawer-card" onClick={(e) => e.stopPropagation()}>
             <header className="custom-modal-header">
-              <h3>🔗 Закреплённые Веб-Чаты Проекта</h3>
-              <button className="close-modal-btn" onClick={() => setWebChatsDrawerOpen(false)}>×</button>
+              <h3>Закреплённые веб-чаты проекта</h3>
+              <button type="button" className="close-modal-btn" aria-label="Закрыть" onClick={() => setWebChatsDrawerOpen(false)}>×</button>
             </header>
             <div className="drawer-body">
               {current?.conversations && current.conversations.length > 0 ? (
                 current.conversations.map((c) => (
                   <div key={c.providerId} className="drawer-chat-item">
-                    <strong className="drawer-provider-title">{c.providerId.toUpperCase()}</strong>
+                    <ProviderLogoIcon providerId={c.providerId} size={22} />
+                    <div className="drawer-chat-copy"><strong className="drawer-provider-title">{getProviderDisplayName(c.providerId)}</strong><small>{c.externalRef ? "Активен" : "Ожидает первого хода"}</small></div>
                     {c.externalRef ? (
-                      <a href={c.externalRef} target="_blank" rel="noreferrer noopener" className="btn btn-primary">
-                        Открыть сессию в браузере ↗
-                      </a>
+                      <button type="button" className="btn btn-primary drawer-open-chat" onClick={() => void openProviderWebChat(c.providerId, c.id)}>Открыть чат <span aria-hidden="true">↗</span></button>
                     ) : (
                       <span className="text-muted">Сессия создастся после первого хода</span>
                     )}

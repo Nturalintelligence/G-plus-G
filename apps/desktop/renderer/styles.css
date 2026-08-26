@@ -249,7 +249,7 @@ button:disabled {
 }
 
 /* Big Tech Header Bar */
-header {
+main > header {
   height: 56px;
   min-width: 0;
   display: flex;
@@ -382,7 +382,7 @@ header {
 }
 
 @media (max-width: 1180px) {
-  header {
+  main > header {
     padding-left: 12px;
     padding-right: 148px;
   }
@@ -946,6 +946,13 @@ h2 {
   background: var(--bg-message-user);
 }
 
+.drawer-chat-item { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; align-items: center; gap: 12px; min-width: 0; padding: 12px; border: 1px solid var(--border-color-card); border-radius: 12px; background: var(--bg-panel); }
+.drawer-chat-copy { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
+.drawer-chat-copy strong, .drawer-chat-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.drawer-chat-copy small { color: var(--text-muted); }
+.drawer-open-chat { flex: 0 0 auto; white-space: nowrap; }
+@media (max-width: 560px) { .drawer-chat-item { grid-template-columns: 24px minmax(0, 1fr); } .drawer-open-chat, .drawer-chat-item > .text-muted { grid-column: 1 / -1; justify-self: stretch; justify-content: center; } }
+
 .message.assistant {
   margin-right: 5%;
 }
@@ -1392,6 +1399,15 @@ h2 {
   align-items: center;
   justify-content: center;
   z-index: 100;
+  -webkit-app-region: no-drag;
+}
+
+main > :not(header),
+.modal-backdrop *,
+.sidebar-pane,
+.workspace,
+.inspector {
+  -webkit-app-region: no-drag;
 }
 
 .settings-modal {
@@ -1685,8 +1701,9 @@ fieldset label textarea {
 .spec-chip-desc { display: block; margin: 5px 0 0 28px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .advanced-state { margin-top: 14px; border: 1px solid var(--border-color); border-radius: 12px; overflow: hidden; }
 .advanced-state summary { cursor: pointer; padding: 10px 12px; font-weight: 600; }
+.advanced-state > p { margin: 0; padding: 0 12px 10px; color: var(--text-muted); font-size: 11px; line-height: 1.45; }
 .advanced-state textarea { display: block; width: calc(100% - 20px); min-height: 180px; margin: 0 10px 10px; resize: vertical; }
-.advanced-state > button { margin: 0 10px 10px; }
+.advanced-state-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 10px 10px; }
 
 .inspector-footer { display: flex; gap: 8px; padding: 12px 14px; border-top: 1px solid var(--border-color); }
 .inspector-footer button { flex: 1 1 0; min-width: 0; justify-content: center; padding-inline: 7px; }
@@ -1707,6 +1724,9 @@ fieldset label textarea {
 
 .spec-modal { width: min(760px, 94vw); height: min(760px, calc(100vh - 32px)); min-height: 0; max-height: calc(100vh - 32px); }
 .spec-modal > header h2 { display: inline-flex; align-items: center; gap: 8px; }
+.spec-modal-close, .state-item-remove { position: relative; z-index: 2; flex: 0 0 auto; -webkit-app-region: no-drag; }
+.spec-section-description { margin: 0; color: var(--text-secondary); line-height: 1.45; }
+.spec-undo { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 10px; border: 1px solid var(--border-color); border-radius: 10px; background: var(--bg-selected); }
 .spec-modal-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; }
 .spec-modal > footer { flex: 0 0 auto; display: flex; justify-content: flex-end; padding: 12px 20px; border-top: 1px solid var(--border-color); background: var(--bg-panel); }
 
@@ -2791,6 +2811,10 @@ fieldset label textarea {
   max-width: 100%;
   min-width: 0;
 }
+
+.model-card-header:hover { color: var(--accent); }
+.model-card-header:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 8px; }
+.model-card-header:active { opacity: 0.82; }
 
 .composer-bottom .attached-files-row {
   flex-wrap: wrap;
