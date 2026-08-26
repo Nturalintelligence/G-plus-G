@@ -52,6 +52,7 @@ export function SettingsModal({
   const [modelFilter, setModelFilter] = useState<"all" | "supported" | "experimental">("all");
   const [searchQuery, setSearchQuery] = useState("");
   const [expandedModelId, setExpandedModelId] = useState<string | null>(null);
+  const providerLoginBusy = Object.values(providerStatuses ?? {}).some((status) => status.session === "BUSY");
 
   React.useEffect(() => {
     if (!isOpen) return;
@@ -218,13 +219,15 @@ export function SettingsModal({
                                 className={`status-badge ${
                                   providerStatuses?.[pId]?.session === "AUTHENTICATED"
                                     ? "supported"
-                                    : providerStatuses?.[pId]?.session === "CHALLENGE_REQUIRED"
+                                    : providerStatuses?.[pId]?.session === "CHALLENGE_REQUIRED" || providerStatuses?.[pId]?.session === "BUSY"
                                     ? "warning"
                                     : "experimental"
                                 }`}
                               >
                                 {providerStatuses?.[pId]?.session === "AUTHENTICATED"
                                   ? "Авторизован"
+                                  : providerStatuses?.[pId]?.session === "BUSY"
+                                  ? "Открыто окно входа"
                                   : providerStatuses?.[pId]?.session === "CHALLENGE_REQUIRED"
                                   ? "Проверка капчи"
                                   : meta.isSupported
@@ -236,7 +239,7 @@ export function SettingsModal({
                               <button
                                 type="button"
                                 className="btn btn-secondary btn-sm login-btn"
-                                disabled={!meta.isSupported}
+                                disabled={!meta.isSupported || providerLoginBusy || maintenanceBusy}
                                 onClick={(e) => {
                                   e.preventDefault();
                                   e.stopPropagation();
@@ -248,6 +251,7 @@ export function SettingsModal({
                               <button
                                 type="button"
                                 className="btn btn-danger-subtle btn-sm"
+                                disabled={providerLoginBusy || maintenanceBusy}
                                 onClick={(e) => {
                                   e.preventDefault();
                                   e.stopPropagation();

@@ -117,6 +117,10 @@ describe("Phase B.1 UI contracts", () => {
     expect(settingsModal).toContain("Будут удалены только локальные данные входа");
     expect(settingsModal).toContain("Перепривязать диалог");
     expect(styles).toContain(".provider-capabilities");
+    expect(settingsModal).toContain('status.session === "BUSY"');
+    expect(settingsModal).toContain("Открыто окно входа");
+    expect(settingsModal).toContain("!meta.isSupported || providerLoginBusy || maintenanceBusy");
+    expect(settingsModal).toContain("disabled={providerLoginBusy || maintenanceBusy}");
   });
 
   it("clips the model catalog beneath an opaque fixed header", () => {
