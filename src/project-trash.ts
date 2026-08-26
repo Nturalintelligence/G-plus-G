@@ -40,9 +40,11 @@ export class ProjectTrashService {
 
   private summary(projectId: string, trashedAt: string): ProjectTrashSummary {
     const localFileCount = Number((this.database.raw.prepare(`
-      SELECT
-        (SELECT COUNT(*) FROM message_attachments WHERE project_id = ?) +
-        (SELECT COUNT(*) FROM downloaded_artifacts WHERE project_id = ?) AS count
+      SELECT COUNT(*) AS count FROM (
+        SELECT local_relative_path FROM message_attachments WHERE project_id = ?
+        UNION
+        SELECT local_relative_path FROM downloaded_artifacts WHERE project_id = ?
+      )
     `).get(projectId, projectId) as { count?: number } | undefined)?.count ?? 0);
     return { projectId, trashedAt, localFileCount };
   }

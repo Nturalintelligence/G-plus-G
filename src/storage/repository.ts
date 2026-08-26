@@ -214,6 +214,22 @@ export class ProjectRepository {
 
   deleteProject(projectId: string): void {
     this.database.transaction(() => {
+      this.deleteProjectRows(projectId);
+    });
+  }
+
+  deleteProjects(projectIds: string[]): void {
+    const ids = [...new Set(projectIds)];
+    this.database.transaction(() => {
+      for (const projectId of ids) {
+        const exists = this.database.raw.prepare("SELECT 1 FROM projects WHERE id = ?").get(projectId);
+        if (!exists) throw new Error(`Project not found: ${projectId}`);
+      }
+      for (const projectId of ids) this.deleteProjectRows(projectId);
+    });
+  }
+
+  private deleteProjectRows(projectId: string): void {
       const conversations = this.getConversationsForProject(projectId);
       const taskRows = this.database.raw
         .prepare("SELECT id FROM cli_tasks WHERE project_id = ?")
@@ -257,7 +273,6 @@ export class ProjectRepository {
       this.database.raw.prepare("DELETE FROM downloaded_artifacts WHERE project_id = ?").run(projectId);
       this.database.raw.prepare("DELETE FROM projects WHERE id = ?").run(projectId);
       this.appendEventInternal("Project", projectId, "PROJECT_DELETED", { projectId });
-    });
   }
 
   createConversation(projectId: string, providerId: string): Conversation {

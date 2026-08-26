@@ -566,8 +566,8 @@ function registerIpc(): void {
     for (const projectId of projectIds) {
       const project = repository.openProject(projectId);
       if (!project || project.status !== "ARCHIVED") throw new Error(`Project is not in trash: ${projectId}`);
-      repository.deleteProject(projectId);
     }
+    repository.deleteProjects(projectIds);
     logEvent("INFO", "projects.trash.deleted_permanently", { projectIds });
     return { success: true };
   });
