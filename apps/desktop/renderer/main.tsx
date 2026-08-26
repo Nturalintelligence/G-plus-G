@@ -16,6 +16,7 @@ import { ModelStatusRow } from "./components/ModelStatusRow.js";
 import { ProjectRequiredToast } from "./components/ProjectRequiredToast.js";
 import { RunSummaryBar } from "./components/RunSummaryBar.js";
 import { SettingsModal } from "./components/SettingsModal.js";
+import { SpecificationHelpModal } from "./components/SpecificationHelpModal.js";
 import { CliTaskPanel, type CliTaskView } from "./components/CliTaskPanel.js";
 import { formatProviderList, getProviderDisplayName, getProviderMetadata } from "./provider-metadata.js";
 import { selectReadyAnswerEntries } from "./ready-answer.js";
@@ -223,6 +224,8 @@ function App(): React.JSX.Element {
   const [eventLimit, setEventLimit] = useState(20);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [specHelpOpen, setSpecHelpOpen] = useState(false);
+  const [specOnboardingVisible, setSpecOnboardingVisible] = useState(false);
   const [attachedFiles, setAttachedFiles] = useState<AttachedFileItem[]>([]);
   const [draftMessageId, setDraftMessageId] = useState(
     () => `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
@@ -243,6 +246,7 @@ function App(): React.JSX.Element {
   const [busyCliTaskId, setBusyCliTaskId] = useState<string | null>(null);
   const outputRef = useRef<HTMLElement>(null);
   const specificationButtonRef = useRef<HTMLButtonElement>(null);
+  const specHelpButtonRef = useRef<HTMLButtonElement>(null);
   const specModalRef = useRef<HTMLElement>(null);
   const specSectionTriggerRef = useRef<HTMLElement | null>(null);
   const draftHydratedProjectRef = useRef<string | null>(null);
@@ -290,6 +294,15 @@ function App(): React.JSX.Element {
     modal.addEventListener("keydown", trapFocus);
     return () => modal.removeEventListener("keydown", trapFocus);
   }, [activeSpecSection]);
+
+  useEffect(() => {
+    if (inspectorOpen && localStorage.getItem("gplusg.specOnboardingDismissed") !== "true") setSpecOnboardingVisible(true);
+  }, [inspectorOpen]);
+
+  const closeSpecHelp = React.useCallback((): void => {
+    setSpecHelpOpen(false);
+    window.setTimeout(() => specHelpButtonRef.current?.focus(), 0);
+  }, []);
 
   function composerDraftPayload(projectId: string): Omit<ComposerDraftView, "updatedAt"> {
     return {
@@ -1483,6 +1496,8 @@ function App(): React.JSX.Element {
             </span>
           </header>
           <div className="inspector-content">
+          <button ref={specHelpButtonRef} type="button" className="spec-help-open" onClick={() => setSpecHelpOpen(true)}>Как работать со спецификацией?</button>
+          {specOnboardingVisible ? <aside className="spec-onboarding"><strong>Спецификация помогает ИИ помнить правила и решения проекта.</strong><div><button type="button" onClick={() => { setSpecHelpOpen(true); setSpecOnboardingVisible(false); }}>Посмотреть инструкцию</button><button type="button" onClick={() => setSpecOnboardingVisible(false)}>Позже</button><button type="button" onClick={() => { localStorage.setItem("gplusg.specOnboardingDismissed", "true"); setSpecOnboardingVisible(false); }}>Больше не показывать</button></div></aside> : null}
           <div className="spec-cards-grid">
             {stateSections.map((section) => {
               const count = projectState[section.key].length;
@@ -1819,6 +1834,8 @@ function App(): React.JSX.Element {
         </div>,
         document.body,
       ) : null}
+
+      {specHelpOpen ? createPortal(<SpecificationHelpModal onClose={closeSpecHelp}/>, document.body) : null}
 
       {webChatsDrawerOpen ? (
         <div className="modal-backdrop" onClick={() => setWebChatsDrawerOpen(false)}>
