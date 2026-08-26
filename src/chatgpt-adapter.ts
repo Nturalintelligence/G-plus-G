@@ -12,6 +12,7 @@ import type {
   TurnRef,
 } from "./adapters/adapter-contract.js";
 import { ResponseArtifactDownloader } from "./attachments/artifact-downloader.js";
+import { isStableChatGptConversationUrl, preserveChatGptConversationRef } from "./adapters/chatgpt-conversation-ref.js";
 import type { AttachmentRefV1 } from "./attachments/attachments.js";
 import { TurnChannel } from "./adapters/turn-channel.js";
 import { ProfileLock } from "./browser/profile-lock.js";
@@ -113,6 +114,7 @@ export class ChatGptAdapter implements ModelAdapter {
   private readonly headless: boolean;
   private readonly artifactDatabase: DatabaseSync | undefined;
   private lastSubmissionEvidence: SubmissionEvidenceDecision | undefined;
+  private stableConversationUrl: string | null = null;
 
   constructor(options: AdapterOptions = {}) {
     this.profileDir = resolve(options.profileDir ?? dataPath("profiles", "chatgpt"));
@@ -175,16 +177,21 @@ export class ChatGptAdapter implements ModelAdapter {
   }
 
   async openConversation(ref: ConversationRef): Promise<void> {
-    if (!ref.url.startsWith("https://chatgpt.com/")) {
+    if (!isStableChatGptConversationUrl(ref.url)) {
       throw new Error("Conversation URL must belong to chatgpt.com");
     }
     const page = await this.ensurePage();
     await page.goto(ref.url, { waitUntil: "domcontentloaded" });
     const expectedPath = new URL(ref.url).pathname;
-    await page.waitForTimeout(750);
-    const available = new URL(page.url()).pathname === expectedPath
-      && (await this.findVisibleComposers()).length === 1;
+    const deadline = Date.now() + 8_000;
+    let available = false;
+    while (Date.now() < deadline) {
+      available = new URL(page.url()).pathname === expectedPath && (await this.findVisibleComposers()).length === 1;
+      if (available) break;
+      await page.waitForTimeout(250);
+    }
     if (!available) throw new ConversationUnavailableError("Сохранённый диалог ChatGPT удалён или недоступен");
+    this.stableConversationUrl = preserveChatGptConversationRef(this.stableConversationUrl, page.url());
   }
 
   async getCurrentConversation(): Promise<ConversationRef> {
@@ -193,7 +200,9 @@ export class ChatGptAdapter implements ModelAdapter {
       (url) => url.hostname === "chatgpt.com" && url.pathname.includes("/c/"),
       { timeout: 5_000 },
     );
-    return { id: newId("webchat"), url: page.url() };
+    this.stableConversationUrl = preserveChatGptConversationRef(this.stableConversationUrl, page.url());
+    if (!this.stableConversationUrl) throw new ConversationUnavailableError("ChatGPT conversation URL is not stable");
+    return { id: newId("webchat"), url: this.stableConversationUrl };
   }
 
   public getCapabilities(): ProviderAttachmentCapabilities {
