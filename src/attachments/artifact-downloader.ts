@@ -39,7 +39,16 @@ export type ArtifactFailureReason =
   | "SIGNED_URL_EXPIRED"
   | "DOWNLOAD_REQUIRES_UI_EVENT"
   | "BLOB_EXTRACTION_FAILED"
-  | "ORIGINAL_ASSET_NOT_FOUND";
+  | "ORIGINAL_ASSET_NOT_FOUND"
+  | "DOWNLOAD_TRIGGER_NO_BYTES";
+
+export type ArtifactDownloadState =
+  | "DOWNLOAD_CONTROL_READY"
+  | "DOWNLOAD_TRIGGERED"
+  | "CAPTURE_WAITING"
+  | "ARTIFACT_VALIDATING"
+  | "ARTIFACT_STORED"
+  | "DOWNLOAD_TRIGGER_NO_BYTES";
 
 export interface ProviderArtifactCandidate {
   providerId: "chatgpt" | "gemini";
@@ -83,6 +92,7 @@ export interface ArtifactDownloadOptions {
   maxRedirects?: number;
   downloadEventTimeoutMs?: number;
   expectArtifact?: boolean;
+  onStateChange?: (state: ArtifactDownloadState) => void;
 }
 
 export type HostnameResolver = (hostname: string) => Promise<readonly string[]>;
@@ -304,7 +314,7 @@ function failureReason(error: unknown, fallback: ArtifactFailureReason): Artifac
   if (/HTTP (?:401|403|404|410)|expired|ист[её]к/i.test(message)) return "SIGNED_URL_EXPIRED";
   if (/redirect/i.test(message) && /blocked|allowlist|private|local|unsafe/i.test(message)) return "REDIRECT_TARGET_REJECTED";
   if (/blob/i.test(message)) return "BLOB_EXTRACTION_FAILED";
-  if (/download event|UI event|All promises were rejected/i.test(message)) return "DOWNLOAD_REQUIRES_UI_EVENT";
+  if (/no validated bytes|capture window expired|All promises were rejected/i.test(message)) return "DOWNLOAD_TRIGGER_NO_BYTES";
   if (/MIME|Content-Type/i.test(message)) return "MIME_VALIDATION_FAILED";
   if (/SHA-256|integrity/i.test(message)) return "INTEGRITY_VALIDATION_FAILED";
   if (/empty|0 bytes/i.test(message)) return "EMPTY_RESPONSE_BODY";
@@ -525,65 +535,141 @@ export class ResponseArtifactDownloader {
     trigger: Locator,
     options: Omit<ArtifactDownloadOptions, "url" | "label">,
   ): Promise<DownloadedArtifactRecord> {
-    const timeout = Math.min(Math.max(options.downloadEventTimeoutMs ?? 5_000, 250), 15_000);
+    const timeout = Math.min(Math.max(options.downloadEventTimeoutMs ?? 8_000, 250), 20_000);
     const domains = this.allowedDomains(options.providerId, options.allowedDomainSuffixes);
-    const downloadPromise = page.waitForEvent("download", { timeout }).then((download) => ({ kind: "download" as const, download }));
-    const responsePromise = typeof page.waitForResponse === "function"
-      ? page.waitForResponse(async (response) => {
-          if (!response.ok()) return false;
-          const mime = contentTypeWithoutParameters(response.headers()["content-type"]);
-          if (!DEFAULT_ALLOWED_MIME_TYPES.has(mime) && mime !== "application/octet-stream") return false;
-          let responseUrl: URL;
-          try { responseUrl = new URL(response.url()); } catch { return false; }
-          if (options.providerId === "gemini") {
-            const generatedImage = mime.startsWith("image/") &&
-              (responseUrl.pathname.includes("/gg/") || responseUrl.pathname.includes("/rd-gg/")) &&
-              /=s0-d-I(?:$|[&#])/i.test(responseUrl.href);
-            const explicitFile = !mime.startsWith("image/") && /download|file|artifact|usercontent/i.test(`${responseUrl.hostname}${responseUrl.pathname}`);
-            if (!generatedImage && !explicitFile) return false;
-          } else if (mime.startsWith("image/") && !/download|file|artifact|usercontent/i.test(`${responseUrl.hostname}${responseUrl.pathname}`)) {
-            return false;
+    const emitState = (state: ArtifactDownloadState) => options.onStateChange?.(state);
+    if (typeof (trigger as any).isVisible === "function" && !(await (trigger as any).isVisible())) throw new Error("Download control is not visible");
+    if (typeof (trigger as any).isEnabled === "function" && !(await (trigger as any).isEnabled())) throw new Error("Download control is disabled or loading");
+    emitState("DOWNLOAD_CONTROL_READY");
+
+    type CaptureCandidate = { kind: "download" | "response" | "popup" | "navigation" | "reference"; value: any };
+    const queue: CaptureCandidate[] = [];
+    let wake: (() => void) | null = null;
+    let triggered = false;
+    let stopped = false;
+    const enqueue = (candidate: CaptureCandidate) => {
+      if (!triggered || stopped) return;
+      queue.push(candidate);
+      wake?.();
+      wake = null;
+    };
+    const baselineUrl = typeof (page as any).url === "function" ? page.url() : PROVIDER_ORIGINS[options.providerId] || "";
+    const baselineAttributes = await (typeof (trigger as any).evaluate === "function" ? trigger.evaluate((element) => ({
+      href: element.getAttribute("href"), src: element.getAttribute("src"), download: element.getAttribute("download"),
+    })) : Promise.resolve({ href: null, src: null, download: null })).catch(() => ({ href: null, src: null, download: null }));
+    const pageAny = page as any;
+    const contextAny = typeof pageAny.context === "function" ? pageAny.context() : {};
+    const onDownload = (value: any) => enqueue({ kind: "download", value });
+    const onResponse = (value: any) => {
+      const headers = value.headers();
+      const mime = contentTypeWithoutParameters(headers["content-type"]);
+      const disposition = headers["content-disposition"] || "";
+      if (!value.ok() || mime === "text/html" || mime.includes("json")) return;
+      let parsed: URL;
+      try { parsed = new URL(value.url()); } catch { return; }
+      const pathEvidence = /download|file|artifact|usercontent|backend-api\/files/i.test(`${parsed.hostname}${parsed.pathname}`);
+      const attachmentEvidence = /attachment/i.test(disposition);
+      const mimeEvidence = DEFAULT_ALLOWED_MIME_TYPES.has(mime) || mime === "application/octet-stream";
+      if ((!attachmentEvidence && !pathEvidence) || !mimeEvidence) return;
+      if (/avatar|icon|emoji|analytics|telemetry|thumbnail/i.test(parsed.pathname)) return;
+      enqueue({ kind: "response", value });
+    };
+    const onPopup = (value: any) => enqueue({ kind: "popup", value });
+    const onFrameNavigated = (frame: any) => {
+      if (typeof pageAny.mainFrame === "function" && frame !== pageAny.mainFrame()) return;
+      if (frame.url() !== baselineUrl) enqueue({ kind: "navigation", value: frame.url() });
+    };
+    pageAny.on?.("download", onDownload);
+    pageAny.on?.("response", onResponse);
+    pageAny.on?.("popup", onPopup);
+    pageAny.on?.("framenavigated", onFrameNavigated);
+    contextAny.on?.("page", onPopup);
+    const armLegacyWaiters = () => {
+      if (typeof pageAny.on === "function") return;
+      void pageAny.waitForEvent?.("download", { timeout }).then(onDownload).catch(() => undefined);
+      void pageAny.waitForResponse?.((response: any) => {
+        const before = queue.length;
+        onResponse(response);
+        const accepted = queue.length > before;
+        if (accepted) queue.pop();
+        return accepted;
+      }, { timeout }).then(onResponse).catch(() => undefined);
+    };
+    const poll = setInterval(() => {
+      if (typeof (trigger as any).evaluate !== "function") return;
+      void trigger.evaluate((element) => ({ href: element.getAttribute("href"), src: element.getAttribute("src"), download: element.getAttribute("download") }))
+        .then((current) => {
+          const reference = current.href || current.src;
+          if (reference && (reference !== baselineAttributes.href || current.download !== baselineAttributes.download) && reference !== baselineAttributes.src) enqueue({ kind: "reference", value: reference });
+        }).catch(() => undefined);
+    }, 75);
+    const deadline = Date.now() + timeout;
+    const cleanup = () => {
+      stopped = true;
+      clearInterval(poll);
+      pageAny.off?.("download", onDownload);
+      pageAny.off?.("response", onResponse);
+      pageAny.off?.("popup", onPopup);
+      pageAny.off?.("framenavigated", onFrameNavigated);
+      contextAny.off?.("page", onPopup);
+      wake?.();
+      wake = null;
+    };
+    try {
+      triggered = true;
+      armLegacyWaiters();
+      await trigger.click();
+      emitState("DOWNLOAD_TRIGGERED");
+      emitState("CAPTURE_WAITING");
+      while (Date.now() < deadline) {
+        if (queue.length === 0) await new Promise<void>((resolve) => {
+          wake = resolve;
+          setTimeout(resolve, Math.min(100, Math.max(1, deadline - Date.now())));
+        });
+        const candidate = queue.shift();
+        if (!candidate) continue;
+        try {
+          emitState("ARTIFACT_VALIDATING");
+          let record: DownloadedArtifactRecord;
+          if (candidate.kind === "download") {
+            record = await this.persistBrowserDownload(candidate.value, options, domains);
+          } else if (candidate.kind === "response") {
+            record = await this.persistNetworkResponse(candidate.value, options, domains);
+          } else if (candidate.kind === "popup") {
+            const popup = candidate.value;
+            try {
+              await popup.waitForLoadState?.("domcontentloaded", { timeout: Math.max(250, deadline - Date.now()) }).catch(() => undefined);
+              const normalized = normalizeProviderArtifactReference(options.providerId, popup.url());
+              if (normalized.kind === "BLOB_URL") record = await this.downloadBlobFromPage(popup, { ...options, url: normalized.url });
+              else record = await this.downloadArtifactSsrfSafe(page, { ...options, url: normalized.url });
+            } finally { await popup.close?.().catch(() => undefined); }
+          } else {
+            const normalized = normalizeProviderArtifactReference(options.providerId, String(candidate.value));
+            if (normalized.kind === "BLOB_URL") record = await this.downloadBlobFromPage(page, { ...options, url: normalized.url });
+            else record = await this.downloadArtifactSsrfSafe(page, { ...options, url: normalized.url });
           }
-          try {
-            await validateDownloadUrl(response.url(), { allowedDomainSuffixes: domains, resolveHostname: this.resolveHostname });
-            return true;
-          } catch {
-            return false;
+          if (record.status === "READY") {
+            emitState("ARTIFACT_STORED");
+            return record;
           }
-        }, { timeout }).then((response) => ({ kind: "response" as const, response }))
-      : null;
-    await trigger.click();
-    const captured = await Promise.any([
-      downloadPromise,
-      ...(responsePromise ? [responsePromise] : []),
-    ]);
-    if (captured.kind === "response") {
-      const url = captured.response.url();
-      const declaredMime = contentTypeWithoutParameters(captured.response.headers()["content-type"]);
-      const headers = captured.response.headers();
-      const parsed = await validateDownloadUrl(url, { allowedDomainSuffixes: domains, resolveHostname: this.resolveHostname });
-      const extension = declaredMime === "image/jpeg" ? ".jpg" : declaredMime === "image/webp" ? ".webp" : declaredMime === "image/png" ? ".png" : declaredMime === "application/pdf" ? ".pdf" : ".md";
-      const discoveredName = filenameFromHeadersOrUrl(headers, parsed);
-      const label = declaredMime.startsWith("image/") && !/\.(?:png|jpe?g|webp)$/i.test(discoveredName)
-        ? `generated-image${extension}`
-        : discoveredName === "downloaded_artifact" ? `provider-result${extension}` : discoveredName;
-      return this.persistBuffer(await captured.response.body(), {
-        ...options,
-        url,
-        label,
-      }, declaredMime);
+        } catch {
+          // A correlated candidate still has to pass the common validation.
+        }
+      }
+      emitState("DOWNLOAD_TRIGGER_NO_BYTES");
+      throw new ArtifactDownloadFailure("DOWNLOAD_TRIGGER_NO_BYTES", "Download capture window expired with no validated bytes");
+    } finally {
+      cleanup();
+      if (typeof pageAny.url === "function" && page.url() !== baselineUrl && baselineUrl.startsWith(PROVIDER_ORIGINS[options.providerId] || "#")) {
+        await page.goto(baselineUrl, { waitUntil: "domcontentloaded", timeout: 10_000 }).catch(() => undefined);
+      }
     }
-    const download = captured.download;
-    const url = download.url();
-    if (!url) {
-      // A confirmed, turn-bound browser download may intentionally hide its
-      // transient URL. The browser-owned stream is still validated below.
-    } else if (url.startsWith("blob:")) {
-      const embedded = url.slice("blob:".length);
-      await validateDownloadUrl(embedded, { allowedDomainSuffixes: domains, resolveHostname: this.resolveHostname });
-    } else {
-      await validateDownloadUrl(url, { allowedDomainSuffixes: domains, resolveHostname: this.resolveHostname });
-    }
+  }
+
+  private async persistBrowserDownload(download: any, options: Omit<ArtifactDownloadOptions, "url" | "label">, domains: readonly string[]): Promise<DownloadedArtifactRecord> {
+    const url = String(download.url?.() || "");
+    if (url.startsWith("blob:")) await validateDownloadUrl(url.slice(5), { allowedDomainSuffixes: domains, resolveHostname: this.resolveHostname });
+    else if (url) await validateDownloadUrl(url, { allowedDomainSuffixes: domains, resolveHostname: this.resolveHostname });
     const stream = await download.createReadStream();
     if (!stream) throw new Error("Provider download stream is unavailable");
     const maxBytes = options.maxBytes ?? DEFAULT_MAX_DOWNLOAD_BYTES;
@@ -592,17 +678,24 @@ export class ResponseArtifactDownloader {
     for await (const chunk of stream) {
       const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
       total += buffer.length;
-      if (total > maxBytes) {
-        stream.destroy();
-        throw new Error(`Downloaded artifact exceeds ${maxBytes} bytes`);
-      }
+      if (total > maxBytes) { stream.destroy(); throw new Error(`Downloaded artifact exceeds ${maxBytes} bytes`); }
       chunks.push(buffer);
     }
-    return this.persistBuffer(Buffer.concat(chunks), {
-      ...options,
-      url,
-      label: download.suggestedFilename(),
-    }, "");
+    return this.persistBuffer(Buffer.concat(chunks), { ...options, url, label: download.suggestedFilename() }, "");
+  }
+
+  private async persistNetworkResponse(response: any, options: Omit<ArtifactDownloadOptions, "url" | "label">, domains: readonly string[]): Promise<DownloadedArtifactRecord> {
+    const url = String(response.url());
+    const parsed = await validateDownloadUrl(url, { allowedDomainSuffixes: domains, resolveHostname: this.resolveHostname });
+    const headers = response.headers();
+    const declaredMime = contentTypeWithoutParameters(headers["content-type"]);
+    const contentLength = Number(headers["content-length"] || "0");
+    if (Number.isFinite(contentLength) && contentLength > (options.maxBytes ?? DEFAULT_MAX_DOWNLOAD_BYTES)) throw new Error("Downloaded artifact exceeds size limit");
+    const discoveredName = filenameFromHeadersOrUrl(headers, parsed);
+    const extension = declaredMime === "image/jpeg" ? ".jpg" : declaredMime === "image/webp" ? ".webp" : ".png";
+    const fileName = declaredMime.startsWith("image/") && !/\.(?:png|jpe?g|webp)$/i.test(discoveredName)
+      ? `generated-image${extension}` : discoveredName;
+    return this.persistBuffer(await response.body(), { ...options, url, label: fileName }, declaredMime);
   }
 
   /** Manual redirect traversal validates every hop before following it. */

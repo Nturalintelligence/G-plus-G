@@ -238,7 +238,7 @@ describe("ResponseArtifactDownloader deterministic download pipeline", () => {
       }),
     } as unknown as Page;
     await expect(downloader.captureDownloadFromLocator(page, { click: vi.fn() } as unknown as Locator, {
-      projectId: "project-1", messageId: "assistant-image", providerId: "gemini",
+      projectId: "project-1", messageId: "assistant-image", providerId: "gemini", downloadEventTimeoutMs: 250,
     })).rejects.toThrow();
   });
 
