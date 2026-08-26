@@ -124,4 +124,16 @@ describe("ChatGPT browser-owned multi-channel artifact capture", () => {
     expect(states.at(-1)).toBe("DOWNLOAD_TRIGGER_NO_BYTES");
     expect(page.eventNames()).toEqual([]); expect(page.fakeContext.eventNames()).toEqual([]);
   });
+
+  it("restarts capture after timeout without leaked listeners or duplicate clicks", async () => {
+    const page = new FakePage();
+    const first = trigger(page, () => undefined);
+    await expect(downloader.captureDownloadFromLocator(page as unknown as Page, first, { ...options, downloadEventTimeoutMs: 250 })).rejects.toThrow();
+    expect(page.eventNames()).toEqual([]); expect(page.fakeContext.eventNames()).toEqual([]);
+    const download = { url: () => "", suggestedFilename: () => "result.txt", createReadStream: async () => Readable.from([txt]) };
+    const second = trigger(page, () => page.emit("download", download));
+    await expect(downloader.captureDownloadFromLocator(page as unknown as Page, second, options)).resolves.toMatchObject({ status: "READY" });
+    expect((first.click as any)).toHaveBeenCalledOnce(); expect((second.click as any)).toHaveBeenCalledOnce();
+    expect(page.eventNames()).toEqual([]); expect(page.fakeContext.eventNames()).toEqual([]);
+  });
 });
