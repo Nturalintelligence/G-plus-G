@@ -345,17 +345,9 @@ export class GeminiAdapter implements ModelAdapter {
     const response = await this.waitForResponse(before, channel);
 
     const extractedArtifacts = [];
-    const extractedLinks: Array<{ label: string; url: string; downloadable: boolean }> = [];
 
     try {
       const downloader = this.artifactDatabase ? new ResponseArtifactDownloader(this.artifactDatabase) : null;
-      const items = await (downloader
-        ? downloader.extractTurnArtifactsFromPage(page, 'message-content, .model-response-text')
-        : new ResponseArtifactDownloader({ prepare: () => ({ run: () => undefined }) } as any)
-            .extractTurnArtifactsFromPage(page, 'message-content, .model-response-text'));
-      for (const item of items) {
-        extractedLinks.push({ label: item.label, url: item.url, downloadable: !item.isImage });
-      }
       if (downloader && responseTarget) {
         extractedArtifacts.push(...await downloader.downloadTurnArtifactsFromPage(page, 'message-content, .model-response-text', {
           projectId: responseTarget.projectId,
@@ -373,7 +365,7 @@ export class GeminiAdapter implements ModelAdapter {
       responseFingerprint: response.fingerprint,
       elapsedMs: Date.now() - started,
       artifacts: extractedArtifacts,
-      links: extractedLinks,
+      links: [],
     };
   }
 
@@ -738,5 +730,14 @@ export class GeminiAdapter implements ModelAdapter {
       }
     }
     return false;
+  }
+
+  public async rescanResponseArtifacts(target: { projectId: string; messageId: string }) {
+    if (!this.artifactDatabase) throw new Error("Artifact database is unavailable");
+    const page = await this.ensurePage();
+    await this.waitUntilReady();
+    return new ResponseArtifactDownloader(this.artifactDatabase).downloadTurnArtifactsFromPage(
+      page, 'message-content, .model-response-text', { ...target, providerId: this.providerId, expectArtifact: true },
+    );
   }
 }

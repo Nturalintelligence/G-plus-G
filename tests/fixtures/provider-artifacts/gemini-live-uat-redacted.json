@@ -1,0 +1,1 @@
+{"providerId":"gemini","providerOrigin":"https://gemini.google.com","boundTurn":"latest assistant turn after baseline","elements":[{"tagName":"button","ariaLabel":"Скачать код","rawReferenceKind":"NONE","source":"DOWNLOAD_CONTROL"}],"observedFailure":"DOWNLOAD_REQUIRES_UI_EVENT","containsPromptOrResponseText":false,"containsSignedUrl":false}
