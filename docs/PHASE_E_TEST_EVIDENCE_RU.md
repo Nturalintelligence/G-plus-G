@@ -4,9 +4,9 @@
 
 ## Автоматические проверки
 
-- `npm run check`: PASS — 60 test files, 275 tests.
+- `npm run check`: PASS — 61 test files, 281 tests.
 - `npm run test:security`: PASS — 37 tests.
-- `npm run security:guard`: PASS — 103 production source files.
+- `npm run security:guard`: PASS — 104 production source files.
 - `npm run desktop:build`: PASS (development Electron build, не installer).
 - `git diff --check`: PASS.
 
@@ -19,6 +19,8 @@
 - сообщения: компактная карточка `тест`, hover/focus action, исходный текст проверен через системный clipboard;
 - batch/trash: явный выбор двух проектов, перемещение и восстановление без удаления transcript;
 - provider panel: раскрытие ChatGPT, capabilities, auth state, last check и безопасные действия;
+- model catalog: отдельный scroll viewport, 5/20/50 карточек, непрозрачный header и доступный footer;
+- batch/trash hardening: атомарное permanent delete, rollback при ошибочном ID, отмена подтверждения и restart persistence на 32 проектах;
 - во всех новых сценариях `documentElement.scrollWidth <= clientWidth`.
 
 Полнооконные screenshots находятся в `docs/screenshots/phase-e-*.png` и `docs/screenshots/sidebar-long-list-*.png`.

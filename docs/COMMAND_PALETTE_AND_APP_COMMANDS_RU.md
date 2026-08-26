@@ -28,9 +28,11 @@ interface AppCommand {
 
 ## UX и клавиатура
 
-Palette открывается только для `/` в начале пустого composer. Она фильтрует по title, alias и description, поддерживает ArrowUp/ArrowDown, Enter, Escape, видимый focus и screen-reader label. Недоступные команды остаются в списке с причиной. Escape закрывает palette и возвращает focus в composer. Неизвестная команда остаётся обычным черновиком и не исполняется; перед отправкой пользователю показывается, что она не распознана.
+Palette открывается только для `/` в начале пустого composer после пользовательского ввода. Вставленный из clipboard текст, IME composition и `/` внутри обычного сообщения не должны запускать команду автоматически. Она фильтрует по title, alias и description, поддерживает ArrowUp/ArrowDown, Enter, Escape, видимый focus и screen-reader label. Недоступные команды остаются в списке с причиной. Escape закрывает palette и возвращает focus в composer. Неизвестная команда остаётся обычным черновиком и не исполняется; перед отправкой пользователю показывается, что она не распознана.
 
-Первый безопасный набор: `/prompt`, `/prompt-manual`, `/mode`, `/models`, `/new-project`, `/stop`, `/retry`, `/attach`, `/spec`, `/diagnostics`, `/clear-draft`. `/delete-project` и будущие destructive-команды должны открывать существующий подтверждающий UI, а не выполнять удаление напрямую.
+Первый безопасный набор: `/prompt`, `/prompt-manual`, `/mode`, `/models`, `/new-project`, `/stop`, `/retry`, `/attach`, `/spec`, `/diagnostics`, `/clear-draft`. `/delete-project`, `/archive-project` и будущие destructive-команды должны открывать существующий подтверждающий UI, а не выполнять изменение напрямую.
+
+Аргументы команды разбираются отдельной строгой схемой конкретного command ID. Остаток строки никогда не передаётся как raw IPC payload, URL, путь или shell-команда. Ошибка схемы оставляет черновик нетронутым и показывает понятную причину. Повторный Enter после ошибки не считается подтверждением.
 
 ## Жизненный цикл prompt
 
@@ -51,6 +53,8 @@ Palette открывается только для `/` в начале пуст�
 - `CommandDispatcher`: повторно проверяет availability/risk непосредственно перед вызовом.
 - `CommandAudit`: локально пишет command ID, результат и время без prompt/cookie/token payload.
 
+Dispatcher формирует один из результатов `COMPLETED | CANCELLED | BLOCKED | FAILED`. Команда удаляется из composer только после принятия dispatcher; `CANCELLED`, `BLOCKED` и `FAILED` не отправляются модели и не запускаются повторно после restart/crash. Пока команда выполняется, повторный запуск того же destructive action блокируется.
+
 ## Acceptance будущей реализации
 
 - команда не попадает в provider message;
@@ -59,3 +63,4 @@ Palette открывается только для `/` в начале пуст�
 - keyboard-only сценарий полностью доступен;
 - никакой пользовательский аргумент не интерпретируется как shell/JS;
 - unit tests реестра, availability и dispatcher; component tests palette; Electron smoke безопасных команд.
+- отдельные тесты paste/IME, crash/restart, duplicate invocation и невозможности передать command arguments в shell/raw IPC.
