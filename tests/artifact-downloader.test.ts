@@ -10,10 +10,18 @@ import {
   ResponseArtifactDownloader,
   isPrivateOrReservedIp,
   isUrlSsrfSafe,
+  normalizeProviderArtifactReference,
   validateDownloadUrl,
 } from "../src/attachments/artifact-downloader.js";
 
 describe("ResponseArtifactDownloader SSRF Security Validation", () => {
+  it("normalizes only controlled provider references", () => {
+    expect(normalizeProviderArtifactReference("gemini", "  /download/result.md?x=1&amp;y=2#preview  ")).toMatchObject({
+      kind: "RELATIVE_URL", url: "https://gemini.google.com/download/result.md?x=1&y=2",
+    });
+    expect(() => normalizeProviderArtifactReference("gemini", "javascript:alert(1)")).toThrow("HTTPS");
+    expect(() => normalizeProviderArtifactReference("gemini", "blob:https://evil.example/id")).toThrow("provider page");
+  });
   it("allows only HTTPS at the syntactic boundary", () => {
     expect(isUrlSsrfSafe("https://chatgpt.com/assets/img.png").safe).toBe(true);
     expect(isUrlSsrfSafe("https://gemini.google.com/download/file123.pdf").safe).toBe(true);
@@ -123,9 +131,11 @@ describe("ResponseArtifactDownloader deterministic download pipeline", () => {
 
   it("discovers and downloads bound-turn links through the authenticated request context", async () => {
     const pdf = Buffer.from("%PDF-1.7\nbound-turn");
-    const evaluate = vi.fn().mockResolvedValue([
-      { label: "результат.pdf", url: "https://files.oaiusercontent.com/result.pdf", isImage: false },
-    ]);
+    const evaluate = vi.fn().mockResolvedValue([{
+      providerId: "chatgpt", source: "ANCHOR", rawReferenceKind: "ABSOLUTE_HTTPS",
+      rawReference: "https://files.oaiusercontent.com/result.pdf", elementEvidence: { tagName: "a" },
+      expectedFileName: "результат.pdf",
+    }]);
     const get = vi.fn().mockResolvedValue(response(200, {
       "content-type": "application/pdf",
       "content-length": String(pdf.length),
@@ -356,7 +366,7 @@ describe("ResponseArtifactDownloader deterministic download pipeline", () => {
       projectId: "project-1", messageId: "message-expired", providerId: "gemini",
       url: "https://gemini.google.com/download/expired",
     });
-    expect(expired.failureReason).toBe("DOWNLOAD_URL_EXPIRED");
+    expect(expired.failureReason).toBe("SIGNED_URL_EXPIRED");
 
     const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1]);
     const mismatchPage = { context: () => ({ request: { get: vi.fn().mockResolvedValue(response(200, { "content-type": "application/pdf" }, png)) } }) } as unknown as Page;
@@ -453,5 +463,48 @@ describe("ResponseArtifactDownloader deterministic download pipeline", () => {
     expect(result.status).toBe("READY");
     expect(trigger.click).toHaveBeenCalledOnce();
     expect(store.readBuffer(result.localRelativePath)).toEqual(pdf);
+  });
+
+  it("accepts a URL-less browser download only from a confirmed bound control", async () => {
+    const body = Buffer.from("provider result\n");
+    const download = { url: () => "", suggestedFilename: () => "result.md", createReadStream: async () => Readable.from([body]) };
+    const page = { waitForEvent: vi.fn().mockResolvedValue(download) } as unknown as Page;
+    const result = await downloader.captureDownloadFromLocator(page, { click: vi.fn().mockResolvedValue(undefined) } as unknown as Locator, {
+      projectId: "project-1", messageId: "message-url-less", providerId: "gemini",
+    });
+    expect(result).toMatchObject({ status: "READY", fileName: "result.md", sizeBytes: body.length });
+  });
+
+  it("is idempotent for the same provider turn and content hash", async () => {
+    const body = Buffer.from("same provider result\n");
+    const makePage = () => ({ waitForEvent: vi.fn().mockResolvedValue({
+      url: () => "", suggestedFilename: () => "same.md", createReadStream: async () => Readable.from([body]),
+    }) }) as unknown as Page;
+    const options = { projectId: "project-1", messageId: "message-dedup", providerId: "chatgpt" };
+    const first = await downloader.captureDownloadFromLocator(makePage(), { click: vi.fn() } as unknown as Locator, options);
+    const second = await downloader.captureDownloadFromLocator(makePage(), { click: vi.fn() } as unknown as Locator, options);
+    expect(second.id).toBe(first.id);
+    expect(appDb.raw.prepare("SELECT COUNT(*) AS count FROM downloaded_artifacts WHERE message_id = ?").get("message-dedup")).toMatchObject({ count: 1 });
+  });
+
+  it("captures a ChatGPT markdown network response caused by its bound download control", async () => {
+    const body = Buffer.from("# provider result\n");
+    const networkResponse = {
+      ok: () => true,
+      url: () => "https://files.oaiusercontent.com/download/result.md?sig=secret",
+      headers: () => ({ "content-type": "text/markdown", "content-disposition": 'attachment; filename="result.md"' }),
+      body: async () => body,
+    };
+    const page = {
+      waitForEvent: vi.fn().mockRejectedValue(new Error("no download event")),
+      waitForResponse: vi.fn().mockImplementation(async (predicate: (response: typeof networkResponse) => Promise<boolean>) => {
+        expect(await predicate(networkResponse)).toBe(true);
+        return networkResponse;
+      }),
+    } as unknown as Page;
+    const result = await downloader.captureDownloadFromLocator(page, { click: vi.fn().mockResolvedValue(undefined) } as unknown as Locator, {
+      projectId: "project-1", messageId: "message-chatgpt-md", providerId: "chatgpt",
+    });
+    expect(result).toMatchObject({ status: "READY", fileName: "result.md", mimeType: "text/markdown" });
   });
 });

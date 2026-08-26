@@ -1,5 +1,6 @@
 import type { DiagnosticReport, SessionState, TurnResult } from "../types.js";
 import type { AttachmentRefV1 } from "../attachments/attachments.js";
+import type { DownloadedArtifactRecord } from "../attachments/artifact-downloader.js";
 
 export interface ProviderAttachmentCapabilities {
   supportsUpload: boolean;
@@ -80,5 +81,6 @@ export interface ModelAdapter {
   completeManually(turn: TurnRef, response: string): Promise<void>;
   recover(): Promise<RecoveryResult>;
   collectDiagnostics(): Promise<DiagnosticReport>;
+  rescanResponseArtifacts?(target: { projectId: string; messageId: string }): Promise<DownloadedArtifactRecord[]>;
   deleteConversation?(ref: ConversationRef): Promise<boolean>;
 }

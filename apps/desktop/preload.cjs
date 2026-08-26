@@ -107,6 +107,7 @@ const api = {
     removeDraft: (attachmentId) => ipcRenderer.invoke("attachments:removeDraft", attachmentId),
     open: (attachmentId) => ipcRenderer.invoke("attachments:open", attachmentId),
     saveAs: (attachmentId) => ipcRenderer.invoke("attachments:saveAs", attachmentId),
+    retryArtifact: (attachmentId) => ipcRenderer.invoke("attachments:retryArtifact", attachmentId),
   },
 };
 

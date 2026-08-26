@@ -1174,6 +1174,32 @@ function registerIpc(): void {
     fs.writeFileSync(saveRes.filePath, buf);
     return { success: true, fileName: path.basename(saveRes.filePath) };
   });
+  handle("attachments:retryArtifact", async (_event, attachmentId: unknown) => {
+    const id = requireString(attachmentId, "attachmentId", 200);
+    if (providerOperationActive || activeOrchestrator || activeOrchestrationAdapters) {
+      return { success: false, error: "Дождитесь завершения текущей операции провайдера" };
+    }
+    const row = db().raw.prepare("SELECT * FROM downloaded_artifacts WHERE id = ? AND status = 'FAILED'").get(id) as Record<string, unknown> | undefined;
+    if (!row) return { success: false, error: "Неудачная загрузка не найдена" };
+    const providerId = parseProvider(String(row.provider_id));
+    const conversation = db().raw.prepare(
+      "SELECT id, external_ref FROM conversations WHERE project_id = ? AND provider_id = ? ORDER BY updated_at DESC LIMIT 1",
+    ).get(String(row.project_id), providerId) as { id: string; external_ref?: string } | undefined;
+    if (!conversation?.external_ref) return { success: false, error: "Диалог провайдера больше не привязан" };
+    providerOperationActive = true;
+    const adapter = createAdapter(providerId, undefined, false, db().raw);
+    try {
+      await adapter.launch();
+      await adapter.openConversation({ id: conversation.id, url: conversation.external_ref });
+      if (!adapter.rescanResponseArtifacts) return { success: false, error: "Повторная проверка не поддерживается" };
+      const records = await adapter.rescanResponseArtifacts({ projectId: String(row.project_id), messageId: String(row.message_id) });
+      const ready = records.find((record) => record.status === "READY");
+      return ready ? { success: true, artifactId: ready.id } : { success: false, error: "Провайдер показал файл, но G+G не смог безопасно его скачать" };
+    } finally {
+      providerOperationActive = false;
+      await adapter.close().catch(() => undefined);
+    }
+  });
   handle("window:setTheme", (_event, theme: unknown) => {
     if (theme !== "dark" && theme !== "light") throw new Error("Unsupported title bar theme");
     mainWindow?.setTitleBarOverlay({

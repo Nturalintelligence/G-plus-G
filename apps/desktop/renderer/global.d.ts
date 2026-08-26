@@ -105,6 +105,7 @@ interface Window {
       removeDraft(attachmentId: string): Promise<{ success: boolean }>;
       open(attachmentId: string): Promise<{ success: boolean; error?: string }>;
       saveAs(attachmentId: string): Promise<{ success: boolean; fileName?: string }>;
+      retryArtifact(attachmentId: string): Promise<{ success: boolean; artifactId?: string; error?: string }>;
     };
   };
 }

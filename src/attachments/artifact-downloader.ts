@@ -31,7 +31,32 @@ export type ArtifactFailureReason =
   | "PREVIEW_NOT_ORIGINAL"
   | "AUTHENTICATED_FETCH_FAILED"
   | "MIME_VALIDATION_FAILED"
-  | "INTEGRITY_VALIDATION_FAILED";
+  | "INTEGRITY_VALIDATION_FAILED"
+  | "RELATIVE_URL_RESOLUTION_FAILED"
+  | "MALFORMED_PROVIDER_URL"
+  | "UNTRUSTED_PROVIDER_ORIGIN"
+  | "REDIRECT_TARGET_REJECTED"
+  | "SIGNED_URL_EXPIRED"
+  | "DOWNLOAD_REQUIRES_UI_EVENT"
+  | "BLOB_EXTRACTION_FAILED"
+  | "ORIGINAL_ASSET_NOT_FOUND";
+
+export interface ProviderArtifactCandidate {
+  providerId: "chatgpt" | "gemini";
+  source: "DOWNLOAD_CONTROL" | "ANCHOR" | "INLINE_IMAGE" | "BLOB" | "NETWORK_RESPONSE";
+  rawReferenceKind: "ABSOLUTE_HTTPS" | "RELATIVE_URL" | "BLOB_URL" | "NONE";
+  elementEvidence: {
+    tagName: string;
+    role?: string;
+    ariaLabel?: string;
+    downloadName?: string;
+    providerMessageId?: string;
+  };
+  expectedFileName?: string;
+  expectedMimeType?: string;
+  /** Main-process only. Never include this field in renderer DTOs or diagnostics. */
+  rawReference?: string;
+}
 
 class ArtifactDownloadFailure extends Error {
   constructor(readonly reason: ArtifactFailureReason, message: string) {
@@ -74,6 +99,10 @@ const DEFAULT_ALLOWED_MIME_TYPES: ReadonlySet<string> = new Set([
 const PROVIDER_DOWNLOAD_DOMAINS: Readonly<Record<string, readonly string[]>> = {
   chatgpt: ["chatgpt.com", "openai.com", "oaiusercontent.com", "oaistatic.com"],
   gemini: ["gemini.google.com", "googleusercontent.com"],
+};
+const PROVIDER_ORIGINS: Readonly<Record<string, string>> = {
+  chatgpt: "https://chatgpt.com",
+  gemini: "https://gemini.google.com",
 };
 const BLOCKED_HOSTNAMES: ReadonlySet<string> = new Set([
   "localhost",
@@ -180,6 +209,35 @@ function contentTypeWithoutParameters(value: string | undefined): string {
   return (value || "").split(";", 1)[0]!.trim().toLowerCase();
 }
 
+function decodeHtmlEntities(value: string): string {
+  return value.replace(/&amp;/gi, "&").replace(/&quot;/gi, '"').replace(/&#39;|&apos;/gi, "'").replace(/&lt;/gi, "<").replace(/&gt;/gi, ">");
+}
+
+export function normalizeProviderArtifactReference(
+  providerId: string,
+  rawReference: string,
+): { kind: ProviderArtifactCandidate["rawReferenceKind"]; url: string } {
+  const trustedOrigin = PROVIDER_ORIGINS[providerId];
+  if (!trustedOrigin) throw new ArtifactDownloadFailure("UNTRUSTED_PROVIDER_ORIGIN", "Provider origin is not configured");
+  const cleaned = decodeHtmlEntities(rawReference.trim());
+  if (!cleaned) return { kind: "NONE", url: "" };
+  if (cleaned.startsWith("blob:")) {
+    let embedded: URL;
+    try { embedded = new URL(cleaned.slice(5)); } catch { throw new ArtifactDownloadFailure("MALFORMED_PROVIDER_URL", "Provider blob URL is malformed"); }
+    if (embedded.origin !== trustedOrigin) throw new ArtifactDownloadFailure("UNTRUSTED_PROVIDER_ORIGIN", "Blob URL does not belong to the provider page");
+    embedded.hash = "";
+    return { kind: "BLOB_URL", url: `blob:${embedded.toString()}` };
+  }
+  let parsed: URL;
+  const relative = !/^[a-z][a-z0-9+.-]*:/i.test(cleaned);
+  try { parsed = new URL(cleaned, trustedOrigin); } catch {
+    throw new ArtifactDownloadFailure(relative ? "RELATIVE_URL_RESOLUTION_FAILED" : "MALFORMED_PROVIDER_URL", "Provider URL cannot be parsed");
+  }
+  if (parsed.protocol !== "https:") throw new ArtifactDownloadFailure("MALFORMED_PROVIDER_URL", "Provider artifact URL must use HTTPS");
+  parsed.hash = "";
+  return { kind: relative ? "RELATIVE_URL" : "ABSOLUTE_HTTPS", url: parsed.toString() };
+}
+
 function urlWithoutCredentialsOrTokens(value: string): string {
   try {
     const parsed = new URL(value);
@@ -243,7 +301,10 @@ function safeFailureDetail(error: unknown): string {
 function failureReason(error: unknown, fallback: ArtifactFailureReason): ArtifactFailureReason {
   if (error instanceof ArtifactDownloadFailure) return error.reason;
   const message = error instanceof Error ? error.message : String(error);
-  if (/HTTP (?:401|403|404|410)|expired|ист[её]к/i.test(message)) return "DOWNLOAD_URL_EXPIRED";
+  if (/HTTP (?:401|403|404|410)|expired|ист[её]к/i.test(message)) return "SIGNED_URL_EXPIRED";
+  if (/redirect/i.test(message) && /blocked|allowlist|private|local|unsafe/i.test(message)) return "REDIRECT_TARGET_REJECTED";
+  if (/blob/i.test(message)) return "BLOB_EXTRACTION_FAILED";
+  if (/download event|UI event|All promises were rejected/i.test(message)) return "DOWNLOAD_REQUIRES_UI_EVENT";
   if (/MIME|Content-Type/i.test(message)) return "MIME_VALIDATION_FAILED";
   if (/SHA-256|integrity/i.test(message)) return "INTEGRITY_VALIDATION_FAILED";
   if (/empty|0 bytes/i.test(message)) return "EMPTY_RESPONSE_BODY";
@@ -263,22 +324,23 @@ export class ResponseArtifactDownloader {
     this.resolveHostname = options.resolveHostname ?? systemResolver;
   }
 
-  /** Scans a bound assistant turn. URLs are candidates, not trusted downloads. */
-  public async extractTurnArtifactsFromPage(
+  /** Scans only the bound assistant turn. Raw references remain in the main process. */
+  public async discoverTurnArtifactCandidates(
     page: Page,
     turnSelector: string,
-  ): Promise<Array<{ label: string; url: string; isImage: boolean }>> {
+    providerId: "chatgpt" | "gemini",
+  ): Promise<ProviderArtifactCandidate[]> {
     try {
       const turnLocator = page.locator(turnSelector).last();
       if ((await turnLocator.count().catch(() => 0)) === 0) return [];
-      return await turnLocator.evaluate((el) => {
-        const results: Array<{ label: string; url: string; isImage: boolean }> = [];
+      return await turnLocator.evaluate((el, boundProviderId) => {
+        const results: ProviderArtifactCandidate[] = [];
         // A plain image is presentation content, not proof of a downloadable
         // artifact. Provider file cards commonly contain decorative HTTPS
         // icons; treating every <img> as a file persisted those icons as user
         // results. Generated images remain supported when the provider exposes
         // an explicit download link/control around them.
-        el.querySelectorAll("a[href]").forEach((anchor) => {
+        el.querySelectorAll("a[href], a[download]").forEach((anchor) => {
           const href = anchor.getAttribute("href");
           const accessibleName = [
             anchor.getAttribute("aria-label"),
@@ -286,15 +348,38 @@ export class ResponseArtifactDownloader {
             anchor.getAttribute("data-testid"),
           ].filter(Boolean).join(" ");
           const explicitlyDownloadable = anchor.hasAttribute("download") || /download|file|attachment|скач|файл/i.test(accessibleName);
-          if ((href?.startsWith("https://") || href?.startsWith("blob:https://")) && explicitlyDownloadable) {
-            results.push({ label: anchor.textContent?.trim() || "Downloadable File", url: href, isImage: false });
+          if (href && explicitlyDownloadable) {
+            results.push({
+              providerId: boundProviderId,
+              source: href.startsWith("blob:") ? "BLOB" : "ANCHOR",
+              rawReferenceKind: href.startsWith("blob:") ? "BLOB_URL" : href.startsWith("https://") ? "ABSOLUTE_HTTPS" : "RELATIVE_URL",
+              rawReference: href,
+              elementEvidence: {
+                tagName: anchor.tagName.toLowerCase(),
+                ...(anchor.getAttribute("role") ? { role: anchor.getAttribute("role")! } : {}),
+                ...(anchor.getAttribute("aria-label") ? { ariaLabel: anchor.getAttribute("aria-label")! } : {}),
+                ...(anchor.getAttribute("download") ? { downloadName: anchor.getAttribute("download")! } : {}),
+                ...((el.getAttribute("data-message-id") || el.getAttribute("data-test-id")) ? { providerMessageId: (el.getAttribute("data-message-id") || el.getAttribute("data-test-id"))! } : {}),
+              },
+              ...((anchor.getAttribute("download") || anchor.textContent?.trim()) ? { expectedFileName: (anchor.getAttribute("download") || anchor.textContent?.trim())! } : {}),
+            });
           }
         });
         return results;
-      });
+      }, providerId);
     } catch {
       return [];
     }
+  }
+
+  /** Compatibility projection for non-renderer callers; never expose its URL outside main. */
+  public async extractTurnArtifactsFromPage(page: Page, turnSelector: string, providerId: "chatgpt" | "gemini" = "chatgpt") {
+    const candidates = await this.discoverTurnArtifactCandidates(page, turnSelector, providerId);
+    return candidates.filter((candidate) => candidate.rawReference).map((candidate) => ({
+      label: candidate.expectedFileName || "Downloadable File",
+      url: candidate.rawReference!,
+      isImage: candidate.source === "INLINE_IMAGE",
+    }));
   }
 
   /** Downloads only candidates found inside the response bound to this turn. */
@@ -303,22 +388,10 @@ export class ResponseArtifactDownloader {
     turnSelector: string,
     options: Omit<ArtifactDownloadOptions, "url" | "label">,
   ): Promise<DownloadedArtifactRecord[]> {
-    const candidates = await this.extractTurnArtifactsFromPage(page, turnSelector);
-    const unique = [...new Map(candidates.map((item) => [item.url, item])).values()];
+    const providerId = options.providerId as "chatgpt" | "gemini";
+    const candidates = await this.discoverTurnArtifactCandidates(page, turnSelector, providerId);
+    const unique = [...new Map(candidates.map((item) => [item.rawReference, item])).values()];
     const records: DownloadedArtifactRecord[] = [];
-    for (const candidate of unique) {
-      try {
-        records.push(candidate.url.startsWith("blob:")
-          ? await this.downloadBlobFromPage(page, { ...options, url: candidate.url, label: candidate.label })
-          : await this.downloadArtifactSsrfSafe(page, { ...options, url: candidate.url, label: candidate.label }));
-      } catch (error) {
-        records.push(this.persistFailure(
-          { ...options, url: candidate.url, label: candidate.label },
-          failureReason(error, "AUTHENTICATED_FETCH_FAILED"),
-          error,
-        ));
-      }
-    }
     const turn = page.locator(turnSelector).last();
     // CSS `i` matching is not reliable for Cyrillic case folding in Chromium.
     // Keep explicit upper/lower Russian stems so `Скачать …` is not missed.
@@ -335,14 +408,32 @@ export class ResponseArtifactDownloader {
     for (let index = 0; index < count; index += 1) {
       const control = controls.nth(index);
       const href = await control.getAttribute("href").catch(() => null);
-      if (href && unique.some((candidate) => candidate.url === href)) continue;
       try {
         records.push(await this.captureDownloadFromLocator(page, control, options));
+        if (records.at(-1)?.status === "READY") return records;
       } catch (error) {
         records.push(this.persistFailure(
           { ...options, url: href?.startsWith("https://") ? href : "", label: await control.textContent().catch(() => null) || "" },
           failureReason(error, "AUTHENTICATED_FETCH_FAILED"),
           error,
+        ));
+      }
+    }
+    // Direct URL replay is a lower-priority fallback after a confirmed control.
+    for (const candidate of unique) {
+      if (!candidate.rawReference) continue;
+      let normalized: { kind: ProviderArtifactCandidate["rawReferenceKind"]; url: string };
+      try {
+        normalized = normalizeProviderArtifactReference(options.providerId, candidate.rawReference);
+        const candidateOptions = { ...options, url: normalized.url, ...(candidate.expectedFileName ? { label: candidate.expectedFileName } : {}) };
+        records.push(normalized.kind === "BLOB_URL"
+          ? await this.downloadBlobFromPage(page, candidateOptions)
+          : await this.downloadArtifactSsrfSafe(page, candidateOptions));
+        if (records.at(-1)?.status === "READY") return records;
+      } catch (error) {
+        records.push(this.persistFailure(
+          { ...options, url: "", ...(candidate.expectedFileName ? { label: candidate.expectedFileName } : {}) },
+          failureReason(error, "MALFORMED_PROVIDER_URL"), error,
         ));
       }
     }
@@ -441,11 +532,17 @@ export class ResponseArtifactDownloader {
       ? page.waitForResponse(async (response) => {
           if (!response.ok()) return false;
           const mime = contentTypeWithoutParameters(response.headers()["content-type"]);
-          if (!mime.startsWith("image/")) return false;
-          const responseUrl = new URL(response.url());
+          if (!DEFAULT_ALLOWED_MIME_TYPES.has(mime) && mime !== "application/octet-stream") return false;
+          let responseUrl: URL;
+          try { responseUrl = new URL(response.url()); } catch { return false; }
           if (options.providerId === "gemini") {
-            const generatedPath = responseUrl.pathname.includes("/gg/") || responseUrl.pathname.includes("/rd-gg/");
-            if (!generatedPath || !/=s0-d-I(?:$|[&#])/i.test(responseUrl.href)) return false;
+            const generatedImage = mime.startsWith("image/") &&
+              (responseUrl.pathname.includes("/gg/") || responseUrl.pathname.includes("/rd-gg/")) &&
+              /=s0-d-I(?:$|[&#])/i.test(responseUrl.href);
+            const explicitFile = !mime.startsWith("image/") && /download|file|artifact|usercontent/i.test(`${responseUrl.hostname}${responseUrl.pathname}`);
+            if (!generatedImage && !explicitFile) return false;
+          } else if (mime.startsWith("image/") && !/download|file|artifact|usercontent/i.test(`${responseUrl.hostname}${responseUrl.pathname}`)) {
+            return false;
           }
           try {
             await validateDownloadUrl(response.url(), { allowedDomainSuffixes: domains, resolveHostname: this.resolveHostname });
@@ -463,16 +560,25 @@ export class ResponseArtifactDownloader {
     if (captured.kind === "response") {
       const url = captured.response.url();
       const declaredMime = contentTypeWithoutParameters(captured.response.headers()["content-type"]);
-      const extension = declaredMime === "image/jpeg" ? ".jpg" : declaredMime === "image/webp" ? ".webp" : ".png";
+      const headers = captured.response.headers();
+      const parsed = await validateDownloadUrl(url, { allowedDomainSuffixes: domains, resolveHostname: this.resolveHostname });
+      const extension = declaredMime === "image/jpeg" ? ".jpg" : declaredMime === "image/webp" ? ".webp" : declaredMime === "image/png" ? ".png" : declaredMime === "application/pdf" ? ".pdf" : ".md";
+      const discoveredName = filenameFromHeadersOrUrl(headers, parsed);
+      const label = declaredMime.startsWith("image/") && !/\.(?:png|jpe?g|webp)$/i.test(discoveredName)
+        ? `generated-image${extension}`
+        : discoveredName === "downloaded_artifact" ? `provider-result${extension}` : discoveredName;
       return this.persistBuffer(await captured.response.body(), {
         ...options,
         url,
-        label: `generated-image${extension}`,
+        label,
       }, declaredMime);
     }
     const download = captured.download;
     const url = download.url();
-    if (url.startsWith("blob:")) {
+    if (!url) {
+      // A confirmed, turn-bound browser download may intentionally hide its
+      // transient URL. The browser-owned stream is still validated below.
+    } else if (url.startsWith("blob:")) {
       const embedded = url.slice("blob:".length);
       await validateDownloadUrl(embedded, { allowedDomainSuffixes: domains, resolveHostname: this.resolveHostname });
     } else {
@@ -531,7 +637,7 @@ export class ResponseArtifactDownloader {
         if (!response.ok()) {
           await response.dispose();
           if ([401, 403, 404, 410].includes(status)) {
-            throw new ArtifactDownloadFailure("DOWNLOAD_URL_EXPIRED", `Artifact request failed with HTTP ${status}`);
+            throw new ArtifactDownloadFailure("SIGNED_URL_EXPIRED", `Artifact request failed with HTTP ${status}`);
           }
           throw new ArtifactDownloadFailure("AUTHENTICATED_FETCH_FAILED", `Artifact request failed with HTTP ${status}`);
         }
@@ -570,6 +676,18 @@ export class ResponseArtifactDownloader {
       options.maxBytes ?? DEFAULT_MAX_DOWNLOAD_BYTES,
       options.expectedSha256,
     );
+    const existing = this.db.prepare(`
+      SELECT * FROM downloaded_artifacts
+      WHERE message_id = ? AND provider_id = ? AND sha256 = ? AND status IN ('READY', 'QUARANTINED')
+      ORDER BY downloaded_at DESC LIMIT 1
+    `).get(options.messageId, options.providerId, validated.sha256) as Record<string, unknown> | undefined;
+    if (existing) return {
+      id: String(existing.id), messageId: String(existing.message_id), projectId: String(existing.project_id),
+      providerId: String(existing.provider_id), originalUrl: String(existing.original_url || ""), sha256: String(existing.sha256),
+      localRelativePath: String(existing.local_relative_path), fileName: String(existing.file_name), mimeType: String(existing.mime_type),
+      sizeBytes: Number(existing.size_bytes), status: String(existing.status) as DownloadedArtifactRecord["status"],
+      downloadedAt: String(existing.downloaded_at),
+    };
     const ref = this.store.storeBuffer(buffer, {
       projectId: options.projectId,
       messageId: options.messageId,
