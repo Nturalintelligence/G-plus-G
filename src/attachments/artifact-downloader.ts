@@ -20,6 +20,24 @@ export interface DownloadedArtifactRecord {
   sizeBytes: number;
   status: "READY" | "DOWNLOAD_EXPIRED" | "FAILED" | "QUARANTINED";
   downloadedAt: string;
+  failureReason?: ArtifactFailureReason;
+  failureDetail?: string;
+}
+
+export type ArtifactFailureReason =
+  | "EMPTY_RESPONSE_BODY"
+  | "DOWNLOAD_URL_EXPIRED"
+  | "DOWNLOAD_CONTROL_MISSING"
+  | "PREVIEW_NOT_ORIGINAL"
+  | "AUTHENTICATED_FETCH_FAILED"
+  | "MIME_VALIDATION_FAILED"
+  | "INTEGRITY_VALIDATION_FAILED";
+
+class ArtifactDownloadFailure extends Error {
+  constructor(readonly reason: ArtifactFailureReason, message: string) {
+    super(message);
+    this.name = "ArtifactDownloadFailure";
+  }
 }
 
 export interface DownloadUrlPolicy {
@@ -39,6 +57,7 @@ export interface ArtifactDownloadOptions {
   expectedSha256?: string;
   maxRedirects?: number;
   downloadEventTimeoutMs?: number;
+  expectArtifact?: boolean;
 }
 
 export type HostnameResolver = (hostname: string) => Promise<readonly string[]>;
@@ -197,22 +216,38 @@ function validateDownloadedContent(
   maxBytes: number,
   expectedSha256?: string,
 ): { sha256: string; sniffedMime: string } {
+  if (buffer.length === 0) throw new ArtifactDownloadFailure("EMPTY_RESPONSE_BODY", "Provider returned an empty response body");
   if (buffer.length > maxBytes) throw new Error(`Downloaded artifact exceeds ${maxBytes} bytes`);
   const sha256 = crypto.createHash("sha256").update(buffer).digest("hex");
   if (expectedSha256 && sha256.toLowerCase() !== expectedSha256.toLowerCase()) {
-    throw new Error("Downloaded artifact SHA-256 does not match the approved value");
+    throw new ArtifactDownloadFailure("INTEGRITY_VALIDATION_FAILED", "Downloaded artifact SHA-256 does not match the approved value");
   }
   const sniffedMime = sniffMimeType(buffer, fileName);
-  if (!allowedMimeTypes.has(sniffedMime)) throw new Error(`Downloaded artifact MIME is blocked: ${sniffedMime}`);
+  if (!allowedMimeTypes.has(sniffedMime)) throw new ArtifactDownloadFailure("MIME_VALIDATION_FAILED", `Downloaded artifact MIME is blocked: ${sniffedMime}`);
   if (declaredMime && declaredMime !== "application/octet-stream" && !allowedMimeTypes.has(declaredMime)) {
-    throw new Error(`Response Content-Type is blocked: ${declaredMime}`);
+    throw new ArtifactDownloadFailure("MIME_VALIDATION_FAILED", `Response Content-Type is blocked: ${declaredMime}`);
   }
   const textEquivalent = new Set(["text/plain", "text/markdown"]);
   if (
     declaredMime && declaredMime !== "application/octet-stream" && declaredMime !== sniffedMime &&
     !(textEquivalent.has(declaredMime) && textEquivalent.has(sniffedMime))
-  ) throw new Error(`Response MIME mismatch: declared ${declaredMime}, detected ${sniffedMime}`);
+  ) throw new ArtifactDownloadFailure("MIME_VALIDATION_FAILED", `Response MIME mismatch: declared ${declaredMime}, detected ${sniffedMime}`);
   return { sha256, sniffedMime };
+}
+
+function safeFailureDetail(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error);
+  return raw.replace(/https?:\/\/\S+/gi, "[redacted-url]").replace(/[?&](?:token|sig|signature|auth)=[^\s&]+/gi, "[redacted]").slice(0, 300);
+}
+
+function failureReason(error: unknown, fallback: ArtifactFailureReason): ArtifactFailureReason {
+  if (error instanceof ArtifactDownloadFailure) return error.reason;
+  const message = error instanceof Error ? error.message : String(error);
+  if (/HTTP (?:401|403|404|410)|expired|ист[её]к/i.test(message)) return "DOWNLOAD_URL_EXPIRED";
+  if (/MIME|Content-Type/i.test(message)) return "MIME_VALIDATION_FAILED";
+  if (/SHA-256|integrity/i.test(message)) return "INTEGRITY_VALIDATION_FAILED";
+  if (/empty|0 bytes/i.test(message)) return "EMPTY_RESPONSE_BODY";
+  return fallback;
 }
 
 export class ResponseArtifactDownloader {
@@ -251,7 +286,7 @@ export class ResponseArtifactDownloader {
             anchor.getAttribute("data-testid"),
           ].filter(Boolean).join(" ");
           const explicitlyDownloadable = anchor.hasAttribute("download") || /download|file|attachment|скач|файл/i.test(accessibleName);
-          if (href?.startsWith("https://") && explicitlyDownloadable) {
+          if ((href?.startsWith("https://") || href?.startsWith("blob:https://")) && explicitlyDownloadable) {
             results.push({ label: anchor.textContent?.trim() || "Downloadable File", url: href, isImage: false });
           }
         });
@@ -273,9 +308,15 @@ export class ResponseArtifactDownloader {
     const records: DownloadedArtifactRecord[] = [];
     for (const candidate of unique) {
       try {
-        records.push(await this.downloadArtifactSsrfSafe(page, { ...options, url: candidate.url, label: candidate.label }));
-      } catch {
-        records.push(this.persistFailure({ ...options, url: candidate.url, label: candidate.label }));
+        records.push(candidate.url.startsWith("blob:")
+          ? await this.downloadBlobFromPage(page, { ...options, url: candidate.url, label: candidate.label })
+          : await this.downloadArtifactSsrfSafe(page, { ...options, url: candidate.url, label: candidate.label }));
+      } catch (error) {
+        records.push(this.persistFailure(
+          { ...options, url: candidate.url, label: candidate.label },
+          failureReason(error, "AUTHENTICATED_FETCH_FAILED"),
+          error,
+        ));
       }
     }
     const turn = page.locator(turnSelector).last();
@@ -294,11 +335,15 @@ export class ResponseArtifactDownloader {
     for (let index = 0; index < count; index += 1) {
       const control = controls.nth(index);
       const href = await control.getAttribute("href").catch(() => null);
-      if (href?.startsWith("https://") && unique.some((candidate) => candidate.url === href)) continue;
+      if (href && unique.some((candidate) => candidate.url === href)) continue;
       try {
         records.push(await this.captureDownloadFromLocator(page, control, options));
-      } catch {
-        records.push(this.persistFailure({ ...options, url: href?.startsWith("https://") ? href : "", label: await control.textContent().catch(() => null) || "downloaded_artifact" }));
+      } catch (error) {
+        records.push(this.persistFailure(
+          { ...options, url: href?.startsWith("https://") ? href : "", label: await control.textContent().catch(() => null) || "" },
+          failureReason(error, "AUTHENTICATED_FETCH_FAILED"),
+          error,
+        ));
       }
     }
     // Gemini may render a generated file as an assistant-bound card whose
@@ -319,18 +364,64 @@ export class ResponseArtifactDownloader {
         ].join(", "));
         await expandedControls.first().waitFor({ state: "visible", timeout: 3_000 }).catch(() => undefined);
         const expandedCount = Math.min(await expandedControls.count().catch(() => 0), 3);
+        if (expandedCount === 0) {
+          records.push(this.persistFailure(
+            { ...options, url: "", label: "" },
+            "PREVIEW_NOT_ORIGINAL",
+            new Error("Gemini preview did not expose an original download control"),
+          ));
+        }
         for (let index = 0; index < expandedCount; index += 1) {
           const control = expandedControls.nth(index);
           try {
             records.push(await this.captureDownloadFromLocator(page, control, options));
             break;
-          } catch {
-            records.push(this.persistFailure({ ...options, url: "", label: "downloaded_artifact" }));
+          } catch (error) {
+            records.push(this.persistFailure(
+              { ...options, url: "", label: "" },
+              failureReason(error, "AUTHENTICATED_FETCH_FAILED"),
+              error,
+            ));
           }
         }
       }
     }
+    if (records.length === 0 && options.expectArtifact) {
+      records.push(this.persistFailure(
+        { ...options, url: "", label: "" },
+        "DOWNLOAD_CONTROL_MISSING",
+        new Error("Provider response did not expose a download control"),
+      ));
+    }
     return records;
+  }
+
+  /** Reads a provider-bound blob URL inside the authenticated page with a hard byte limit. */
+  public async downloadBlobFromPage(page: Page, options: ArtifactDownloadOptions): Promise<DownloadedArtifactRecord> {
+    const maxBytes = options.maxBytes ?? DEFAULT_MAX_DOWNLOAD_BYTES;
+    try {
+      if (!options.url.startsWith("blob:https://")) throw new Error("Only HTTPS-backed blob URLs are accepted");
+      const embedded = options.url.slice("blob:".length);
+      await validateDownloadUrl(embedded, {
+        allowedDomainSuffixes: this.allowedDomains(options.providerId, options.allowedDomainSuffixes),
+        resolveHostname: this.resolveHostname,
+      });
+      const result = await page.evaluate(async ({ url, limit }) => {
+        const response = await fetch(url);
+        if (!response.ok) throw new Error(`Blob fetch failed with HTTP ${response.status}`);
+        const bytes = new Uint8Array(await response.arrayBuffer());
+        if (bytes.byteLength === 0) throw new Error("Blob response body is empty");
+        if (bytes.byteLength > limit) throw new Error("Blob response exceeds the allowed size");
+        let binary = "";
+        for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+          binary += String.fromCharCode(...bytes.subarray(offset, Math.min(offset + 0x8000, bytes.length)));
+        }
+        return { base64: btoa(binary), mimeType: response.headers.get("content-type") || "" };
+      }, { url: options.url, limit: maxBytes });
+      return this.persistBuffer(Buffer.from(result.base64, "base64"), options, contentTypeWithoutParameters(result.mimeType));
+    } catch (error) {
+      return this.persistFailure(options, failureReason(error, "AUTHENTICATED_FETCH_FAILED"), error);
+    }
   }
 
   /**
@@ -439,7 +530,10 @@ export class ResponseArtifactDownloader {
         }
         if (!response.ok()) {
           await response.dispose();
-          throw new Error(`Artifact request failed with HTTP ${status}`);
+          if ([401, 403, 404, 410].includes(status)) {
+            throw new ArtifactDownloadFailure("DOWNLOAD_URL_EXPIRED", `Artifact request failed with HTTP ${status}`);
+          }
+          throw new ArtifactDownloadFailure("AUTHENTICATED_FETCH_FAILED", `Artifact request failed with HTTP ${status}`);
         }
         const contentLength = Number(headers["content-length"] || "0");
         if (Number.isFinite(contentLength) && contentLength > maxBytes) {
@@ -452,8 +546,8 @@ export class ResponseArtifactDownloader {
         return this.persistBuffer(buffer, { ...options, label: fileName }, contentTypeWithoutParameters(headers["content-type"]));
       }
       throw new Error("Artifact redirect loop terminated unexpectedly");
-    } catch {
-      return this.persistFailure(options);
+    } catch (error) {
+      return this.persistFailure(options, failureReason(error, "AUTHENTICATED_FETCH_FAILED"), error);
     }
   }
 
@@ -501,7 +595,7 @@ export class ResponseArtifactDownloader {
     return record;
   }
 
-  private persistFailure(options: ArtifactDownloadOptions): DownloadedArtifactRecord {
+  private persistFailure(options: ArtifactDownloadOptions, reason: ArtifactFailureReason, error?: unknown): DownloadedArtifactRecord {
     const record: DownloadedArtifactRecord = {
       id: `dl_${crypto.randomUUID()}`,
       messageId: options.messageId,
@@ -510,11 +604,13 @@ export class ResponseArtifactDownloader {
       originalUrl: urlWithoutCredentialsOrTokens(options.url),
       sha256: "",
       localRelativePath: "",
-      fileName: options.label || "downloaded_artifact",
+      fileName: options.label?.trim() || "",
       mimeType: "application/octet-stream",
       sizeBytes: 0,
       status: "FAILED",
       downloadedAt: new Date().toISOString(),
+      failureReason: reason,
+      failureDetail: safeFailureDetail(error ?? reason),
     };
     this.insertRecord(record);
     return record;
@@ -523,8 +619,8 @@ export class ResponseArtifactDownloader {
   private insertRecord(record: DownloadedArtifactRecord): void {
     this.db.prepare(`
       INSERT INTO downloaded_artifacts
-      (id, message_id, project_id, provider_id, original_url, sha256, local_relative_path, file_name, mime_type, size_bytes, status, downloaded_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (id, message_id, project_id, provider_id, original_url, sha256, local_relative_path, file_name, mime_type, size_bytes, status, downloaded_at, failure_reason, failure_detail)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       record.id,
       record.messageId,
@@ -538,6 +634,8 @@ export class ResponseArtifactDownloader {
       record.sizeBytes,
       record.status,
       record.downloadedAt,
+      record.failureReason ?? null,
+      record.failureDetail ?? null,
     );
   }
 }

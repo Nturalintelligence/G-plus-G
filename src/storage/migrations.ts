@@ -463,4 +463,12 @@ export const migrations: readonly Migration[] = [
       CREATE INDEX downloaded_artifacts_message_idx ON downloaded_artifacts(message_id, downloaded_at);
     `,
   },
+  {
+    version: 13,
+    name: "downloaded_artifact_failure_diagnostics",
+    sql: `
+      ALTER TABLE downloaded_artifacts ADD COLUMN failure_reason TEXT;
+      ALTER TABLE downloaded_artifacts ADD COLUMN failure_detail TEXT;
+    `,
+  },
 ];

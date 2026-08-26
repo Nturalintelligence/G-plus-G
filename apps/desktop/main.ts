@@ -141,7 +141,7 @@ function downloadedArtifactRefFromRow(row: Record<string, unknown>): AttachmentR
     messageId: String(row.message_id),
     projectId: String(row.project_id),
     kind: String(row.mime_type).startsWith("image/") ? "image" : "document",
-    fileName: String(row.file_name),
+    fileName: String(row.file_name || (status === "FAILED" ? "Не удалось получить файл" : "Файл провайдера")),
     mimeType: String(row.mime_type),
     sizeBytes: Number(row.size_bytes),
     sha256: String(row.sha256),
@@ -186,7 +186,9 @@ function attachmentViewsForProject(projectId: string): {
   `).all(projectId) as Array<Record<string, unknown>>;
   for (const row of downloadedRows) {
     const ref = downloadedArtifactRefFromRow(row);
-    (transcriptAttachments[ref.messageId] ??= []).push(toRendererAttachment(ref));
+    const dto = toRendererAttachment(ref);
+    const failure = row.failure_reason ? `Файл не получен: ${String(row.failure_reason)}` : undefined;
+    (transcriptAttachments[ref.messageId] ??= []).push(failure ? { ...dto, error: failure } : dto);
   }
   return {
     transcriptAttachments,

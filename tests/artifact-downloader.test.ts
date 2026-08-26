@@ -340,6 +340,101 @@ describe("ResponseArtifactDownloader deterministic download pipeline", () => {
     expect(large.status).toBe("FAILED");
   });
 
+  it("rejects an empty authenticated HTTP body with a typed failure", async () => {
+    const get = vi.fn().mockResolvedValue(response(200, { "content-type": "text/plain", "content-length": "0" }, Buffer.alloc(0)));
+    const page = { context: () => ({ request: { get } }) } as unknown as Page;
+    const result = await downloader.downloadArtifactSsrfSafe(page, {
+      projectId: "project-1", messageId: "message-empty", providerId: "gemini",
+      url: "https://gemini.google.com/download/empty.txt", label: "empty.txt",
+    });
+    expect(result).toMatchObject({ status: "FAILED", sizeBytes: 0, sha256: "", failureReason: "EMPTY_RESPONSE_BODY" });
+  });
+
+  it("classifies expired URLs and MIME mismatches", async () => {
+    const expiredPage = { context: () => ({ request: { get: vi.fn().mockResolvedValue(response(410, {}, Buffer.alloc(0))) } }) } as unknown as Page;
+    const expired = await downloader.downloadArtifactSsrfSafe(expiredPage, {
+      projectId: "project-1", messageId: "message-expired", providerId: "gemini",
+      url: "https://gemini.google.com/download/expired",
+    });
+    expect(expired.failureReason).toBe("DOWNLOAD_URL_EXPIRED");
+
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1]);
+    const mismatchPage = { context: () => ({ request: { get: vi.fn().mockResolvedValue(response(200, { "content-type": "application/pdf" }, png)) } }) } as unknown as Page;
+    const mismatch = await downloader.downloadArtifactSsrfSafe(mismatchPage, {
+      projectId: "project-1", messageId: "message-mime", providerId: "gemini",
+      url: "https://gemini.google.com/download/result.png", label: "result.png",
+    });
+    expect(mismatch.failureReason).toBe("MIME_VALIDATION_FAILED");
+  });
+
+  it("rejects a successful body whose approved SHA-256 does not match", async () => {
+    const body = Buffer.from("integrity fixture");
+    const page = { context: () => ({ request: { get: vi.fn().mockResolvedValue(response(200, { "content-type": "text/plain" }, body)) } }) } as unknown as Page;
+    const result = await downloader.downloadArtifactSsrfSafe(page, {
+      projectId: "project-1", messageId: "message-integrity", providerId: "gemini",
+      url: "https://gemini.google.com/download/result.txt", label: "result.txt",
+      expectedSha256: "0".repeat(64),
+    });
+    expect(result).toMatchObject({ status: "FAILED", failureReason: "INTEGRITY_VALIDATION_FAILED", sha256: "", sizeBytes: 0 });
+  });
+
+  it("distinguishes a Gemini preview from an original and a missing control", async () => {
+    const turn = {
+      count: async () => 1,
+      evaluate: async () => [],
+      locator: (selector: string) => selector.includes("open-button")
+        ? { first: () => ({ count: async () => 1, click: vi.fn().mockResolvedValue(undefined) }) }
+        : { count: async () => 0 },
+    };
+    const page = {
+      locator: (selector: string) => selector === ".bound-assistant"
+        ? { last: () => turn }
+        : { first: () => ({ waitFor: vi.fn().mockRejectedValue(new Error("missing")) }), count: async () => 0 },
+      waitForTimeout: vi.fn().mockResolvedValue(undefined),
+    } as unknown as Page;
+    const preview = await downloader.downloadTurnArtifactsFromPage(page, ".bound-assistant", {
+      projectId: "project-1", messageId: "message-preview", providerId: "gemini", expectArtifact: true,
+    });
+    expect(preview).toHaveLength(1);
+    expect(preview[0]).toMatchObject({ status: "FAILED", failureReason: "PREVIEW_NOT_ORIGINAL", fileName: "" });
+
+    const noExpandTurn = { ...turn, locator: () => ({ count: async () => 0, first: () => ({ count: async () => 0 }) }) };
+    const missingPage = { locator: () => ({ last: () => noExpandTurn }) } as unknown as Page;
+    const missing = await downloader.downloadTurnArtifactsFromPage(missingPage, ".bound-assistant", {
+      projectId: "project-1", messageId: "message-missing", providerId: "gemini", expectArtifact: true,
+    });
+    expect(missing[0]?.failureReason).toBe("DOWNLOAD_CONTROL_MISSING");
+  });
+
+  it("accepts a bounded blob download stream and computes SHA-256", async () => {
+    const text = Buffer.from("blob result");
+    const download = {
+      url: () => "blob:https://gemini.google.com/fixture-id",
+      suggestedFilename: () => "blob-result.txt",
+      createReadStream: async () => Readable.from([text]),
+    };
+    const page = { waitForEvent: vi.fn().mockResolvedValue(download) } as unknown as Page;
+    const result = await downloader.captureDownloadFromLocator(page, { click: vi.fn().mockResolvedValue(undefined) } as unknown as Locator, {
+      projectId: "project-1", messageId: "message-blob", providerId: "gemini",
+    });
+    expect(result).toMatchObject({ status: "READY", fileName: "blob-result.txt", sizeBytes: text.length });
+    expect(result.sha256).toHaveLength(64);
+  });
+
+  it("reads an explicit blob result in the authenticated provider page context", async () => {
+    const text = Buffer.from("page-context blob");
+    const page = {
+      evaluate: vi.fn().mockResolvedValue({ base64: text.toString("base64"), mimeType: "text/plain" }),
+    } as unknown as Page;
+    const result = await downloader.downloadBlobFromPage(page, {
+      projectId: "project-1", messageId: "message-blob-page", providerId: "gemini",
+      url: "blob:https://gemini.google.com/provider-result", label: "provider-result.txt",
+    });
+    expect(result).toMatchObject({ status: "READY", fileName: "provider-result.txt", sizeBytes: text.length });
+    expect(result.sha256).toHaveLength(64);
+    expect(page.evaluate).toHaveBeenCalledOnce();
+  });
+
   it("uses Playwright download event and an authenticated-context stream first", async () => {
     const pdf = Buffer.from("%PDF-1.7\ndownload-event");
     const download = {

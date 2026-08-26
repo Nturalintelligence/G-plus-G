@@ -107,10 +107,13 @@ function MessageAttachments({ files, onPreview }: { files: AttachmentRefView[]; 
   return <div className="message-attachments">
     {files.map((file) => (
       <div className="message-attachment-card" key={file.id}>
-        <button type="button" className="message-attachment-open" onClick={() => file.previewUrl ? onPreview(file.previewUrl) : void window.orchestrator.attachments.open(file.id)}>
+        {file.status === "FAILED" ? <div className="message-attachment-open" role="status">
+          <AttachmentIcon />
+          <span><strong>{file.fileName || "Не удалось получить файл"}</strong><small>{file.error || "Файл провайдера не прошёл проверку загрузки"}</small></span>
+        </div> : <button type="button" className="message-attachment-open" onClick={() => file.previewUrl ? onPreview(file.previewUrl) : void window.orchestrator.attachments.open(file.id)}>
           {file.previewUrl ? <img src={file.previewUrl} alt="" /> : <AttachmentIcon />}
           <span><strong>{file.fileName}</strong><small>{file.source !== "user" ? `Файл от ${file.source} · ` : ""}{file.mimeType} · {formatAttachmentSize(file.sizeBytes)} · {file.status}</small></span>
-        </button>
+        </button>}
         {file.source !== "user" && file.status === "READY" ? (
           <button type="button" className="message-attachment-save" onClick={() => void window.orchestrator.attachments.saveAs(file.id)}>Сохранить как…</button>
         ) : null}

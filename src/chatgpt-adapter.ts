@@ -459,6 +459,7 @@ export class ChatGptAdapter implements ModelAdapter {
           projectId: responseTarget.projectId,
           messageId: responseTarget.messageId,
           providerId: this.providerId,
+          expectArtifact: true,
         }));
       }
     } catch {

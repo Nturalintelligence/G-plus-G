@@ -39,7 +39,10 @@ describe("SQLite project state", () => {
       { version: 10 },
       { version: 11 },
       { version: 12 },
+      { version: 13 },
     ]);
+    const artifactColumns = database.raw.prepare("PRAGMA table_info(downloaded_artifacts)").all() as Array<{ name: string }>;
+    expect(artifactColumns.map((column) => column.name)).toEqual(expect.arrayContaining(["failure_reason", "failure_detail"]));
   });
 
   it("persists the shared project transcript", () => {
