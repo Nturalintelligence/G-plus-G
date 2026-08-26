@@ -2206,6 +2206,31 @@ fieldset label textarea {
   gap: 20px;
 }
 
+.settings-content.models-catalog-content {
+  overflow: hidden;
+}
+
+.models-catalog-section {
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+  gap: 0;
+}
+
+.models-catalog-header {
+  position: relative;
+  z-index: 2;
+  flex: 0 0 auto;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--bg-modal);
+  box-shadow: 0 8px 14px -14px rgba(0, 0, 0, 0.65);
+}
+
+.models-catalog-header h2 {
+  margin-top: 0;
+}
+
 .settings-dialog-footer {
   padding: 14px 24px;
   border-top: 1px solid var(--border-color);
@@ -2326,7 +2351,14 @@ fieldset label textarea {
 .models-settings-list {
   display: flex;
   flex-direction: column;
+  min-height: 0;
+  flex: 1 1 auto;
   gap: 8px;
+  padding-top: 12px;
+  padding-right: 4px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .model-setting-card {
@@ -2363,11 +2395,8 @@ fieldset label textarea {
 }
 
 .models-filter-toolbar {
-  position: sticky;
-  top: 0;
-  z-index: 10;
   background: var(--bg-modal);
-  padding-bottom: 12px;
+  padding-top: 12px;
   display: flex;
   flex-direction: column;
   gap: 10px;

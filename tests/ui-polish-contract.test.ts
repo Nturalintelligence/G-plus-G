@@ -118,4 +118,16 @@ describe("Phase B.1 UI contracts", () => {
     expect(settingsModal).toContain("Перепривязать диалог");
     expect(styles).toContain(".provider-capabilities");
   });
+
+  it("clips the model catalog beneath an opaque fixed header", () => {
+    expect(settingsModal).toContain('models-catalog-content');
+    expect(settingsModal).toContain('models-catalog-header');
+    expect(settingsModal).toContain('models-settings-list');
+    expect(styles).toMatch(/\.settings-content\.models-catalog-content\s*\{[^}]*overflow:\s*hidden;/);
+    expect(styles).toMatch(/\.models-catalog-section\s*\{[^}]*min-height:\s*0;[^}]*overflow:\s*hidden;/);
+    expect(styles).toMatch(/\.models-catalog-header\s*\{[^}]*z-index:\s*2;/);
+    expect(styles).toMatch(/\.models-catalog-header\s*\{[^}]*border-bottom:[^}]*background:\s*var\(--bg-modal\);/);
+    expect(styles).toMatch(/\.models-settings-list\s*\{[^}]*min-height:\s*0;[^}]*overflow-x:\s*hidden;[^}]*overflow-y:\s*auto;/);
+    expect(styles).not.toMatch(/\.model-setting-card\s*\{[^}]*z-index:/);
+  });
 });

@@ -110,7 +110,7 @@ export function SettingsModal({
             ))}
           </aside>
 
-          <main className="settings-content">
+          <main className={`settings-content ${activeTab === "models" ? "models-catalog-content" : ""}`}>
             {/* Tab 1: Profile */}
             {activeTab === "profile" && (
               <section className="settings-section">
@@ -153,14 +153,13 @@ export function SettingsModal({
 
             {/* Tab 2: Models & Auth */}
             {activeTab === "models" && (
-              <section className="settings-section">
-                <h2>Модели ИИ и управление сессиями</h2>
-                <p className="section-description">
-                  Авторизуйтесь в браузерных сессиях ИИ-провайдеров и настройте персональные роли.
-                </p>
-
-                {/* Filter Toolbar */}
-                <div className="models-filter-toolbar">
+              <section className="settings-section models-catalog-section">
+                <div className="models-catalog-header">
+                  <h2>Модели ИИ и управление сессиями</h2>
+                  <p className="section-description">
+                    Авторизуйтесь в браузерных сессиях ИИ-провайдеров и настройте персональные роли.
+                  </p>
+                  <div className="models-filter-toolbar">
                   <input
                     type="search"
                     className="models-search-input"
@@ -184,6 +183,7 @@ export function SettingsModal({
                       className={`filter-chip ${modelFilter === "experimental" ? "active" : ""}`}
                       onClick={() => setModelFilter("experimental")}
                     >Экспериментальные</button>
+                  </div>
                   </div>
                 </div>
 
