@@ -443,17 +443,9 @@ export class ChatGptAdapter implements ModelAdapter {
     const response = await this.waitForBoundResponse(before, channel);
 
     const extractedArtifacts = [];
-    const extractedLinks: Array<{ label: string; url: string; downloadable: boolean }> = [];
 
     try {
       const downloader = this.artifactDatabase ? new ResponseArtifactDownloader(this.artifactDatabase) : null;
-      const items = await (downloader
-        ? downloader.extractTurnArtifactsFromPage(page, '[data-message-author-role="assistant"]')
-        : new ResponseArtifactDownloader({ prepare: () => ({ run: () => undefined }) } as any)
-            .extractTurnArtifactsFromPage(page, '[data-message-author-role="assistant"]'));
-      for (const item of items) {
-        extractedLinks.push({ label: item.label, url: item.url, downloadable: !item.isImage });
-      }
       if (downloader && responseTarget) {
         extractedArtifacts.push(...await downloader.downloadTurnArtifactsFromPage(page, '[data-message-author-role="assistant"]', {
           projectId: responseTarget.projectId,
@@ -471,7 +463,7 @@ export class ChatGptAdapter implements ModelAdapter {
       responseFingerprint: response.fingerprint,
       elapsedMs: Date.now() - startedAt,
       artifacts: extractedArtifacts,
-      links: extractedLinks,
+      links: [],
     };
   }
 
@@ -548,6 +540,15 @@ export class ChatGptAdapter implements ModelAdapter {
     const generation = await this.requirePage().getByRole("button", { name: /stop generating|остановить создание/i }).isVisible().catch(() => false);
     if (generation) throw new TurnTimeoutError("ChatGPT ещё генерирует результат; поле ввода временно недоступно");
     throw new AmbiguousElementError("Поле ввода ChatGPT не найдено или перекрыто; возможно, интерфейс провайдера изменился");
+  }
+
+  public async rescanResponseArtifacts(target: { projectId: string; messageId: string }) {
+    if (!this.artifactDatabase) throw new Error("Artifact database is unavailable");
+    const page = await this.ensurePage();
+    await this.waitUntilReady();
+    return new ResponseArtifactDownloader(this.artifactDatabase).downloadTurnArtifactsFromPage(
+      page, '[data-message-author-role="assistant"]', { ...target, providerId: this.providerId, expectArtifact: true },
+    );
   }
 
   private async captureResponses(): Promise<ResponseSnapshot[]> {

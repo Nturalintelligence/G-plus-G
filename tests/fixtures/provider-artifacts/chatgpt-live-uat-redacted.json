@@ -1,0 +1,1 @@
+{"providerId":"chatgpt","providerOrigin":"https://chatgpt.com","boundTurn":"latest assistant turn after baseline","elements":[{"tagName":"button","ariaLabel":"Скачать файл","rawReferenceKind":"NONE","source":"DOWNLOAD_CONTROL"}],"observedFailure":"DOWNLOAD_REQUIRES_UI_EVENT","containsPromptOrResponseText":false,"containsSignedUrl":false}
