@@ -1141,7 +1141,7 @@ function App(): React.JSX.Element {
           </button>
         </div>
       ) : null}
-      <div className={`layout ${!sidebarOpen ? "collapsed-sidebar" : ""} ${inspectorOpen ? "has-inspector" : ""}`}>
+      <div id="application-viewport" className={`layout ${!sidebarOpen ? "collapsed-sidebar" : ""} ${inspectorOpen ? "has-inspector" : ""}`}>
         {sidebarOpen ? (
           <aside className="sidebar-pane">
             <div className="sidebar-header">
@@ -1835,7 +1835,7 @@ function App(): React.JSX.Element {
         document.body,
       ) : null}
 
-      {specHelpOpen ? createPortal(<SpecificationHelpModal onClose={closeSpecHelp}/>, document.body) : null}
+      {specHelpOpen ? createPortal(<SpecificationHelpModal onClose={closeSpecHelp}/>, document.getElementById("application-viewport") ?? document.body) : null}
 
       {webChatsDrawerOpen ? (
         <div className="modal-backdrop" onClick={() => setWebChatsDrawerOpen(false)}>

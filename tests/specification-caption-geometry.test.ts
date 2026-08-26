@@ -6,8 +6,11 @@ describe("specification help caption geometry", () => {
 
   it("uses the Windows title-bar overlay metric for the application viewport", () => {
     expect(css).toMatch(/--titlebar-height:\s*env\(titlebar-area-height,\s*56px\)/);
-    expect(css).toMatch(/\.spec-help-backdrop\s*\{[^}]*inset:\s*var\(--titlebar-height\)\s+0\s+0/s);
+    expect(css).toMatch(/\.spec-help-backdrop\s*\{[^}]*position:\s*absolute;[^}]*inset:\s*0/s);
     expect(css).toMatch(/\.layout\s*\{[^}]*height:\s*calc\(100vh\s*-\s*var\(--titlebar-height\)\)/s);
+    const renderer = readFileSync("apps/desktop/renderer/main.tsx", "utf8");
+    expect(renderer).toContain('id="application-viewport"');
+    expect(renderer).toContain('document.getElementById("application-viewport") ?? document.body');
   });
 
   it("keeps the modal close control outside the drag region", () => {

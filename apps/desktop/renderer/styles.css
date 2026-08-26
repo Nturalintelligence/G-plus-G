@@ -433,6 +433,8 @@ h2 {
   min-width: 0;
   max-width: 100%;
   height: calc(100vh - var(--titlebar-height));
+  position: relative;
+  isolation: isolate;
   overflow: hidden;
 }
 
@@ -1734,7 +1736,7 @@ fieldset label textarea {
 .spec-onboarding div { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
 .spec-onboarding button { padding: 5px 7px; font-size: 11px; }
 
-.spec-help-backdrop { inset: var(--titlebar-height) 0 0; }
+.spec-help-backdrop { position: absolute; inset: 0; }
 .spec-help-modal { width: min(1080px, calc(100vw - 40px)); height: min(800px, calc(100% - 40px)); min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; overflow: hidden; border: 1px solid var(--border-modal); border-radius: 16px; background: var(--bg-modal); box-shadow: var(--shadow-modal); }
 .spec-help-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 20px; border-bottom: 1px solid var(--border-color); background: var(--bg-modal); }
 .spec-help-header h2 { margin: 0 0 4px; font-size: 16px; color: var(--text-primary); letter-spacing: 0; text-transform: none; }
@@ -1757,7 +1759,7 @@ fieldset label textarea {
 .spec-help-modal > footer { display: flex; justify-content: flex-end; padding: 12px 18px; border-top: 1px solid var(--border-color); background: var(--bg-panel); }
 .spec-help-modal > footer button, .spec-help-header button { color: var(--text-primary); background: var(--bg-input); opacity: 1; }
 .spec-help-header button { flex: 0 0 auto; -webkit-app-region: no-drag; }
-.spec-help-preview { position: fixed; inset: var(--titlebar-height) 0 0; z-index: 130; display: grid; place-items: center; padding: 20px; background: rgba(0,0,0,.78); }
+.spec-help-preview { position: absolute; inset: 0; z-index: 130; display: grid; place-items: center; padding: 20px; background: rgba(0,0,0,.78); }
 .spec-help-preview > div { position: relative; max-width: 92vw; max-height: 92vh; overflow: auto; border-radius: 12px; background: var(--bg-modal); }
 .spec-help-preview button { position: absolute; top: 8px; right: 8px; z-index: 2; }
 .spec-help-preview img { display: block; max-width: 88vw; max-height: 82vh; object-fit: contain; }
