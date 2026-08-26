@@ -2091,9 +2091,14 @@ fieldset label textarea {
 .status-dot.status-offline { background: #6b7280; }
 
 /* Settings Modal 3-Row Grid */
+.settings-modal-backdrop {
+  position: absolute;
+  inset: 0;
+}
+
 .settings-modal-dialog {
   width: min(1040px, calc(100vw - 48px));
-  height: min(760px, calc(100vh - 48px));
+  height: min(760px, calc(100% - 48px));
   background: var(--bg-modal);
   border: 1px solid var(--border-modal);
   border-radius: 16px;
@@ -2262,6 +2267,11 @@ fieldset label textarea {
   display: flex;
   flex-direction: column;
   gap: 20px;
+}
+
+.settings-dialog-header .close-btn {
+  flex: 0 0 auto;
+  -webkit-app-region: no-drag;
 }
 
 .settings-content.models-catalog-content {

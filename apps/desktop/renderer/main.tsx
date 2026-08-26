@@ -1577,8 +1577,8 @@ function App(): React.JSX.Element {
         </aside>
         ) : null}
       </div>
-      <SettingsModal
-        isOpen={settingsOpen}
+      {settingsOpen ? createPortal(<SettingsModal
+        isOpen
         onClose={() => setSettingsOpen(false)}
         settings={settings}
         setSettings={setSettings}
@@ -1597,7 +1597,7 @@ function App(): React.JSX.Element {
         conversations={current?.conversations ?? []}
         openWebChat={openProviderWebChat}
         rebindConversation={rebindProviderConversation}
-      />
+      />, document.getElementById("application-viewport") ?? document.body) : null}
 
       <DeleteProjectDialog
         isOpen={!!deleteTarget}

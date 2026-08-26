@@ -60,10 +60,17 @@ export function SettingsModal({
     setExpandedModelId(initialModelId);
   }, [isOpen, initialTab, initialModelId]);
 
+  React.useEffect(() => {
+    if (!isOpen) return;
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [isOpen, onClose]);
+
   if (!isOpen) return null;
 
   return (
-    <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
+    <div className="modal-backdrop settings-modal-backdrop" role="presentation" onMouseDown={onClose}>
       <div
         className="settings-modal-dialog"
         role="dialog"
