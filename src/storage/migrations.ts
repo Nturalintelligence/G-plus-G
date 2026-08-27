@@ -471,4 +471,17 @@ export const migrations: readonly Migration[] = [
       ALTER TABLE downloaded_artifacts ADD COLUMN failure_detail TEXT;
     `,
   },
+  {
+    version: 14,
+    name: "artifact_reacquisition_audit",
+    sql: `
+      ALTER TABLE downloaded_artifacts ADD COLUMN acquisition_id TEXT;
+      ALTER TABLE downloaded_artifacts ADD COLUMN retry_of_acquisition_id TEXT;
+      ALTER TABLE downloaded_artifacts ADD COLUMN physical_click_count INTEGER NOT NULL DEFAULT 0;
+      CREATE UNIQUE INDEX downloaded_artifacts_acquisition_idx
+        ON downloaded_artifacts(acquisition_id) WHERE acquisition_id IS NOT NULL;
+      CREATE INDEX downloaded_artifacts_retry_idx
+        ON downloaded_artifacts(retry_of_acquisition_id);
+    `,
+  },
 ];

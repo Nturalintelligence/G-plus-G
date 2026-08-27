@@ -59,6 +59,7 @@ import { AttachmentDraftLifecycle } from "../../src/attachments/attachment-draft
 import { ComposerDraftRepository, type ComposerDraftInput } from "../../src/composer-draft.js";
 import { ProjectTrashService } from "../../src/project-trash.js";
 import { loadPersistedProviderArtifactRows } from "../../src/attachments/persisted-artifact-hydration.js";
+import { ReacquisitionAuthorization, validateReacquisitionTarget } from "../../src/attachments/reacquisition-authorization.js";
 
 let mainWindow: BrowserWindow | null = null;
 let database: AppDatabase | null = null;
@@ -67,6 +68,8 @@ let activeOrchestrationAdapters: Map<string, ModelAdapter> | null = null;
 const activeLoginAdapters = new Map<string, ModelAdapter>();
 let activeInteractiveLogin: { provider: string; promise: Promise<any> } | null = null;
 let providerOperationActive = false;
+let activeProjectId: string | null = null;
+const reacquisitionAuthorization = new ReacquisitionAuthorization();
 let quitAfterCleanup = false;
 
 protocol.registerSchemesAsPrivileged([
@@ -618,6 +621,7 @@ function registerIpc(): void {
     const repository = new ProjectRepository(db());
     const project = repository.openProject(projectId);
     if (!project) throw new Error(`Project not found: ${projectId}`);
+    activeProjectId = projectId;
     new AttachmentDraftLifecycle(db().raw).expireAndCleanup();
     const recoveredRuns = activeOrchestrator
       ? 0
@@ -1184,25 +1188,51 @@ function registerIpc(): void {
     if (providerOperationActive || activeOrchestrator || activeOrchestrationAdapters) {
       return { success: false, error: "Дождитесь завершения текущей операции провайдера" };
     }
-    const row = db().raw.prepare("SELECT * FROM downloaded_artifacts WHERE id = ? AND status = 'FAILED'").get(id) as Record<string, unknown> | undefined;
-    if (!row) return { success: false, error: "Неудачная загрузка не найдена" };
-    const providerId = parseProvider(String(row.provider_id));
-    const conversation = db().raw.prepare(
-      "SELECT id, external_ref FROM conversations WHERE project_id = ? AND provider_id = ? ORDER BY updated_at DESC LIMIT 1",
-    ).get(String(row.project_id), providerId) as { id: string; external_ref?: string } | undefined;
-    if (!conversation?.external_ref) return { success: false, error: "Диалог провайдера больше не привязан" };
-    providerOperationActive = true;
-    const adapter = createAdapter(providerId, undefined, false, db().raw);
+    const row = db().raw.prepare("SELECT * FROM downloaded_artifacts WHERE id = ?").get(id) as Record<string, unknown> | undefined;
+    const assistantTurn = row ? db().raw.prepare(`SELECT id FROM conversation_entries
+      WHERE id=? AND project_id=? AND provider_id='gemini' AND role='ASSISTANT'`).get(
+      String(row.message_id), activeProjectId,
+    ) : undefined;
+    const priorAttempts = db().raw.prepare("SELECT COUNT(*) count FROM downloaded_artifacts WHERE retry_of_acquisition_id=?")
+      .get(id) as { count: number };
+    let binding;
     try {
-      await adapter.launch();
-      await adapter.openConversation({ id: conversation.id, url: conversation.external_ref });
-      if (!adapter.rescanResponseArtifacts) return { success: false, error: "Повторная проверка не поддерживается" };
-      const records = await adapter.rescanResponseArtifacts({ projectId: String(row.project_id), messageId: String(row.message_id) });
-      const ready = records.find((record) => record.status === "READY");
-      return ready ? { success: true, artifactId: ready.id } : { success: false, error: "Провайдер показал файл, но G+G не смог безопасно его скачать" };
-    } finally {
-      providerOperationActive = false;
-      await adapter.close().catch(() => undefined);
+      binding = validateReacquisitionTarget({
+        row: row ? { id, status: String(row.status), providerId: String(row.provider_id), projectId: String(row.project_id), messageId: String(row.message_id) } : undefined,
+        activeProjectId, assistantTurnMatches: Boolean(assistantTurn), priorAttemptCount: priorAttempts.count,
+      });
+    } catch (error) { return { success: false, error: error instanceof Error ? error.message : "Повторная проверка запрещена" }; }
+    try {
+      const authorized = await reacquisitionAuthorization.runConfirmed(binding, async () => {
+        const confirmation = await dialog.showMessageBox(mainWindow!, {
+          type: "warning", title: "Повторно проверить файл Gemini",
+          message: "G+G один раз нажмёт кнопку скачивания в существующем ответе Gemini. Новое сообщение отправлено не будет.",
+          buttons: ["Продолжить", "Отмена"], defaultId: 1, cancelId: 1, noLink: true,
+        });
+        return confirmation.response === 0;
+      }, async () => {
+        const providerId = "gemini" as const;
+        const conversation = db().raw.prepare(
+          "SELECT id, external_ref FROM conversations WHERE project_id = ? AND provider_id = ? ORDER BY updated_at DESC LIMIT 1",
+        ).get(binding.projectId, providerId) as { id: string; external_ref?: string } | undefined;
+        if (!conversation?.external_ref) return { success: false, error: "Диалог провайдера больше не привязан" };
+        providerOperationActive = true;
+        const adapter = createAdapter(providerId, undefined, false, db().raw);
+        try {
+          await adapter.launch();
+          await adapter.openConversation({ id: conversation.id, url: conversation.external_ref });
+          if (!adapter.reacquireResponseArtifact) return { success: false, error: "Повторная проверка не поддерживается" };
+          const result = await adapter.reacquireResponseArtifact({ projectId: binding.projectId, messageId: binding.messageId, retryOfAcquisitionId: id });
+          const ready = result.records.find((record) => record.status === "READY");
+          return ready ? { success: true, artifactId: ready.id } : { success: false, error: "Провайдер показал файл, но G+G не смог безопасно его скачать" };
+        } finally {
+          providerOperationActive = false;
+          await adapter.close().catch(() => undefined);
+        }
+      });
+      return authorized.confirmed ? authorized.result : { success: false, error: "Повторная проверка отменена" };
+    } catch (error) {
+      return { success: false, error: error instanceof Error && /already active/.test(error.message) ? "Повторная проверка этого файла уже выполняется" : "Не удалось запустить повторную проверку" };
     }
   });
   handle("window:setTheme", (_event, theme: unknown) => {

@@ -13,6 +13,13 @@ export function loadPersistedProviderArtifactRows(
       AND ce.role = 'ASSISTANT'
       AND ce.provider_id = da.provider_id
     WHERE da.project_id = ?
+      AND (da.status <> 'FAILED' OR NOT EXISTS (
+        SELECT 1 FROM downloaded_artifacts ready
+        WHERE ready.project_id = da.project_id
+          AND ready.provider_id = da.provider_id
+          AND ready.message_id = da.message_id
+          AND ready.status = 'READY'
+      ))
     ORDER BY da.downloaded_at, da.rowid
   `).all(projectId) as Array<Record<string, unknown>>;
 }

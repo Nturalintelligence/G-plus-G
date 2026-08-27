@@ -127,4 +127,19 @@ describe("Gemini single-click artifact acquisition", () => {
     ]);
     expect(selected.click).toHaveBeenCalledOnce(); expect(first[0]?.id).toBe(second[0]?.id);
   });
+
+  it("requires an owned FAILED id for one explicit reacquisition while ordinary calls remain click-free", async () => {
+    db.raw.prepare(`INSERT INTO downloaded_artifacts
+      (id,message_id,project_id,provider_id,original_url,sha256,local_relative_path,file_name,mime_type,size_bytes,status,downloaded_at,failure_reason,failure_detail)
+      VALUES ('failed-prior',?,?,?,'','','','','application/octet-stream',0,'FAILED',?,'DOWNLOAD_TRIGGER_NO_BYTES','fixture')`)
+      .run(options.messageId, options.projectId, options.providerId, new Date().toISOString());
+    const page = new FakePage(); const selected = control(page, element("Скачать"), () => page.emit("response", response())); bind(page, [selected]);
+    const ordinary = await downloader.downloadTurnArtifactsFromPage(page as unknown as Page, ".turn", options);
+    expect(ordinary[0]?.id).toBe("failed-prior"); expect(selected.click).not.toHaveBeenCalled();
+    const retry = await downloader.reacquireTurnArtifactFromPage(page as unknown as Page, ".turn", options, "failed-prior");
+    expect(retry.retryOfAcquisitionId).toBe("failed-prior"); expect(retry.acquisition.acquisitionId).toMatch(/^acq_/);
+    expect(retry.acquisition.physicalClickCount).toBe(1); expect(retry.records[0]?.status).toBe("READY");
+    await downloader.downloadTurnArtifactsFromPage(page as unknown as Page, ".turn", options);
+    expect(selected.click).toHaveBeenCalledOnce();
+  });
 });

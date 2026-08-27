@@ -740,4 +740,21 @@ export class GeminiAdapter implements ModelAdapter {
       page, 'message-content, .model-response-text', { ...target, providerId: this.providerId, expectArtifact: true },
     );
   }
+
+  public async reacquireResponseArtifact(target: { projectId: string; messageId: string; retryOfAcquisitionId: string }) {
+    if (!this.artifactDatabase) throw new Error("Artifact database is unavailable");
+    const page = await this.ensurePage();
+    await this.waitUntilReady();
+    const result = await new ResponseArtifactDownloader(this.artifactDatabase).reacquireTurnArtifactFromPage(
+      page, 'message-content, .model-response-text',
+      { projectId: target.projectId, messageId: target.messageId, providerId: this.providerId, expectArtifact: true },
+      target.retryOfAcquisitionId,
+    );
+    return {
+      acquisitionId: result.acquisition.acquisitionId,
+      retryOfAcquisitionId: result.retryOfAcquisitionId,
+      physicalClickCount: result.acquisition.physicalClickCount,
+      records: result.records,
+    };
+  }
 }

@@ -22,6 +22,9 @@ export interface DownloadedArtifactRecord {
   downloadedAt: string;
   failureReason?: ArtifactFailureReason;
   failureDetail?: string;
+  acquisitionId?: string;
+  retryOfAcquisitionId?: string;
+  physicalClickCount?: number;
 }
 
 export type ArtifactFailureReason =
@@ -424,12 +427,46 @@ export class ResponseArtifactDownloader {
     finally { ResponseArtifactDownloader.activeAcquisitions.delete(key); }
   }
 
+  public async reacquireTurnArtifactFromPage(
+    page: Page,
+    turnSelector: string,
+    options: Omit<ArtifactDownloadOptions, "url" | "label">,
+    retryOfAcquisitionId: string,
+  ): Promise<{ acquisition: ProviderArtifactAcquisition; retryOfAcquisitionId: string; records: DownloadedArtifactRecord[] }> {
+    const previous = this.db.prepare(`SELECT id FROM downloaded_artifacts
+      WHERE id=? AND provider_id=? AND project_id=? AND message_id=? AND status='FAILED'`).get(
+      retryOfAcquisitionId, options.providerId, options.projectId, options.messageId,
+    );
+    if (!previous) throw new Error("Explicit reacquisition target is not a FAILED artifact from this provider turn");
+    const key = `explicit-retry:${options.providerId}:${options.projectId}:${options.messageId}`;
+    if (ResponseArtifactDownloader.activeAcquisitions.has(key)) throw new Error("An explicit artifact reacquisition is already active");
+    const acquisition: ProviderArtifactAcquisition = {
+      acquisitionId: `acq_${crypto.randomUUID()}`, providerId: options.providerId,
+      projectId: options.projectId, providerTurnId: options.messageId,
+      controlFingerprint: "", physicalClickCount: 0, state: "CONTROL_SELECTED",
+    };
+    const pending = this.acquireTurnArtifactOnce(page, turnSelector, options, acquisition);
+    ResponseArtifactDownloader.activeAcquisitions.set(key, pending);
+    try {
+      const records = await pending;
+      for (const record of records) {
+        this.db.prepare(`UPDATE downloaded_artifacts SET acquisition_id=?, retry_of_acquisition_id=?, physical_click_count=? WHERE id=?`)
+          .run(acquisition.acquisitionId, retryOfAcquisitionId, acquisition.physicalClickCount, record.id);
+        record.acquisitionId = acquisition.acquisitionId;
+        record.retryOfAcquisitionId = retryOfAcquisitionId;
+        record.physicalClickCount = acquisition.physicalClickCount;
+      }
+      return { acquisition, retryOfAcquisitionId, records };
+    } finally { ResponseArtifactDownloader.activeAcquisitions.delete(key); }
+  }
+
   private async acquireTurnArtifactOnce(
     page: Page,
     turnSelector: string,
     options: Omit<ArtifactDownloadOptions, "url" | "label">,
+    transaction?: ProviderArtifactAcquisition,
   ): Promise<DownloadedArtifactRecord[]> {
-    const acquisition: ProviderArtifactAcquisition = {
+    const acquisition: ProviderArtifactAcquisition = transaction ?? {
       acquisitionId: `acq_${crypto.randomUUID()}`,
       providerId: options.providerId,
       projectId: options.projectId,

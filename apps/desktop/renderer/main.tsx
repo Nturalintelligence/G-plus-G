@@ -104,6 +104,16 @@ function formatAttachmentSize(sizeBytes: number): string {
 }
 
 function MessageAttachments({ files, onPreview }: { files: AttachmentRefView[]; onPreview: (url: string) => void }): React.JSX.Element {
+  const [retrying, setRetrying] = useState<string | null>(null);
+  const [retryStatus, setRetryStatus] = useState<Record<string, string>>({});
+  const retry = async (id: string): Promise<void> => {
+    if (retrying) return;
+    setRetrying(id);
+    try {
+      const result = await window.orchestrator.attachments.retryArtifact(id);
+      setRetryStatus((current) => ({ ...current, [id]: result.success ? "Файл получен" : result.error || "Не удалось получить файл" }));
+    } finally { setRetrying(null); }
+  };
   return <div className="message-attachments">
     {files.map((file) => (
       <div className="message-attachment-card" key={file.id}>
@@ -117,7 +127,8 @@ function MessageAttachments({ files, onPreview }: { files: AttachmentRefView[]; 
         {file.source !== "user" && file.status === "READY" ? (
           <button type="button" className="message-attachment-save" onClick={() => void window.orchestrator.attachments.saveAs(file.id)}>Сохранить как…</button>
         ) : file.source !== "user" && file.status === "FAILED" ? (
-          <button type="button" className="message-attachment-save" onClick={() => void window.orchestrator.attachments.retryArtifact(file.id)}>Повторно проверить файл</button>
+          <><button type="button" className="message-attachment-save" disabled={retrying === file.id} onClick={() => void retry(file.id)}>{retrying === file.id ? "Проверяем…" : "Повторно проверить файл"}</button>
+          {retryStatus[file.id] ? <small role="status">{retryStatus[file.id]}</small> : null}</>
         ) : null}
       </div>
     ))}

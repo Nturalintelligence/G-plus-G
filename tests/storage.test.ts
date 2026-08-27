@@ -40,8 +40,12 @@ describe("SQLite project state", () => {
       { version: 11 },
       { version: 12 },
       { version: 13 },
+      { version: 14 },
     ]);
     const artifactColumns = database.raw.prepare("PRAGMA table_info(downloaded_artifacts)").all() as Array<{ name: string }>;
+    expect(artifactColumns.map((column) => column.name)).toEqual(expect.arrayContaining([
+      "acquisition_id", "retry_of_acquisition_id", "physical_click_count",
+    ]));
     expect(artifactColumns.map((column) => column.name)).toEqual(expect.arrayContaining(["failure_reason", "failure_detail"]));
   });
 

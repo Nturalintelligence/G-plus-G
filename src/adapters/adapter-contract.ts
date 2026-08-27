@@ -82,5 +82,8 @@ export interface ModelAdapter {
   recover(): Promise<RecoveryResult>;
   collectDiagnostics(): Promise<DiagnosticReport>;
   rescanResponseArtifacts?(target: { projectId: string; messageId: string }): Promise<DownloadedArtifactRecord[]>;
+  reacquireResponseArtifact?(target: { projectId: string; messageId: string; retryOfAcquisitionId: string }): Promise<{
+    acquisitionId: string; retryOfAcquisitionId: string; physicalClickCount: 0 | 1; records: DownloadedArtifactRecord[];
+  }>;
   deleteConversation?(ref: ConversationRef): Promise<boolean>;
 }

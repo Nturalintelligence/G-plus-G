@@ -46,4 +46,12 @@ describe("persisted provider artifact hydration", () => {
     appDb.raw.prepare("UPDATE downloaded_artifacts SET status='FAILED' WHERE id='failed'").run();
     expect(loadPersistedProviderArtifactRows(appDb.raw, "project-a")).toHaveLength(1);
   });
+
+  it("keeps failed history in SQLite but renders only the recovered READY artifact", () => {
+    insertArtifact("failed", "turn-gemini", "project-a", "gemini");
+    appDb.raw.prepare("UPDATE downloaded_artifacts SET status='FAILED' WHERE id='failed'").run();
+    insertArtifact("recovered", "turn-gemini", "project-a", "gemini");
+    expect(appDb.raw.prepare("SELECT COUNT(*) count FROM downloaded_artifacts WHERE message_id='turn-gemini'").get()).toMatchObject({ count: 2 });
+    expect(loadPersistedProviderArtifactRows(appDb.raw, "project-a").map((row) => row.id)).toEqual(["recovered"]);
+  });
 });
