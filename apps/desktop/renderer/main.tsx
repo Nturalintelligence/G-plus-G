@@ -256,6 +256,7 @@ function App(): React.JSX.Element {
   const specSectionTriggerRef = useRef<HTMLElement | null>(null);
   const draftHydratedProjectRef = useRef<string | null>(null);
   const draftPersistenceSuspendedRef = useRef(false);
+  const projectOpenRequestRef = useRef(0);
   const effectiveAppearanceTheme: "dark" | "light" = settings.appearance.theme === "system"
     ? (window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark")
     : settings.appearance.theme;
@@ -609,12 +610,14 @@ function App(): React.JSX.Element {
   }, [current?.project.id, task, draftMessageId, attachedFiles, mode, continuationPolicy, starter, providers, viewMode, finalizerMode, finalResponder, composerExpanded]);
 
   async function openProject(id: string): Promise<void> {
+    const requestId = ++projectOpenRequestRef.current;
     draftHydratedProjectRef.current = null;
     const [details, tasks, savedDraft] = await Promise.all([
       window.orchestrator.projects.open(id),
       window.orchestrator.cliTasks.list(id),
       window.orchestrator.composerDraft.get(id),
     ]);
+    if (requestId !== projectOpenRequestRef.current) return;
     const attachmentDraft = details.attachmentDraft;
     const attachmentOrder = new Map((savedDraft?.attachmentIds ?? []).map((attachmentId, index) => [attachmentId, index]));
     const restoredAttachments = [...(attachmentDraft?.attachments ?? [])].sort((left, right) =>
@@ -1089,6 +1092,7 @@ function App(): React.JSX.Element {
   const {
     finalEntry: explicitFinalEntry,
     visibleEntries: readyAnswerEntries,
+    artifactEntries: readyArtifactEntries,
   } = selectReadyAnswerEntries(current?.transcript ?? []);
 
   return (
@@ -1316,6 +1320,20 @@ function App(): React.JSX.Element {
                         <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml>{entry.content}</ReactMarkdown>
                         {entry.attachments?.length ? <MessageAttachments files={entry.attachments} onPreview={setPreviewImageModalUrl} /> : null}
                         <MessageCopyAction content={entry.content} copied={copiedMessageId === entry.id} onCopy={(content) => void copyMessage(entry.id, content)} />
+                      </section>
+                    ))}
+                    {readyArtifactEntries.map((entry) => (
+                      <section
+                        className={`message assistant provider-artifacts ${entry.providerId ?? ""}`}
+                        data-provider-id={entry.providerId ?? undefined}
+                        data-provider-turn-id={entry.id}
+                        key={`artifacts-${entry.id}`}
+                      >
+                        <header><strong>Файлы от {entry.providerId}</strong></header>
+                        <MessageAttachments
+                          files={(entry.attachments ?? []).filter((file) => file.source === entry.providerId)}
+                          onPreview={setPreviewImageModalUrl}
+                        />
                       </section>
                     ))}
                   </>

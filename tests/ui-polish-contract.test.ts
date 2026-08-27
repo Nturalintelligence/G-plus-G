@@ -43,6 +43,8 @@ describe("Phase B.1 UI contracts", () => {
     expect(renderer).toContain("attachments.saveAs(file.id)");
     expect(styles).toMatch(/\.message-attachment-card\s*\{[\s\S]*?max-width:\s*min\(320px, 100%\);[\s\S]*?overflow/);
     expect(styles).toContain(".message-attachment-save");
+    expect(renderer).toContain("projectOpenRequestRef");
+    expect(renderer).toContain("if (requestId !== projectOpenRequestRef.current) return");
   });
 
   it("keeps sidebar chrome fixed around a dedicated project scroll container", () => {

@@ -16,7 +16,7 @@ try {
 
   const database = new DatabaseSync(join(dataRoot, "orchestrator.sqlite"));
   const now = new Date().toISOString();
-  database.prepare("INSERT INTO conversation_entries (id, project_id, run_id, role, provider_id, round, content, created_at) VALUES (?, ?, NULL, 'ASSISTANT', 'final', 1, ?, ?)").run("entry-failed-artifact", project.id, "Ответ с недоступным файлом", now);
+  database.prepare("INSERT INTO conversation_entries (id, project_id, run_id, role, provider_id, round, content, created_at) VALUES (?, ?, NULL, 'ASSISTANT', 'gemini', 1, ?, ?)").run("entry-failed-artifact", project.id, "Ответ с недоступным файлом", now);
   database.prepare("INSERT INTO downloaded_artifacts (id, message_id, project_id, provider_id, original_url, sha256, local_relative_path, file_name, mime_type, size_bytes, status, downloaded_at, failure_reason, failure_detail) VALUES (?, ?, ?, 'gemini', '', '', '', '', 'application/octet-stream', 0, 'FAILED', ?, 'EMPTY_RESPONSE_BODY', 'Provider returned an empty response body')").run("dl-failed-artifact", "entry-failed-artifact", project.id, now);
   database.close();
 

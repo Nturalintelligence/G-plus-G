@@ -58,6 +58,7 @@ import {
 import { AttachmentDraftLifecycle } from "../../src/attachments/attachment-draft-lifecycle.js";
 import { ComposerDraftRepository, type ComposerDraftInput } from "../../src/composer-draft.js";
 import { ProjectTrashService } from "../../src/project-trash.js";
+import { loadPersistedProviderArtifactRows } from "../../src/attachments/persisted-artifact-hydration.js";
 
 let mainWindow: BrowserWindow | null = null;
 let database: AppDatabase | null = null;
@@ -130,7 +131,15 @@ function attachmentRefFromRow(row: Record<string, unknown>): AttachmentRefV1 {
 function findAttachmentRef(attachmentId: string): AttachmentRefV1 | null {
   const row = db().raw.prepare("SELECT * FROM message_attachments WHERE id = ?").get(attachmentId) as Record<string, unknown> | undefined;
   if (row) return attachmentRefFromRow(row);
-  const downloaded = db().raw.prepare("SELECT * FROM downloaded_artifacts WHERE id = ?").get(attachmentId) as Record<string, unknown> | undefined;
+  const downloaded = db().raw.prepare(`
+    SELECT da.* FROM downloaded_artifacts da
+    INNER JOIN conversation_entries ce
+      ON ce.id = da.message_id
+      AND ce.project_id = da.project_id
+      AND ce.role = 'ASSISTANT'
+      AND ce.provider_id = da.provider_id
+    WHERE da.id = ?
+  `).get(attachmentId) as Record<string, unknown> | undefined;
   return downloaded ? downloadedArtifactRefFromRow(downloaded) : null;
 }
 
@@ -179,11 +188,7 @@ function attachmentViewsForProject(projectId: string): {
       (transcriptAttachments[messageId] ??= []).push(attachmentDtoFromRow(row));
     }
   }
-  const downloadedRows = db().raw.prepare(`
-    SELECT * FROM downloaded_artifacts
-    WHERE project_id = ?
-    ORDER BY downloaded_at, rowid
-  `).all(projectId) as Array<Record<string, unknown>>;
+  const downloadedRows = loadPersistedProviderArtifactRows(db().raw, projectId);
   for (const row of downloadedRows) {
     const ref = downloadedArtifactRefFromRow(row);
     const dto = toRendererAttachment(ref);

@@ -11,6 +11,27 @@ describe("READY answer transcript", () => {
 
     expect(result.finalEntry).toBeUndefined();
     expect(result.visibleEntries.map((entry) => entry.id)).toEqual(["user"]);
+    expect(result.artifactEntries).toEqual([]);
+  });
+
+  it("restores provider artifact cards without exposing hidden intermediate text", () => {
+    const result = selectReadyAnswerEntries([
+      { id: "user", role: "USER", providerId: null },
+      { id: "chatgpt-turn", role: "ASSISTANT", providerId: "chatgpt", attachments: [{ source: "chatgpt" }] },
+      { id: "gemini-turn", role: "ASSISTANT", providerId: "gemini", attachments: [{ source: "gemini" }] },
+    ]);
+
+    expect(result.visibleEntries.map((entry) => entry.id)).toEqual(["user"]);
+    expect(result.artifactEntries.map((entry) => entry.id)).toEqual(["chatgpt-turn", "gemini-turn"]);
+  });
+
+  it("rejects cross-provider artifact attribution", () => {
+    const result = selectReadyAnswerEntries([
+      { id: "chatgpt-turn", role: "ASSISTANT", providerId: "chatgpt", attachments: [{ source: "gemini" }] },
+      { id: "synthetic", role: "ASSISTANT", providerId: "final", attachments: [{ source: "chatgpt" }] },
+    ]);
+
+    expect(result.artifactEntries).toEqual([]);
   });
 
   it("shows only the latest explicit final alongside user and system entries", () => {
