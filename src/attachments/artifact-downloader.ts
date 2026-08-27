@@ -40,7 +40,18 @@ export type ArtifactFailureReason =
   | "DOWNLOAD_REQUIRES_UI_EVENT"
   | "BLOB_EXTRACTION_FAILED"
   | "ORIGINAL_ASSET_NOT_FOUND"
-  | "DOWNLOAD_TRIGGER_NO_BYTES";
+  | "DOWNLOAD_TRIGGER_NO_BYTES"
+  | "AMBIGUOUS_DOWNLOAD_CONTROLS";
+
+export interface ProviderArtifactAcquisition {
+  acquisitionId: string;
+  providerId: string;
+  projectId: string;
+  providerTurnId: string;
+  controlFingerprint: string;
+  physicalClickCount: 0 | 1;
+  state: "CONTROL_SELECTED" | "LISTENERS_ARMED" | "CLICK_COMMITTED" | "CAPTURE_WAITING" | "VALIDATING" | "READY" | "FAILED";
+}
 
 export type ArtifactDownloadState =
   | "DOWNLOAD_CONTROL_READY"
@@ -324,6 +335,7 @@ function failureReason(error: unknown, fallback: ArtifactFailureReason): Artifac
 export class ResponseArtifactDownloader {
   private readonly store: LocalArtifactStore;
   private readonly resolveHostname: HostnameResolver;
+  private static readonly activeAcquisitions = new Map<string, Promise<DownloadedArtifactRecord[]>>();
 
   constructor(
     private readonly db: DatabaseSync,
@@ -398,103 +410,144 @@ export class ResponseArtifactDownloader {
     turnSelector: string,
     options: Omit<ArtifactDownloadOptions, "url" | "label">,
   ): Promise<DownloadedArtifactRecord[]> {
-    const providerId = options.providerId as "chatgpt" | "gemini";
-    const candidates = await this.discoverTurnArtifactCandidates(page, turnSelector, providerId);
-    const unique = [...new Map(candidates.map((item) => [item.rawReference, item])).values()];
-    const records: DownloadedArtifactRecord[] = [];
+    const key = `${options.providerId}:${options.projectId}:${options.messageId}`;
+    const persisted = this.db.prepare(`SELECT * FROM downloaded_artifacts
+      WHERE provider_id=? AND project_id=? AND message_id=? ORDER BY downloaded_at, rowid`).all(
+      options.providerId, options.projectId, options.messageId,
+    ) as Array<Record<string, unknown>>;
+    if (persisted.length > 0) return persisted.map((row) => this.recordFromRow(row));
+    const active = ResponseArtifactDownloader.activeAcquisitions.get(key);
+    if (active) return active;
+    const acquisition = this.acquireTurnArtifactOnce(page, turnSelector, options);
+    ResponseArtifactDownloader.activeAcquisitions.set(key, acquisition);
+    try { return await acquisition; }
+    finally { ResponseArtifactDownloader.activeAcquisitions.delete(key); }
+  }
+
+  private async acquireTurnArtifactOnce(
+    page: Page,
+    turnSelector: string,
+    options: Omit<ArtifactDownloadOptions, "url" | "label">,
+  ): Promise<DownloadedArtifactRecord[]> {
+    const acquisition: ProviderArtifactAcquisition = {
+      acquisitionId: `acq_${crypto.randomUUID()}`,
+      providerId: options.providerId,
+      projectId: options.projectId,
+      providerTurnId: options.messageId,
+      controlFingerprint: "",
+      physicalClickCount: 0,
+      state: "CONTROL_SELECTED",
+    };
     const turn = page.locator(turnSelector).last();
-    // CSS `i` matching is not reliable for Cyrillic case folding in Chromium.
-    // Keep explicit upper/lower Russian stems so `Скачать …` is not missed.
     const controls = turn.locator([
-      "a[download]",
-      'button[aria-label*="download" i]',
-      'button[aria-label*="скач"]',
-      'button[aria-label*="Скач"]',
-      'a[aria-label*="download" i]',
-      'a[aria-label*="скач"]',
-      'a[aria-label*="Скач"]',
+      "a[download]", 'button[aria-label*="download" i]', 'button[aria-label*="скач"]',
+      'button[aria-label*="Скач"]', 'a[aria-label*="download" i]',
+      'a[aria-label*="скач"]', 'a[aria-label*="Скач"]',
     ].join(", "));
-    const count = Math.min(await controls.count().catch(() => 0), 10);
+    const byFingerprint = new Map<string, Locator>();
+    const count = Math.min(await controls.count().catch(() => 0), 20);
     for (let index = 0; index < count; index += 1) {
       const control = controls.nth(index);
-      const href = await control.getAttribute("href").catch(() => null);
-      try {
-        records.push(await this.captureDownloadFromLocator(page, control, options));
-        if (records.at(-1)?.status === "READY") return records;
-      } catch (error) {
-        records.push(this.persistFailure(
-          { ...options, url: href?.startsWith("https://") ? href : "", label: await control.textContent().catch(() => null) || "" },
-          failureReason(error, "AUTHENTICATED_FETCH_FAILED"),
-          error,
-        ));
+      if (typeof (control as any).isVisible === "function" && !(await (control as any).isVisible().catch(() => false))) continue;
+      if (typeof (control as any).isEnabled === "function" && !(await (control as any).isEnabled().catch(() => false))) continue;
+      const fingerprint = await this.controlFingerprint(control, index);
+      if (!byFingerprint.has(fingerprint)) byFingerprint.set(fingerprint, control);
+    }
+    if (byFingerprint.size > 1) {
+      acquisition.state = "FAILED";
+      return [this.persistFailure(
+        { ...options, url: "", label: "" }, "AMBIGUOUS_DOWNLOAD_CONTROLS",
+        new Error(`Multiple distinct download controls inside provider turn: ${byFingerprint.size}`),
+      )];
+    }
+    const selected = byFingerprint.values().next().value as Locator | undefined;
+    if (selected) {
+      acquisition.controlFingerprint = byFingerprint.keys().next().value || "";
+      acquisition.state = "LISTENERS_ARMED";
+      const guardedControl = new Proxy(selected as any, {
+        get(target, property) {
+          if (property === "click") return async () => {
+            if (acquisition.physicalClickCount !== 0 || acquisition.state !== "LISTENERS_ARMED") {
+              throw new Error("Artifact acquisition physical click already committed");
+            }
+            acquisition.physicalClickCount = 1;
+            acquisition.state = "CLICK_COMMITTED";
+            return target.click();
+          };
+          const value = target[property];
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      }) as Locator;
+      const captureOptions = {
+        ...options,
+        onStateChange: (state: ArtifactDownloadState) => {
+          if (state === "CAPTURE_WAITING") acquisition.state = "CAPTURE_WAITING";
+          else if (state === "ARTIFACT_VALIDATING") acquisition.state = "VALIDATING";
+          else if (state === "ARTIFACT_STORED") acquisition.state = "READY";
+          else if (state === "DOWNLOAD_TRIGGER_NO_BYTES") acquisition.state = "FAILED";
+          options.onStateChange?.(state);
+        },
+      };
+      try { return [await this.captureDownloadFromLocator(page, guardedControl, captureOptions)]; }
+      catch (error) {
+        acquisition.state = "FAILED";
+        return [this.persistFailure(
+          { ...options, url: "", label: await selected.textContent().catch(() => null) || "" },
+          failureReason(error, "AUTHENTICATED_FETCH_FAILED"), error,
+        )];
       }
     }
-    // Direct URL replay is a lower-priority fallback after a confirmed control.
-    for (const candidate of unique) {
-      if (!candidate.rawReference) continue;
-      let normalized: { kind: ProviderArtifactCandidate["rawReferenceKind"]; url: string };
+
+    // A bound explicit URL needs no physical click. Process at most one
+    // deterministic reference; ambiguous references fail closed.
+    const providerId = options.providerId as "chatgpt" | "gemini";
+    const candidates = await this.discoverTurnArtifactCandidates(page, turnSelector, providerId);
+    const referenced = [...new Map(candidates.filter((item) => item.rawReference).map((item) => [item.rawReference, item])).values()];
+    if (referenced.length > 1) {
+      acquisition.state = "FAILED";
+      return [this.persistFailure({ ...options, url: "", label: "" }, "AMBIGUOUS_DOWNLOAD_CONTROLS", new Error("Multiple distinct artifact references inside provider turn"))];
+    }
+    const candidate = referenced[0];
+    if (candidate?.rawReference) {
       try {
-        normalized = normalizeProviderArtifactReference(options.providerId, candidate.rawReference);
+        acquisition.state = "VALIDATING";
+        const normalized = normalizeProviderArtifactReference(options.providerId, candidate.rawReference);
         const candidateOptions = { ...options, url: normalized.url, ...(candidate.expectedFileName ? { label: candidate.expectedFileName } : {}) };
-        records.push(normalized.kind === "BLOB_URL"
-          ? await this.downloadBlobFromPage(page, candidateOptions)
-          : await this.downloadArtifactSsrfSafe(page, candidateOptions));
-        if (records.at(-1)?.status === "READY") return records;
+        const record = normalized.kind === "BLOB_URL" ? await this.downloadBlobFromPage(page, candidateOptions) : await this.downloadArtifactSsrfSafe(page, candidateOptions);
+        acquisition.state = record.status === "READY" ? "READY" : "FAILED";
+        return [record];
       } catch (error) {
-        records.push(this.persistFailure(
-          { ...options, url: "", ...(candidate.expectedFileName ? { label: candidate.expectedFileName } : {}) },
-          failureReason(error, "MALFORMED_PROVIDER_URL"), error,
-        ));
+        acquisition.state = "FAILED";
+        return [this.persistFailure({ ...options, url: "", label: candidate.expectedFileName || "" }, failureReason(error, "MALFORMED_PROVIDER_URL"), error)];
       }
     }
-    // Gemini may render a generated file as an assistant-bound card whose
-    // Open action reveals the actual download control in an app-level overlay.
-    // Scope the expansion trigger to the bound turn, then scope the resulting
-    // control to an explicit accessible download action. This is never a send
-    // or retry operation.
-    if (options.providerId === "gemini" && !records.some((record) => record.status === "READY")) {
-      const expand = turn.locator('[data-test-id="open-button"]').first();
-      if ((await expand.count().catch(() => 0)) === 1) {
-        await expand.click().catch(() => undefined);
-        await page.waitForTimeout(250).catch(() => undefined);
-        const expandedControls = page.locator([
-          '[role="button"][aria-label="Скачать"]',
-          '[role="button"][aria-label="Download"]',
-          'button[aria-label="Скачать"]',
-          'button[aria-label="Download"]',
-        ].join(", "));
-        await expandedControls.first().waitFor({ state: "visible", timeout: 3_000 }).catch(() => undefined);
-        const expandedCount = Math.min(await expandedControls.count().catch(() => 0), 3);
-        if (expandedCount === 0) {
-          records.push(this.persistFailure(
-            { ...options, url: "", label: "" },
-            "PREVIEW_NOT_ORIGINAL",
-            new Error("Gemini preview did not expose an original download control"),
-          ));
+    acquisition.state = "FAILED";
+    return options.expectArtifact ? [this.persistFailure(
+      { ...options, url: "", label: "" }, "DOWNLOAD_CONTROL_MISSING",
+      new Error("Provider response did not expose one unambiguous download control"),
+    )] : [];
+  }
+
+  private async controlFingerprint(control: Locator, index: number): Promise<string> {
+    if (typeof (control as any).evaluate === "function") {
+      const evaluated = await (control as any).evaluate((element: Element) => {
+        const segments: string[] = [];
+        let current: Element | null = element;
+        while (current && segments.length < 6) {
+          const parent: Element | null = current.parentElement;
+          const siblingIndex = parent ? Array.from(parent.children).indexOf(current) : 0;
+          segments.unshift(`${current.tagName.toLowerCase()}:${siblingIndex}`);
+          current = parent;
         }
-        for (let index = 0; index < expandedCount; index += 1) {
-          const control = expandedControls.nth(index);
-          try {
-            records.push(await this.captureDownloadFromLocator(page, control, options));
-            break;
-          } catch (error) {
-            records.push(this.persistFailure(
-              { ...options, url: "", label: "" },
-              failureReason(error, "AUTHENTICATED_FETCH_FAILED"),
-              error,
-            ));
-          }
-        }
-      }
+        return [element.tagName.toLowerCase(), element.getAttribute("role") || "", element.getAttribute("aria-label") || "", element.getAttribute("download") || "", segments.join("/")].join("|");
+      }).catch(() => null);
+      if (typeof evaluated === "string") return evaluated;
     }
-    if (records.length === 0 && options.expectArtifact) {
-      records.push(this.persistFailure(
-        { ...options, url: "", label: "" },
-        "DOWNLOAD_CONTROL_MISSING",
-        new Error("Provider response did not expose a download control"),
-      ));
-    }
-    return records;
+    const attr = async (name: string) => typeof (control as any).getAttribute === "function"
+      ? await (control as any).getAttribute(name).catch(() => null) : null;
+    const [role, aria, download, href] = await Promise.all([attr("role"), attr("aria-label"), attr("download"), attr("href")]);
+    const semantic = [role, aria, download, href].map((value) => value || "").join("|");
+    return semantic.replace(/\|/g, "") ? `semantic:${semantic}` : `locator:${index}`;
   }
 
   /** Reads a provider-bound blob URL inside the authenticated page with a hard byte limit. */
@@ -544,6 +597,7 @@ export class ResponseArtifactDownloader {
 
     type CaptureCandidate = { kind: "download" | "response" | "popup" | "navigation" | "reference"; value: any };
     const queue: CaptureCandidate[] = [];
+    const channelAttempts: string[] = [];
     let wake: (() => void) | null = null;
     let triggered = false;
     let stopped = false;
@@ -654,10 +708,19 @@ export class ResponseArtifactDownloader {
           }
         } catch {
           // A correlated candidate still has to pass the common validation.
+          const reason = candidate.kind === "download" ? "DOWNLOAD_EVENT_NO_BYTES"
+            : candidate.kind === "response" ? "NETWORK_RESPONSE_REJECTED"
+              : candidate.kind === "popup" ? "POPUP_NO_VALID_ARTIFACT"
+                : candidate.kind === "navigation" ? "NAVIGATION_NO_VALID_ARTIFACT"
+                  : "DYNAMIC_REFERENCE_REJECTED";
+          if (!channelAttempts.includes(reason)) channelAttempts.push(reason);
         }
       }
       emitState("DOWNLOAD_TRIGGER_NO_BYTES");
-      throw new ArtifactDownloadFailure("DOWNLOAD_TRIGGER_NO_BYTES", "Download capture window expired with no validated bytes");
+      throw new ArtifactDownloadFailure(
+        "DOWNLOAD_TRIGGER_NO_BYTES",
+        `Download capture window expired with no validated bytes; channelAttempts=${JSON.stringify(channelAttempts)}`,
+      );
     } finally {
       cleanup();
       if (typeof pageAny.url === "function" && page.url() !== baselineUrl && baselineUrl.startsWith(PROVIDER_ORIGINS[options.providerId] || "#")) {
@@ -754,6 +817,21 @@ export class ResponseArtifactDownloader {
     const domains = overrides ?? PROVIDER_DOWNLOAD_DOMAINS[providerId];
     if (!domains || domains.length === 0) throw new Error(`No response-download domain policy for provider: ${providerId}`);
     return domains;
+  }
+
+  private recordFromRow(row: Record<string, unknown>): DownloadedArtifactRecord {
+    const failureReasonValue = row.failure_reason ? String(row.failure_reason) as ArtifactFailureReason : undefined;
+    const failureDetail = row.failure_detail ? String(row.failure_detail) : undefined;
+    return {
+      id: String(row.id), messageId: String(row.message_id), projectId: String(row.project_id),
+      providerId: String(row.provider_id), originalUrl: String(row.original_url || ""),
+      sha256: String(row.sha256 || ""), localRelativePath: String(row.local_relative_path || ""),
+      fileName: String(row.file_name || ""), mimeType: String(row.mime_type || "application/octet-stream"),
+      sizeBytes: Number(row.size_bytes || 0), status: String(row.status) as DownloadedArtifactRecord["status"],
+      downloadedAt: String(row.downloaded_at),
+      ...(failureReasonValue ? { failureReason: failureReasonValue } : {}),
+      ...(failureDetail ? { failureDetail } : {}),
+    };
   }
 
   private persistBuffer(buffer: Buffer, options: ArtifactDownloadOptions, declaredMime: string): DownloadedArtifactRecord {

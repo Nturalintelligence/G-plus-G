@@ -265,7 +265,7 @@ describe("ResponseArtifactDownloader deterministic download pipeline", () => {
     expect(requestedSelectors.join(" ")).toContain('button[aria-label*="Скач"]');
   });
 
-  it("opens a Gemini bound file card before capturing its app-level download control", async () => {
+  it("does not click an expansion card and a second download control in one acquisition", async () => {
     const txt = Buffer.from("G_PLUS_G_PROVIDER_FILE_RESULT_2026\n");
     const open = { count: async () => 1, click: vi.fn().mockResolvedValue(undefined) };
     const downloadControl = { click: vi.fn().mockResolvedValue(undefined) };
@@ -300,10 +300,9 @@ describe("ResponseArtifactDownloader deterministic download pipeline", () => {
       providerId: "gemini",
     });
 
-    expect(open.click).toHaveBeenCalledOnce();
-    expect(downloadControl.click).toHaveBeenCalledOnce();
-    expect(results).toHaveLength(1);
-    expect(results[0]).toMatchObject({ status: "READY", fileName: "result.txt", mimeType: "text/plain" });
+    expect(open.click).not.toHaveBeenCalled();
+    expect(downloadControl.click).not.toHaveBeenCalled();
+    expect(results).toHaveLength(0);
   });
 
   it("fails closed when a redirect resolves to private infrastructure", async () => {
@@ -406,7 +405,7 @@ describe("ResponseArtifactDownloader deterministic download pipeline", () => {
       projectId: "project-1", messageId: "message-preview", providerId: "gemini", expectArtifact: true,
     });
     expect(preview).toHaveLength(1);
-    expect(preview[0]).toMatchObject({ status: "FAILED", failureReason: "PREVIEW_NOT_ORIGINAL", fileName: "" });
+    expect(preview[0]).toMatchObject({ status: "FAILED", failureReason: "DOWNLOAD_CONTROL_MISSING", fileName: "" });
 
     const noExpandTurn = { ...turn, locator: () => ({ count: async () => 0, first: () => ({ count: async () => 0 }) }) };
     const missingPage = { locator: () => ({ last: () => noExpandTurn }) } as unknown as Page;
