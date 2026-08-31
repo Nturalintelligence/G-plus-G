@@ -5,6 +5,7 @@ import { BuiltinPluginRegistry } from "../src/agent-workspace/plugin-registry.js
 import { DEFAULT_AUTOMATION_POLICY, decideAutomation, resolveEffort, validateAgentOwnership, validatePluginManifest, type AgentInstance, type CapabilityRecord } from "../src/agent-workspace/models.js";
 import { SafeExecutionBroker } from "../src/cli-executors/execution-broker.js";
 import type { CliExecutor } from "../src/cli-executors/cli-executor-contract.js";
+import { AgentWorkspaceService } from "../src/agent-workspace/service.js";
 
 const future = (ms = 60_000) => new Date(Date.now() + ms).toISOString();
 const capability = (overrides: Partial<CapabilityRecord> = {}): CapabilityRecord => ({ id: "executor.codex.cli", state: "AVAILABLE", sourcePlugin: "gplusg.safe-cli", scope: "project", approvalPolicy: "PER_ACTION", healthEvidence: { probe: "fixture" }, detectedAt: new Date().toISOString(), expiresAt: future(), ...overrides });
@@ -73,5 +74,35 @@ describe("Agent Workspace foundation", () => {
     const executor = (id: "codex" | "gemini", healthy: boolean): CliExecutor => ({ id, capabilities: () => ({ supportsStreaming: true, supportedRisks: ["READ_ONLY"], maxTimeoutMs: 1000 }), healthCheck: vi.fn(async () => ({ healthy, executorId: id, ...(healthy ? { version: "1" } : { reason: "missing" }) })), execute: async function* () {} });
     broker.registerExecutor(executor("codex", false)); broker.registerExecutor(executor("gemini", true));
     await expect(broker.resolveRequestedExecutor("codex", "READ_ONLY")).resolves.toEqual({ status: "USER_DECISION_REQUIRED", requestedExecutor: "codex", reason: "Executor 'codex' is unhealthy: missing", alternatives: ["gemini"] });
+  });
+
+  it("hydrates a persistent workspace without running declared health probes", () => {
+    const db = new AppDatabase(":memory:"); db.migrate(); const now = new Date().toISOString();
+    db.raw.prepare("INSERT INTO projects(id,name,status,created_at,updated_at) VALUES ('project-service','AW service','ACTIVE',?,?)").run(now, now);
+    db.raw.prepare("INSERT INTO project_providers(project_id,provider_id) VALUES ('project-service','chatgpt'),('project-service','gemini')").run();
+    const first = new AgentWorkspaceService(db.raw).getOrCreate("project-service");
+    expect(new Set(first.agents.map((item) => item.role))).toEqual(new Set(["LEAD", "REVIEWER", "DELIVERY_OWNER"]));
+    expect(new Set(first.agents.map((item) => item.id)).size).toBe(3);
+    expect(new Set(first.agents.map((item) => item.taskId)).size).toBe(3);
+    expect(first.capabilities.every((item) => item.state === "UNKNOWN" && item.healthEvidence.executed === false)).toBe(true);
+    const second = new AgentWorkspaceService(db.raw).getOrCreate("project-service");
+    expect(second.agents).toEqual(first.agents);
+    expect(second.selectedLeadId).toBe(first.selectedLeadId);
+    expect(second.deliveryOwnerId).toBe(first.deliveryOwnerId);
+    db.close();
+  });
+
+  it("persists automation and refuses an unsupported effort without changing the agent", () => {
+    const db = new AppDatabase(":memory:"); db.migrate(); const now = new Date().toISOString();
+    db.raw.prepare("INSERT INTO projects(id,name,status,created_at,updated_at) VALUES ('project-effort','AW effort','ACTIVE',?,?)").run(now, now);
+    db.raw.prepare("INSERT INTO project_providers(project_id,provider_id) VALUES ('project-effort','gemini')").run();
+    const service = new AgentWorkspaceService(db.raw); const view = service.getOrCreate("project-effort");
+    const gemini = view.agents.find((item) => item.providerId === "gemini")!;
+    expect(service.setEffort("project-effort", gemini.id, "XHIGH")).toMatchObject({ status: "USER_DECISION_REQUIRED", requestedEffort: "XHIGH" });
+    expect(service.getOrCreate("project-effort").agents.find((item) => item.id === gemini.id)?.requestedEffort).toBe("MEDIUM");
+    const policy = { ...DEFAULT_AUTOMATION_POLICY, debugging: "AUTO" as const };
+    expect(service.saveAutomationPolicy("project-effort", policy)).toEqual(policy);
+    expect(new AgentWorkspaceService(db.raw).getOrCreate("project-effort").automationPolicy).toEqual(policy);
+    db.close();
   });
 });

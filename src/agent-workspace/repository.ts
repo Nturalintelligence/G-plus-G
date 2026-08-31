@@ -51,6 +51,22 @@ export class AgentWorkspaceRepository {
     }));
   }
 
+  latestUsableSnapshot(projectId: string, at = new Date()): CapabilitySnapshot | null {
+    const row = this.database.prepare("SELECT * FROM aw_capability_snapshots WHERE project_id=? AND sealed=1 AND expires_at>? ORDER BY created_at DESC LIMIT 1").get(projectId, at.toISOString()) as Record<string, unknown> | undefined;
+    if (!row) return null;
+    const capabilities = (this.database.prepare("SELECT * FROM aw_capabilities WHERE snapshot_id=? ORDER BY capability_id").all(String(row.id)) as Array<Record<string, unknown>>).map((item) => validateCapability({
+      id: item.capability_id, state: item.state, sourcePlugin: item.source_plugin, scope: item.scope, approvalPolicy: item.approval_policy,
+      healthEvidence: JSON.parse(String(item.health_evidence_json)), detectedVersion: item.detected_version, failureReason: item.failure_reason,
+      detectedAt: item.detected_at, expiresAt: item.expires_at,
+    }));
+    return { id: String(row.id), projectId, createdAt: String(row.created_at), expiresAt: String(row.expires_at), capabilities };
+  }
+
+  updateAgentEffort(agentId: string, requestedEffort: AgentInstance["requestedEffort"], effectiveEffort: NonNullable<AgentInstance["effectiveEffort"]>): void {
+    const result = this.database.prepare("UPDATE aw_agent_instances SET requested_effort=?,effective_effort=? WHERE id=?").run(requestedEffort, effectiveEffort, agentId);
+    if (result.changes !== 1) throw new Error("Agent instance not found");
+  }
+
   saveAutomationPolicy(projectId: string, value: unknown): AutomationPolicy { const policy = validateAutomationPolicy(value); this.database.prepare(`INSERT INTO aw_automation_policies(project_id,code_changes,debugging,commit_mode,push_mode,derived_artifacts,updated_at) VALUES (?,?,?,?,?,?,?) ON CONFLICT(project_id) DO UPDATE SET code_changes=excluded.code_changes,debugging=excluded.debugging,commit_mode=excluded.commit_mode,push_mode=excluded.push_mode,derived_artifacts=excluded.derived_artifacts,updated_at=excluded.updated_at`).run(projectId, policy.codeChanges, policy.debugging, policy.commit, policy.push, policy.derivedArtifacts, new Date().toISOString()); return policy; }
   getAutomationPolicy(projectId: string): AutomationPolicy { const row = this.database.prepare("SELECT * FROM aw_automation_policies WHERE project_id=?").get(projectId) as Record<string, unknown> | undefined; return row ? { codeChanges: row.code_changes as AutomationPolicy["codeChanges"], debugging: row.debugging as AutomationPolicy["debugging"], commit: row.commit_mode as AutomationPolicy["commit"], push: row.push_mode as AutomationPolicy["push"], derivedArtifacts: row.derived_artifacts as AutomationPolicy["derivedArtifacts"] } : structuredClone(DEFAULT_AUTOMATION_POLICY); }
 
