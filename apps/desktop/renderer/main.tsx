@@ -155,6 +155,36 @@ function MessageCopyAction({ content, copied, onCopy }: { content: string; copie
   </div>;
 }
 
+const agentRoleLabels: Record<AgentWorkspaceView["agents"][number]["role"], string> = {
+  LEAD: "Ведущий", ARCHITECT: "Архитектор", DESIGNER: "Дизайнер", CODER: "Разработчик", TESTER: "Тестировщик",
+  REVIEWER: "Ревьюер", DEBUGGER: "Отладчик", DELIVERY_OWNER: "Delivery Owner", GIT_MANAGER: "Git Manager",
+};
+
+function AgentWorkspacePanel({ view, status, onClose, onEffort, onAutomation }: {
+  view: AgentWorkspaceView; status: string | null; onClose: () => void;
+  onEffort: (agentId: string, effort: AgentEffort) => void;
+  onAutomation: (area: keyof AgentWorkspaceView["automationPolicy"], mode: "MANUAL" | "SEMI_AUTO" | "AUTO") => void;
+}): React.JSX.Element {
+  const lead = view.agents.find((agent) => agent.id === view.selectedLeadId);
+  const owner = view.agents.find((agent) => agent.id === view.deliveryOwnerId);
+  return <div className="modal-backdrop agent-workspace-backdrop" role="presentation" onMouseDown={onClose}>
+    <section className="agent-workspace-modal" role="dialog" aria-modal="true" aria-labelledby="agent-workspace-title" onMouseDown={(event) => event.stopPropagation()}>
+      <header><div><h2 id="agent-workspace-title">Команда агентов</h2><p>Роли и возможности привязаны к отдельным provider tasks.</p></div><button type="button" aria-label="Закрыть команду агентов" onClick={onClose}>×</button></header>
+      <div className="agent-workspace-summary"><span><small>Ведущий</small><strong>{lead ? `${lead.providerId} · ${agentRoleLabels[lead.role]}` : "Не выбран"}</strong></span><span><small>Delivery Owner</small><strong>{owner ? owner.providerId : "Не назначен"}</strong></span></div>
+      <div className="agent-workspace-body">
+        <section><h3>Роли</h3><div className="agent-team-grid">{view.agents.map((agent) => <article key={agent.id} className="agent-card" data-provider-id={agent.providerId} data-task-id={agent.taskId}>
+          <div><strong>{agentRoleLabels[agent.role]}</strong><span>{agent.providerId}</span></div><small title={agent.taskId}>Задача: {agent.taskId}</small>
+          <label>Effort<select value={agent.requestedEffort} onChange={(event) => onEffort(agent.id, event.target.value as AgentEffort)}>{["FAST","MEDIUM","HIGH","XHIGH","MAX","AUTO"].map((effort) => <option key={effort}>{effort}</option>)}</select></label>
+          <em>{agent.status}</em>
+        </article>)}</div></section>
+        <section><h3>Capability status</h3><div className="capability-list">{view.capabilities.map((capability) => <article key={capability.id}><div><strong>{capability.id}</strong><span className={`capability-state ${capability.state.toLowerCase()}`}>{capability.state}</span></div><small>{capability.sourcePlugin} · {capability.approvalPolicy}</small>{capability.failureReason ? <p>{capability.failureReason}</p> : null}</article>)}</div></section>
+        <section><h3>Automation policy</h3><div className="automation-grid">{(Object.entries(view.automationPolicy) as Array<[keyof AgentWorkspaceView["automationPolicy"], "MANUAL" | "SEMI_AUTO" | "AUTO"]>).map(([area, mode]) => <label key={area}><span>{area}</span><select value={mode} onChange={(event) => onAutomation(area, event.target.value as typeof mode)}><option>MANUAL</option><option>SEMI_AUTO</option><option>AUTO</option></select></label>)}</div><p className="automation-warning">Force-push запрещён всегда. Protected branches требуют отдельного подтверждения.</p></section>
+      </div>
+      {status ? <footer role="status">{status}</footer> : null}
+    </section>
+  </div>;
+}
+
 const fallbackSettings: AppSettingsView = {
   schemaVersion: 1,
   profile: { displayName: "", realName: "", greetingStyle: "generic" },
@@ -229,6 +259,9 @@ function App(): React.JSX.Element {
   const [running, setRunning] = useState(false);
   const [settings, setSettings] = useState<AppSettingsView>(fallbackSettings);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [agentWorkspaceOpen, setAgentWorkspaceOpen] = useState(false);
+  const [agentWorkspace, setAgentWorkspace] = useState<AgentWorkspaceView | null>(null);
+  const [agentWorkspaceStatus, setAgentWorkspaceStatus] = useState<string | null>(null);
   const [settingsTab, setSettingsTab] = useState<"profile" | "models" | "behavior" | "appearance" | "quality" | "diagnostics">("profile");
   const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
   const [releaseInfo, setReleaseInfo] = useState<ReleaseInfoView | null>(null);
@@ -282,6 +315,27 @@ function App(): React.JSX.Element {
   const effectiveAppearanceTheme: "dark" | "light" = settings.appearance.theme === "system"
     ? (window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark")
     : settings.appearance.theme;
+
+  async function openAgentWorkspace(): Promise<void> {
+    if (!current) { setShowNoProjectToast(true); return; }
+    setAgentWorkspaceStatus(null);
+    try { setAgentWorkspace(await window.orchestrator.agentWorkspace.get(current.project.id)); setAgentWorkspaceOpen(true); }
+    catch (error) { setActiveUserError(toUserFacingError(error, "Команда агентов")); }
+  }
+
+  async function updateAgentEffort(agentId: string, effort: AgentEffort): Promise<void> {
+    if (!current) return;
+    const result = await window.orchestrator.agentWorkspace.setEffort(current.project.id, agentId, effort);
+    if (result.status === "USER_DECISION_REQUIRED") { setAgentWorkspaceStatus(`Уровень ${effort} недоступен. Выберите: ${(result.supportedEfforts ?? []).join(", ")}`); return; }
+    setAgentWorkspace(await window.orchestrator.agentWorkspace.get(current.project.id)); setAgentWorkspaceStatus(`Effort обновлён: ${result.effectiveEffort}`);
+  }
+
+  async function updateAutomation(area: keyof AgentWorkspaceView["automationPolicy"], mode: "MANUAL" | "SEMI_AUTO" | "AUTO"): Promise<void> {
+    if (!current || !agentWorkspace) return;
+    const policy = { ...agentWorkspace.automationPolicy, [area]: mode };
+    await window.orchestrator.agentWorkspace.saveAutomation(current.project.id, policy);
+    setAgentWorkspace({ ...agentWorkspace, automationPolicy: policy }); setAgentWorkspaceStatus(`Политика ${area}: ${mode}`);
+  }
 
   function closeSpecSection(): void {
     setActiveSpecSection(null);
@@ -1156,6 +1210,9 @@ function App(): React.JSX.Element {
             </svg>
             <span>Спецификация</span>
           </button>
+          <button className={`icon-header-btn agent-workspace-btn ${agentWorkspaceOpen ? "active" : ""}`} title="Команда агентов" onClick={() => void openAgentWorkspace()}>
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><circle cx="9" cy="8" r="3"/><circle cx="17" cy="10" r="2"/><path d="M3 20c0-4 2.5-6 6-6s6 2 6 6"/><path d="M15 15c3 0 5 1.5 5 5"/></svg><span>Команда агентов</span>
+          </button>
         </div>
       </header>
       {statusNotificationVisible ? (
@@ -1643,6 +1700,7 @@ function App(): React.JSX.Element {
         openWebChat={openProviderWebChat}
         rebindConversation={rebindProviderConversation}
       />, document.getElementById("application-viewport") ?? document.body) : null}
+      {agentWorkspaceOpen && agentWorkspace ? createPortal(<AgentWorkspacePanel view={agentWorkspace} status={agentWorkspaceStatus} onClose={() => setAgentWorkspaceOpen(false)} onEffort={(agentId, effort) => void updateAgentEffort(agentId, effort)} onAutomation={(area, mode) => void updateAutomation(area, mode)} />, document.getElementById("application-viewport") ?? document.body) : null}
 
       <DeleteProjectDialog
         isOpen={!!deleteTarget}

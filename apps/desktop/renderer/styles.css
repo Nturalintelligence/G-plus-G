@@ -3032,6 +3032,50 @@ fieldset label textarea {
   vertical-align: middle;
 }
 
+.agent-workspace-btn { gap: 7px; }
+.agent-workspace-backdrop { z-index: 2500; }
+.agent-workspace-modal {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  width: min(1120px, calc(100% - 32px));
+  height: min(820px, calc(100% - 32px));
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--border-color-card);
+  border-radius: 18px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  box-shadow: 0 24px 80px rgba(0,0,0,.35);
+}
+.agent-workspace-modal > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 18px 20px; border-bottom: 1px solid var(--border-color-card); }
+.agent-workspace-modal h2, .agent-workspace-modal h3, .agent-workspace-modal p { margin: 0; }
+.agent-workspace-modal > header p { margin-top: 4px; color: var(--text-secondary); font-size: 12px; }
+.agent-workspace-modal > header > button { width: 34px; height: 34px; border: 1px solid var(--border-color-card); border-radius: 9px; background: transparent; color: inherit; font-size: 22px; }
+.agent-workspace-summary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; padding: 12px 20px; border-bottom: 1px solid var(--border-color-card); }
+.agent-workspace-summary span { display: flex; min-width: 0; flex-direction: column; padding: 10px 12px; border-radius: 10px; background: var(--surface-card, rgba(127,127,127,.08)); }
+.agent-workspace-summary small, .agent-card small, .capability-list small { color: var(--text-secondary); }
+.agent-workspace-body { min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 18px 20px; }
+.agent-workspace-body > section + section { margin-top: 22px; }
+.agent-workspace-body h3 { margin-bottom: 10px; }
+.agent-team-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
+.agent-card, .capability-list article { min-width: 0; padding: 12px; border: 1px solid var(--border-color-card); border-radius: 12px; background: var(--surface-card, rgba(127,127,127,.06)); }
+.agent-card > div, .capability-list article > div { display: flex; justify-content: space-between; gap: 10px; }
+.agent-card > small { display: block; overflow: hidden; margin: 7px 0; text-overflow: ellipsis; white-space: nowrap; }
+.agent-card label { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 12px; }
+.agent-card select, .automation-grid select { min-width: 110px; border: 1px solid var(--border-color-card); border-radius: 8px; background: var(--bg-primary); color: inherit; padding: 6px 8px; }
+.agent-card em { display: inline-block; margin-top: 8px; color: var(--text-secondary); font-size: 10px; font-style: normal; }
+.capability-list { display: grid; gap: 8px; }
+.capability-list strong, .capability-list p { overflow-wrap: anywhere; }
+.capability-list p { margin-top: 6px; color: var(--text-secondary); font-size: 11px; }
+.capability-state { flex: 0 0 auto; padding: 2px 7px; border-radius: 999px; background: rgba(127,127,127,.14); font-size: 10px; }
+.capability-state.available { color: #25a66a; }
+.capability-state.broken, .capability-state.denied, .capability-state.unavailable { color: var(--danger, #d2564d); }
+.automation-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 8px; }
+.automation-grid label { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 10px; border: 1px solid var(--border-color-card); border-radius: 10px; }
+.automation-warning { margin-top: 10px !important; color: var(--text-secondary); font-size: 11px; }
+.agent-workspace-modal > footer { padding: 10px 20px; border-top: 1px solid var(--border-color-card); color: var(--accent); font-size: 12px; }
+@media (max-width: 760px) { .agent-workspace-modal { width: 100%; height: 100%; border: 0; border-radius: 0; } .agent-workspace-summary { grid-template-columns: 1fr; } }
+
 .attached-file-name {
   max-width: 260px;
   overflow: hidden;

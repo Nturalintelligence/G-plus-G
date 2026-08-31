@@ -61,6 +61,8 @@ import { ProjectTrashService } from "../../src/project-trash.js";
 import { loadPersistedProviderArtifactRows } from "../../src/attachments/persisted-artifact-hydration.js";
 import { ReacquisitionAuthorization, validateReacquisitionTarget } from "../../src/attachments/reacquisition-authorization.js";
 import { DerivedArtifactAuthorization, DerivedArtifactService, type ArtifactProvenance, type DerivedArtifactPolicy } from "../../src/attachments/derived-artifact.js";
+import { AgentWorkspaceService } from "../../src/agent-workspace/service.js";
+import type { EffortLevel } from "../../src/agent-workspace/models.js";
 
 let mainWindow: BrowserWindow | null = null;
 let database: AppDatabase | null = null;
@@ -507,6 +509,18 @@ function registerIpc(): void {
       density: settings.appearance.density,
     });
     return settings;
+  });
+  handle("agentWorkspace:get", (_event, projectIdValue: unknown) => {
+    const projectId = requireString(projectIdValue, "projectId", 200);
+    return new AgentWorkspaceService(db().raw).getOrCreate(projectId);
+  });
+  handle("agentWorkspace:saveAutomation", (_event, inputValue: unknown) => {
+    const input = inputValue && typeof inputValue === "object" ? inputValue as Record<string, unknown> : {};
+    return new AgentWorkspaceService(db().raw).saveAutomationPolicy(requireString(input.projectId, "projectId", 200), input.policy);
+  });
+  handle("agentWorkspace:setEffort", (_event, inputValue: unknown) => {
+    const input = inputValue && typeof inputValue === "object" ? inputValue as Record<string, unknown> : {};
+    return new AgentWorkspaceService(db().raw).setEffort(requireString(input.projectId, "projectId", 200), requireString(input.agentId, "agentId", 200), requireString(input.effort, "effort", 20) as EffortLevel);
   });
   handle("system:copyText", (_event, textValue: unknown) => {
     if (typeof textValue !== "string") throw new Error("clipboard text must be a string");

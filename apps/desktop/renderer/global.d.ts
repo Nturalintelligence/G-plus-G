@@ -73,6 +73,11 @@ interface Window {
       get(): Promise<AppSettingsView>;
       save(value: AppSettingsView): Promise<AppSettingsView>;
     };
+    agentWorkspace: {
+      get(projectId: string): Promise<AgentWorkspaceView>;
+      saveAutomation(projectId: string, policy: AgentWorkspaceView["automationPolicy"]): Promise<AgentWorkspaceView["automationPolicy"]>;
+      setEffort(projectId: string, agentId: string, effort: AgentEffort): Promise<{ status: "UPDATED" | "RESOLVED" | "USER_DECISION_REQUIRED"; effectiveEffort?: AgentEffort; requestedEffort?: AgentEffort; supportedEfforts?: AgentEffort[] }>;
+    };
     composerDraft: {
       get(projectId: string): Promise<ComposerDraftView | null>;
       save(value: Omit<ComposerDraftView, "updatedAt">): Promise<ComposerDraftView>;
@@ -229,6 +234,17 @@ interface ConversationEntryView {
   content: string;
   createdAt: string;
   attachments?: AttachmentRefView[];
+}
+
+type AgentEffort = "FAST" | "MEDIUM" | "HIGH" | "XHIGH" | "MAX" | "AUTO";
+interface AgentWorkspaceView {
+  projectId: string;
+  agents: Array<{ id: string; projectId: string; providerId: string; role: "LEAD" | "ARCHITECT" | "DESIGNER" | "CODER" | "TESTER" | "REVIEWER" | "DEBUGGER" | "DELIVERY_OWNER" | "GIT_MANAGER"; taskId: string; requestedEffort: AgentEffort; effectiveEffort?: AgentEffort; capabilitySnapshotId: string; status: string }>;
+  selectedLeadId?: string;
+  deliveryOwnerId?: string;
+  capabilities: Array<{ id: string; state: string; sourcePlugin: string; scope: string; approvalPolicy: string; failureReason?: string; detectedVersion?: string; expiresAt: string }>;
+  automationPolicy: { codeChanges: "MANUAL" | "SEMI_AUTO" | "AUTO"; debugging: "MANUAL" | "SEMI_AUTO" | "AUTO"; commit: "MANUAL" | "SEMI_AUTO" | "AUTO"; push: "MANUAL" | "SEMI_AUTO" | "AUTO"; derivedArtifacts: "MANUAL" | "SEMI_AUTO" | "AUTO" };
+  plugins: Array<{ id: string; version: string }>;
 }
 
 interface ComposerDraftView {
