@@ -1,0 +1,8 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+body{font-family:sans-serif}.turn{margin:40px}.code-block{position:relative;min-height:120px;padding:16px;border:1px solid #888}
+.toolbar{visibility:hidden;opacity:0;pointer-events:none;position:absolute;right:8px;top:8px}
+.code-block.ready .toolbar{visibility:visible;opacity:1;pointer-events:auto}
+</style></head><body><section class="turn" data-message-author-role="model"><div class="code-block" tabindex="0"><pre>G_PLUS_G_INBOUND_FINAL_2026</pre><div class="toolbar"><button aria-label="Скачать код">Скачать код</button></div></div></section><script>
+const block=document.querySelector('.code-block');block.addEventListener('mouseenter',()=>setTimeout(()=>block.classList.add('ready'),250));
+document.querySelector('button').addEventListener('click',()=>fetch('https://gemini.google.com/download/gplusg-inbound-final.txt'));
+</script></body></html>

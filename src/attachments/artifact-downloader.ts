@@ -64,6 +64,12 @@ export type ArtifactFailureReason =
   | "DOWNLOAD_STAGING_READ_FAILED"
   | "DOWNLOAD_FAILURE_UNKNOWN"
   | "ARTIFACT_TOO_LARGE"
+  | "ARTIFACT_UI_SETTLING_TIMEOUT"
+  | "ARTIFACT_CONTAINER_MISSING"
+  | "DOWNLOAD_TOOLBAR_NOT_REVEALED"
+  | "DOWNLOAD_CONTROL_STALE_CLONE"
+  | "DOWNLOAD_CONTROL_RESPONSIVE_DUPLICATE"
+  | "DOWNLOAD_CONTROL_NOT_ACTIONABLE"
   | "AMBIGUOUS_DOWNLOAD_CONTROLS";
 
 export type DownloadAvailability =
@@ -571,9 +577,39 @@ export class ResponseArtifactDownloader {
     ].join(", ");
     const artifactRegions = turn.locator('pre, .code-block, [data-test-id*="artifact" i], [data-testid*="artifact" i], [class*="artifact" i]') as any;
     const artifactRegion = typeof artifactRegions.last === "function" ? artifactRegions.last() : artifactRegions;
-    if (typeof artifactRegion.hover === "function" && await artifactRegion.count().catch(() => 0)) await artifactRegion.hover().catch(() => undefined);
+    const artifactContainerCount = await artifactRegion.count().catch(() => 0);
+    if (artifactContainerCount > 0) {
+      await artifactRegion.scrollIntoViewIfNeeded?.().catch(() => undefined);
+      await artifactRegion.hover?.().catch(() => undefined);
+      const focusable = await artifactRegion.getAttribute?.("tabindex").catch(() => null);
+      if (focusable !== null) await artifactRegion.focus?.().catch(() => undefined);
+    }
     let controls = turn.locator(controlSelector);
-    if ((await controls.count().catch(() => 0)) === 0 && options.providerId === "gemini") {
+    const collectActionable = async () => {
+      const byFingerprint = new Map<string, Locator>();
+      const count = Math.min(await controls.count().catch(() => 0), 20);
+      let hiddenCount = 0; let zeroBoundsCount = 0; let disabledCount = 0;
+      for (let index = 0; index < count; index += 1) {
+        const control = controls.nth(index);
+        if (typeof (control as any).isVisible === "function" && !(await (control as any).isVisible().catch(() => false))) { hiddenCount += 1; continue; }
+        if (typeof (control as any).isEnabled === "function" && !(await (control as any).isEnabled().catch(() => false))) { disabledCount += 1; continue; }
+        if (typeof (control as any).boundingBox === "function") {
+          const bounds = await (control as any).boundingBox().catch(() => null);
+          if (!bounds || bounds.width <= 0 || bounds.height <= 0) { zeroBoundsCount += 1; continue; }
+        }
+        const fingerprint = await this.controlFingerprint(control, index);
+        if (!byFingerprint.has(fingerprint)) byFingerprint.set(fingerprint, control);
+      }
+      return { byFingerprint, count, hiddenCount, zeroBoundsCount, disabledCount };
+    };
+    const settlingDeadline = Date.now() + 2_000;
+    let discovery = await collectActionable();
+    while (discovery.byFingerprint.size === 0 && artifactContainerCount > 0 && Date.now() < settlingDeadline) {
+      if (typeof (page as any).waitForTimeout !== "function") break;
+      await (page as any).waitForTimeout(100).catch(() => undefined);
+      discovery = await collectActionable();
+    }
+    if (discovery.byFingerprint.size === 0 && options.providerId === "gemini") {
       const menuControls = turn.locator('button[aria-haspopup="menu"][aria-label*="file" i], button[aria-haspopup="menu"][aria-label*="artifact" i], button[aria-haspopup="menu"][aria-label*="скач" i], button[aria-haspopup="menu"][title*="download" i]');
       const visibleMenus: Locator[] = [];
       for (let index = 0; index < Math.min(await menuControls.count().catch(() => 0), 10); index += 1) {
@@ -585,26 +621,19 @@ export class ResponseArtifactDownloader {
         acquisition.expansionCount = 1;
         await visibleMenus[0]!.click();
         controls = turn.locator(controlSelector);
+        const expansionDeadline = Date.now() + 1_000;
+        discovery = await collectActionable();
+        while (discovery.byFingerprint.size === 0 && Date.now() < expansionDeadline) {
+          if (typeof (page as any).waitForTimeout !== "function") break;
+          await (page as any).waitForTimeout(100).catch(() => undefined);
+          discovery = await collectActionable();
+        }
       } else if (visibleMenus.length > 1) {
         acquisition.state = "FAILED";
         return [this.persistFailure({ ...options, url: "", label: "" }, "AMBIGUOUS_DOWNLOAD_CONTROLS", new Error("Multiple artifact menus inside bound assistant turn"))];
       }
     }
-    const byFingerprint = new Map<string, Locator>();
-    const count = Math.min(await controls.count().catch(() => 0), 20);
-    let hiddenCount = 0;
-    let zeroBoundsCount = 0;
-    for (let index = 0; index < count; index += 1) {
-      const control = controls.nth(index);
-      if (typeof (control as any).isVisible === "function" && !(await (control as any).isVisible().catch(() => false))) { hiddenCount += 1; continue; }
-      if (typeof (control as any).isEnabled === "function" && !(await (control as any).isEnabled().catch(() => false))) continue;
-      if (typeof (control as any).boundingBox === "function") {
-        const bounds = await (control as any).boundingBox().catch(() => null);
-        if (!bounds || bounds.width <= 0 || bounds.height <= 0) { zeroBoundsCount += 1; continue; }
-      }
-      const fingerprint = await this.controlFingerprint(control, index);
-      if (!byFingerprint.has(fingerprint)) byFingerprint.set(fingerprint, control);
-    }
+    const { byFingerprint, count, hiddenCount, zeroBoundsCount } = discovery;
     if (byFingerprint.size > 1) {
       acquisition.state = "FAILED";
       return [this.persistFailure(
@@ -700,7 +729,8 @@ export class ResponseArtifactDownloader {
           segments.unshift(`${current.tagName.toLowerCase()}:${siblingIndex}`);
           current = parent;
         }
-        return [element.tagName.toLowerCase(), element.getAttribute("role") || "", element.getAttribute("aria-label") || "", element.getAttribute("download") || "", segments.join("/")].join("|");
+        const semantic = [element.getAttribute("role") || "", element.getAttribute("aria-label") || "", element.getAttribute("title") || "", element.getAttribute("data-tooltip") || "", element.getAttribute("download") || ""].join("|").toLowerCase();
+        return semantic.replace(/\|/g, "") ? `${element.tagName.toLowerCase()}|${semantic}` : `${element.tagName.toLowerCase()}|path:${segments.join("/")}`;
       }).catch(() => null);
       if (typeof evaluated === "string") return evaluated;
     }
