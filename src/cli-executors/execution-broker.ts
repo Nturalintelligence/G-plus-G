@@ -43,6 +43,10 @@ export interface GitFileStatus {
   change: "added" | "modified" | "deleted";
 }
 
+export type ExecutorRequestResolution =
+  | { status: "AVAILABLE"; executorId: ExecutorId; version?: string }
+  | { status: "USER_DECISION_REQUIRED"; requestedExecutor: ExecutorId; reason: string; alternatives: ExecutorId[] };
+
 const MAX_CAPTURED_OUTPUT_CHARS = 16 * 1024;
 const HEALTH_CHECK_TIMEOUT_MS = 6_000;
 const PROTECTED_TREE_ENTRY_LIMIT = 4_096;
@@ -284,6 +288,26 @@ export class SafeExecutionBroker {
     }
   }
 
+  /** Resolves only the explicitly requested executor and never substitutes another provider. */
+  public async resolveRequestedExecutor(id: ExecutorId, risk: CliTaskEnvelopeV1["risk"]): Promise<ExecutorRequestResolution> {
+    const executor = this.executors.get(id);
+    let reason = `Executor '${id}' is not registered`;
+    if (executor) {
+      if (!executor.capabilities().supportedRisks.includes(risk)) reason = `Executor '${id}' does not support risk '${risk}'`;
+      else {
+        const health = await this.getExecutorHealth(id);
+        if (health.healthy) return { status: "AVAILABLE", executorId: id, ...(health.version ? { version: health.version } : {}) };
+        reason = `Executor '${id}' is unhealthy: ${health.reason || "unknown reason"}`;
+      }
+    }
+    const alternatives: ExecutorId[] = [];
+    for (const candidate of this.executors.values()) {
+      if (candidate.id === id || !candidate.capabilities().supportedRisks.includes(risk)) continue;
+      if ((await this.getExecutorHealth(candidate.id)).healthy) alternatives.push(candidate.id);
+    }
+    return { status: "USER_DECISION_REQUIRED", requestedExecutor: id, reason, alternatives };
+  }
+
   /**
    * Executes a CLI task envelope safely without shell strings and within workspace bounds.
    */
@@ -372,7 +396,7 @@ export class SafeExecutionBroker {
       break;
     }
     if (!executor) {
-      return earlyResult("FAILED", selectionFailure, ["Executor unavailable or incompatible"]);
+      return earlyResult("FAILED", task.executor === "auto" ? selectionFailure : `USER_DECISION_REQUIRED: ${selectionFailure}`, ["Executor unavailable or incompatible; provider substitution was not performed"]);
     }
 
     const capabilities = executor.capabilities();

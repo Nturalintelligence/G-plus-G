@@ -498,4 +498,104 @@ export const migrations: readonly Migration[] = [
         ON downloaded_artifacts(project_id, provider_id, source_message_id, provenance);
     `,
   },
+  {
+    version: 16,
+    name: "agent_workspace_foundation",
+    sql: `
+      CREATE TABLE aw_plugins (
+        id TEXT PRIMARY KEY,
+        version TEXT NOT NULL,
+        manifest_json TEXT NOT NULL,
+        source TEXT NOT NULL CHECK(source IN ('BUILTIN','EXTERNAL')),
+        enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)),
+        registered_at TEXT NOT NULL
+      );
+      CREATE TABLE aw_capability_snapshots (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        created_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        immutable_hash TEXT NOT NULL UNIQUE,
+        sealed INTEGER NOT NULL DEFAULT 0 CHECK(sealed IN (0,1))
+      );
+      CREATE TABLE aw_capabilities (
+        snapshot_id TEXT NOT NULL REFERENCES aw_capability_snapshots(id) ON DELETE CASCADE,
+        capability_id TEXT NOT NULL,
+        state TEXT NOT NULL,
+        source_plugin TEXT NOT NULL,
+        scope TEXT NOT NULL,
+        approval_policy TEXT NOT NULL,
+        health_evidence_json TEXT NOT NULL,
+        detected_version TEXT,
+        failure_reason TEXT,
+        detected_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        PRIMARY KEY(snapshot_id, capability_id)
+      );
+      CREATE TABLE aw_agent_instances (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        provider_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        conversation_id TEXT,
+        experience TEXT,
+        requested_effort TEXT NOT NULL,
+        effective_effort TEXT,
+        capability_snapshot_id TEXT NOT NULL REFERENCES aw_capability_snapshots(id),
+        status TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(project_id, provider_id, role, task_id)
+      );
+      CREATE TABLE aw_role_assignments (
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        role TEXT NOT NULL,
+        agent_instance_id TEXT NOT NULL REFERENCES aw_agent_instances(id) ON DELETE CASCADE,
+        assigned_at TEXT NOT NULL,
+        PRIMARY KEY(project_id, role, agent_instance_id)
+      );
+      CREATE TABLE aw_automation_policies (
+        project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+        code_changes TEXT NOT NULL,
+        debugging TEXT NOT NULL,
+        commit_mode TEXT NOT NULL,
+        push_mode TEXT NOT NULL,
+        derived_artifacts TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE aw_evidence (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        task_id TEXT NOT NULL,
+        agent_instance_id TEXT NOT NULL REFERENCES aw_agent_instances(id) ON DELETE CASCADE,
+        provider_id TEXT NOT NULL,
+        evidence_type TEXT NOT NULL,
+        payload_hash TEXT NOT NULL,
+        summary TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE TABLE aw_delivery_decisions (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        task_id TEXT NOT NULL,
+        delivery_owner_agent_id TEXT NOT NULL REFERENCES aw_agent_instances(id),
+        decision TEXT NOT NULL CHECK(decision IN ('PASS','FAIL','NEEDS_WORK')),
+        evidence_ids_json TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX aw_agents_project_idx ON aw_agent_instances(project_id, created_at);
+      CREATE INDEX aw_evidence_task_idx ON aw_evidence(project_id, task_id, created_at);
+      CREATE TRIGGER aw_capability_snapshot_immutable
+        BEFORE UPDATE ON aw_capability_snapshots WHEN OLD.sealed=1
+        BEGIN SELECT RAISE(ABORT, 'capability snapshot is immutable'); END;
+      CREATE TRIGGER aw_capability_item_immutable
+        BEFORE UPDATE ON aw_capabilities
+        BEGIN SELECT RAISE(ABORT, 'capability snapshot item is immutable'); END;
+      CREATE TRIGGER aw_capability_item_insert_sealed
+        BEFORE INSERT ON aw_capabilities
+        WHEN (SELECT sealed FROM aw_capability_snapshots WHERE id=NEW.snapshot_id)=1
+        BEGIN SELECT RAISE(ABORT, 'capability snapshot is sealed'); END;
+    `,
+  },
 ];
