@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import fs from "node:fs";
 import net from "node:net";
 import { lookup } from "node:dns/promises";
 import path from "node:path";
@@ -52,6 +53,17 @@ export type ArtifactFailureReason =
   | "PASSIVE_EVENT_NOT_CORRELATED"
   | "ARTIFACT_RENDERED_AS_CODE_BLOCK"
   | "ARTIFACT_RESPONSE_NOT_FILE"
+  | "DOWNLOAD_BROWSER_CANCELED"
+  | "DOWNLOAD_CONTEXT_CLOSED"
+  | "DOWNLOAD_PAGE_CLOSED"
+  | "DOWNLOAD_COMPLETION_TIMEOUT"
+  | "DOWNLOAD_SAVE_AS_FAILED"
+  | "DOWNLOAD_PATH_UNAVAILABLE"
+  | "DOWNLOAD_STAGING_FILE_MISSING"
+  | "DOWNLOAD_STAGING_EMPTY"
+  | "DOWNLOAD_STAGING_READ_FAILED"
+  | "DOWNLOAD_FAILURE_UNKNOWN"
+  | "ARTIFACT_TOO_LARGE"
   | "AMBIGUOUS_DOWNLOAD_CONTROLS";
 
 export type DownloadAvailability =
@@ -128,6 +140,7 @@ export interface ArtifactDownloadOptions {
   expectedSha256?: string;
   maxRedirects?: number;
   downloadEventTimeoutMs?: number;
+  downloadCompletionTimeoutMs?: number;
   expectArtifact?: boolean;
   onStateChange?: (state: ArtifactDownloadState) => void;
   onChannelEvidence?: (evidence: ArtifactChannelEvidence) => void;
@@ -859,9 +872,10 @@ export class ResponseArtifactDownloader {
             emitState("ARTIFACT_STORED");
             return record;
           }
-        } catch {
+        } catch (error) {
           // A correlated candidate still has to pass the common validation.
-          const reason = candidate.kind === "download" ? "DOWNLOAD_EVENT_NO_BYTES"
+          const reason = error instanceof ArtifactDownloadFailure ? error.reason
+            : candidate.kind === "download" ? "DOWNLOAD_EVENT_NO_BYTES"
             : candidate.kind === "response" ? "NETWORK_RESPONSE_REJECTED"
               : candidate.kind === "popup" ? "POPUP_NO_VALID_ARTIFACT"
                 : candidate.kind === "navigation" ? "NAVIGATION_NO_VALID_ARTIFACT"
@@ -886,18 +900,78 @@ export class ResponseArtifactDownloader {
     const url = String(download.url?.() || "");
     if (url.startsWith("blob:")) await validateDownloadUrl(url.slice(5), { allowedDomainSuffixes: domains, resolveHostname: this.resolveHostname });
     else if (url) await validateDownloadUrl(url, { allowedDomainSuffixes: domains, resolveHostname: this.resolveHostname });
-    const stream = await download.createReadStream();
-    if (!stream) throw new Error("Provider download stream is unavailable");
     const maxBytes = options.maxBytes ?? DEFAULT_MAX_DOWNLOAD_BYTES;
-    const chunks: Buffer[] = [];
-    let total = 0;
-    for await (const chunk of stream) {
-      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-      total += buffer.length;
-      if (total > maxBytes) { stream.destroy(); throw new Error(`Downloaded artifact exceeds ${maxBytes} bytes`); }
-      chunks.push(buffer);
+    const completionTimeoutMs = Math.min(Math.max(options.downloadCompletionTimeoutMs ?? 30_000, 1_000), 120_000);
+    const stagingDir = path.join(this.store.getBaseDir(), "_staging");
+    fs.mkdirSync(stagingDir, { recursive: true });
+    const stagingPath = path.join(stagingDir, `${crypto.randomUUID()}.part`);
+    let timedOut = false;
+    let tooLarge = false;
+    const monitor = setInterval(() => {
+      try {
+        if (fs.statSync(stagingPath).size > maxBytes) {
+          tooLarge = true;
+          void download.cancel?.().catch(() => undefined);
+        }
+      } catch { /* File may not exist until the browser starts copying. */ }
+    }, 100);
+    const withTimeout = async <T>(operation: Promise<T>): Promise<T> => await new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        timedOut = true;
+        void download.cancel?.().catch(() => undefined);
+        reject(new ArtifactDownloadFailure("DOWNLOAD_COMPLETION_TIMEOUT", "Browser download completion timed out"));
+      }, completionTimeoutMs);
+      operation.then((value) => { clearTimeout(timer); resolve(value); }, (error) => { clearTimeout(timer); reject(error); });
+    });
+    const classifyDownloadFailure = (failure: string): ArtifactFailureReason => /cancel/i.test(failure) ? "DOWNLOAD_BROWSER_CANCELED"
+      : /context.*clos|browser.*clos/i.test(failure) ? "DOWNLOAD_CONTEXT_CLOSED"
+        : /page.*clos|target.*clos/i.test(failure) ? "DOWNLOAD_PAGE_CLOSED" : "DOWNLOAD_FAILURE_UNKNOWN";
+    try {
+      if (typeof download.saveAs === "function") {
+        let saveError: unknown;
+        try { await withTimeout(download.saveAs(stagingPath)); }
+        catch (error) { saveError = error; }
+        if (tooLarge) throw new ArtifactDownloadFailure("ARTIFACT_TOO_LARGE", `Browser download exceeded ${maxBytes} bytes`);
+        if (timedOut) throw new ArtifactDownloadFailure("DOWNLOAD_COMPLETION_TIMEOUT", "Browser download completion timed out");
+        const failure = typeof download.failure === "function" ? await withTimeout(download.failure()) : null;
+        if (failure) throw new ArtifactDownloadFailure(classifyDownloadFailure(String(failure)), `Browser download failed: ${String(failure).slice(0, 200)}`);
+        if (saveError) {
+          if (typeof download.path !== "function") throw new ArtifactDownloadFailure("DOWNLOAD_SAVE_AS_FAILED", "Browser download saveAs failed and path fallback is unavailable");
+          const browserPath = await withTimeout<unknown>(download.path()).catch(() => null);
+          if (typeof browserPath !== "string" || !browserPath) throw new ArtifactDownloadFailure("DOWNLOAD_PATH_UNAVAILABLE", "Completed browser download path is unavailable");
+          try { fs.copyFileSync(browserPath, stagingPath); }
+          catch { throw new ArtifactDownloadFailure("DOWNLOAD_SAVE_AS_FAILED", "Completed browser download could not be copied to staging"); }
+        }
+      } else {
+        // Compatibility for synthetic test doubles. Real Playwright Download always exposes saveAs/failure.
+        const stream = await download.createReadStream?.();
+        if (!stream) throw new ArtifactDownloadFailure("DOWNLOAD_SAVE_AS_FAILED", "Browser download does not expose saveAs or a readable completed stream");
+        const output = fs.createWriteStream(stagingPath, { flags: "wx" });
+        let total = 0;
+        for await (const chunk of stream) {
+          const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+          total += buffer.length;
+          if (total > maxBytes) { stream.destroy(); throw new ArtifactDownloadFailure("ARTIFACT_TOO_LARGE", `Browser download exceeded ${maxBytes} bytes`); }
+          if (!output.write(buffer)) await new Promise<void>((resolve) => output.once("drain", resolve));
+        }
+        await new Promise<void>((resolve, reject) => {
+          output.once("error", reject);
+          output.end(() => resolve());
+        });
+      }
+      if (!fs.existsSync(stagingPath)) throw new ArtifactDownloadFailure("DOWNLOAD_STAGING_FILE_MISSING", "Browser download staging file is missing");
+      const stat = fs.statSync(stagingPath);
+      if (!stat.isFile()) throw new ArtifactDownloadFailure("DOWNLOAD_STAGING_FILE_MISSING", "Browser download staging target is not a regular file");
+      if (stat.size === 0) throw new ArtifactDownloadFailure("DOWNLOAD_STAGING_EMPTY", "Browser download staging file is empty");
+      if (stat.size > maxBytes) { await download.cancel?.().catch(() => undefined); throw new ArtifactDownloadFailure("ARTIFACT_TOO_LARGE", `Browser download exceeded ${maxBytes} bytes`); }
+      let buffer: Buffer;
+      try { buffer = fs.readFileSync(stagingPath); }
+      catch { throw new ArtifactDownloadFailure("DOWNLOAD_STAGING_READ_FAILED", "Browser download staging file could not be read"); }
+      return this.persistBuffer(buffer, { ...options, url, label: download.suggestedFilename() }, "");
+    } finally {
+      clearInterval(monitor);
+      fs.rmSync(stagingPath, { force: true });
     }
-    return this.persistBuffer(Buffer.concat(chunks), { ...options, url, label: download.suggestedFilename() }, "");
   }
 
   private async persistNetworkResponse(response: any, options: Omit<ArtifactDownloadOptions, "url" | "label">, domains: readonly string[]): Promise<DownloadedArtifactRecord> {
