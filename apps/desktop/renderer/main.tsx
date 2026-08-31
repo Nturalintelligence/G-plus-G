@@ -185,6 +185,8 @@ function AgentWorkspacePanel({ view, status, onClose, onEffort, onAutomation }: 
   </div>;
 }
 
+function ToolsPanel({view,onClose}:{view:ToolOverviewView;onClose:()=>void}):React.JSX.Element{return <div className="modal-backdrop tools-backdrop" onMouseDown={onClose}><section className="tools-modal" role="dialog" aria-modal="true" aria-label="Инструменты" onMouseDown={e=>e.stopPropagation()}><header><div><h2>Инструменты</h2><p>Структурированные действия выполняются только через Tool Broker.</p></div><button aria-label="Закрыть инструменты" onClick={onClose}>×</button></header><div className="tools-body"><section><h3>Git status</h3>{view.git.unavailable?<p>{view.git.reason}</p>:<><strong>{view.git.branch}</strong><code>{view.git.head}</code><pre>{view.git.status||"Рабочее дерево чистое"}</pre></>}</section><section><h3>Доступные plugins</h3>{view.plugins.map(p=><article className="tool-card" key={p.id}><div><strong>{p.id}</strong><span>{p.health}</span></div><small>{p.actions.join(" · ")}</small></article>)}</section><section><h3>История действий</h3>{view.history.length?view.history.map(a=><article className="tool-card" key={a.id}><div><strong>{a.plugin_id} · {a.action_id}</strong><span>{a.risk} · {a.state}</span></div><small>Agent {a.agent_instance_id} · task {a.task_id}</small></article>):<p>Действий пока нет.</p>}</section><p className="automation-warning">Свободный shell input отключён. Approval создаётся только main process.</p></div></section></div>}
+
 const fallbackSettings: AppSettingsView = {
   schemaVersion: 1,
   profile: { displayName: "", realName: "", greetingStyle: "generic" },
@@ -262,6 +264,7 @@ function App(): React.JSX.Element {
   const [agentWorkspaceOpen, setAgentWorkspaceOpen] = useState(false);
   const [agentWorkspace, setAgentWorkspace] = useState<AgentWorkspaceView | null>(null);
   const [agentWorkspaceStatus, setAgentWorkspaceStatus] = useState<string | null>(null);
+  const [toolsOpen,setToolsOpen]=useState(false); const [toolsView,setToolsView]=useState<ToolOverviewView|null>(null);
   const [settingsTab, setSettingsTab] = useState<"profile" | "models" | "behavior" | "appearance" | "quality" | "diagnostics">("profile");
   const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
   const [releaseInfo, setReleaseInfo] = useState<ReleaseInfoView | null>(null);
@@ -322,6 +325,7 @@ function App(): React.JSX.Element {
     try { setAgentWorkspace(await window.orchestrator.agentWorkspace.get(current.project.id)); setAgentWorkspaceOpen(true); }
     catch (error) { setActiveUserError(toUserFacingError(error, "Команда агентов")); }
   }
+  async function openTools():Promise<void>{if(!current){setShowNoProjectToast(true);return}try{setToolsView(await window.orchestrator.tools.overview(current.project.id));setToolsOpen(true)}catch(error){setActiveUserError(toUserFacingError(error,"Инструменты"))}}
 
   async function updateAgentEffort(agentId: string, effort: AgentEffort): Promise<void> {
     if (!current) return;
@@ -1213,6 +1217,7 @@ function App(): React.JSX.Element {
           <button className={`icon-header-btn agent-workspace-btn ${agentWorkspaceOpen ? "active" : ""}`} title="Команда агентов" onClick={() => void openAgentWorkspace()}>
             <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><circle cx="9" cy="8" r="3"/><circle cx="17" cy="10" r="2"/><path d="M3 20c0-4 2.5-6 6-6s6 2 6 6"/><path d="M15 15c3 0 5 1.5 5 5"/></svg><span>Команда агентов</span>
           </button>
+          <button className={`icon-header-btn ${toolsOpen?"active":""}`} title="Инструменты" onClick={()=>void openTools()}><span>Инструменты</span></button>
         </div>
       </header>
       {statusNotificationVisible ? (
@@ -1701,6 +1706,7 @@ function App(): React.JSX.Element {
         rebindConversation={rebindProviderConversation}
       />, document.getElementById("application-viewport") ?? document.body) : null}
       {agentWorkspaceOpen && agentWorkspace ? createPortal(<AgentWorkspacePanel view={agentWorkspace} status={agentWorkspaceStatus} onClose={() => setAgentWorkspaceOpen(false)} onEffort={(agentId, effort) => void updateAgentEffort(agentId, effort)} onAutomation={(area, mode) => void updateAutomation(area, mode)} />, document.getElementById("application-viewport") ?? document.body) : null}
+      {toolsOpen&&toolsView?createPortal(<ToolsPanel view={toolsView} onClose={()=>setToolsOpen(false)}/>,document.getElementById("application-viewport")??document.body):null}
 
       <DeleteProjectDialog
         isOpen={!!deleteTarget}

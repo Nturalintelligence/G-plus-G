@@ -25,6 +25,7 @@ import { ProjectStateService, type ProjectState } from "../../src/project-state.
 import { AppDatabase } from "../../src/storage/database.js";
 import { ProjectRepository } from "../../src/storage/repository.js";
 import { CliExecutionService } from "../../src/cli-executors/cli-execution-service.js";
+import { BuiltinGitPlugin } from "../../src/plugins/git-plugin.js";
 import type { AttachmentRefV1 } from "../../src/attachments/attachments.js";
 import type { ModelAdapter } from "../../src/adapters/adapter-contract.js";
 import { configureDataRoot, dataPath } from "../../src/paths.js";
@@ -521,6 +522,13 @@ function registerIpc(): void {
   handle("agentWorkspace:setEffort", (_event, inputValue: unknown) => {
     const input = inputValue && typeof inputValue === "object" ? inputValue as Record<string, unknown> : {};
     return new AgentWorkspaceService(db().raw).setEffort(requireString(input.projectId, "projectId", 200), requireString(input.agentId, "agentId", 200), requireString(input.effort, "effort", 20) as EffortLevel);
+  });
+  handle("tools:overview", async (_event, projectIdValue: unknown) => {
+    const projectId = requireString(projectIdValue, "projectId", 200);
+    if (!db().raw.prepare("SELECT id FROM projects WHERE id=?").get(projectId)) throw new Error("Project not found");
+    let git: unknown; try { const value = await new BuiltinGitPlugin().inspect(process.cwd()); git = { branch: value.branch, head: value.head, status: value.status, remotes: value.remotes }; } catch (error) { git = { unavailable: true, reason: error instanceof Error ? error.message : "Git unavailable" }; }
+    const history = db().raw.prepare("SELECT id,task_id,agent_instance_id,plugin_id,action_id,risk,state,requested_at,started_at,finished_at,failure_code,output_summary FROM tool_actions WHERE project_id=? ORDER BY requested_at DESC LIMIT 50").all(projectId);
+    return { plugins: [{ id: "builtin.git", health: "AVAILABLE", actions: ["detect","status","diff","log","branch.read","branch.create","stage","commit","fetch","push"] }, { id: "builtin.command", health: "AVAILABLE", actions: ["run","stop"] }], git, history };
   });
   handle("system:copyText", (_event, textValue: unknown) => {
     if (typeof textValue !== "string") throw new Error("clipboard text must be a string");

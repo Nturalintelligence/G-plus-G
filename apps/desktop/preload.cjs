@@ -69,6 +69,7 @@ const api = {
     saveAutomation: (projectId, policy) => ipcRenderer.invoke("agentWorkspace:saveAutomation", { projectId, policy }),
     setEffort: (projectId, agentId, effort) => ipcRenderer.invoke("agentWorkspace:setEffort", { projectId, agentId, effort }),
   },
+  tools: { overview: (projectId) => ipcRenderer.invoke("tools:overview", projectId) },
   window: {
     setTheme: (theme) => ipcRenderer.invoke("window:setTheme", theme),
     toggleMaximize: () => ipcRenderer.invoke("window:toggleMaximize"),
