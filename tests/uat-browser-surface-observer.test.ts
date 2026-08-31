@@ -6,9 +6,11 @@ import { bundledChromiumExecutable } from "../src/browser/runtime.js";
 import {
   assertBrowserObserverSourceSafe,
   installSurfaceObserver,
+  installPersistentSurfaceObserver,
   parseSurfaceObserverDto,
   readSurfaceObserver,
   SURFACE_OBSERVER_SOURCE,
+  SurfaceObserverCollector,
 } from "../src/uat/browser-surface-observer.js";
 import { runAfterObserverPreflight } from "../src/uat/observer-preflight.js";
 
@@ -80,5 +82,24 @@ describe("self-contained UAT browser surface observer", () => {
     );
     expect(result).toBe("UAT_READY");
     expect(order).toEqual(["preflight", "provider"]);
+  });
+
+  it("keeps validated Node-side diagnostic history across navigation", async () => {
+    const navigationPage = await browser.newPage({ serviceWorkers: "block" });
+    await navigationPage.setContent('<model-response><div class="file-card"><button aria-label="скачать файл">Скачать</button></div></model-response>');
+    const collector = await installPersistentSurfaceObserver(navigationPage);
+    await expect.poll(() => collector.current()?.latest?.surface).toBe("FILE_CARD");
+    const before = collector.events().length;
+    await navigationPage.goto("data:text/html,<model-response><pre><button aria-label='download code'>Download</button></pre></model-response>");
+    await expect.poll(() => collector.current()?.latest?.surface).toBe("CODE_BLOCK");
+    expect(collector.events().length).toBeGreaterThan(before);
+    expect(collector.events().some((event) => event.latest?.surface === "FILE_CARD")).toBe(true);
+    await navigationPage.close();
+  });
+
+  it("rejects malformed events before they enter Node-side history", () => {
+    const collector = new SurfaceObserverCollector();
+    expect(() => collector.accept({ version: 1, first: null, latest: null, hoverObserved: false, focusObserved: false, expansionClicks: 0 })).toThrow();
+    expect(collector.events()).toHaveLength(0);
   });
 });

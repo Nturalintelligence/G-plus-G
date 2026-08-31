@@ -50,6 +50,10 @@ export const SURFACE_OBSERVER_SOURCE = String.raw`(() => {
     expansionClicks: 0,
     downloadClicks: 0
   };
+  const emit = function () {
+    const sink = window.__gplusgSurfaceEvidenceSink;
+    if (typeof sink === 'function') void sink(state);
+  };
   const controlSelector = 'a[download],button[aria-label*="download" i],button[aria-label*="скач" i],button[title*="download" i],button[title*="скач" i],[role="button"][data-tooltip*="download" i],[role="button"][data-tooltip*="скач" i],[data-test-id*="download" i],[data-testid*="download" i]';
   const containerSelector = 'pre,.code-block,[class*="artifact" i],[data-test-id*="artifact" i],[data-testid*="artifact" i],file-card,[class*="file-card" i]';
   const scan = function () {
@@ -84,25 +88,33 @@ export const SURFACE_OBSERVER_SOURCE = String.raw`(() => {
     };
     if (state.first === null && details.length > 0) state.first = snapshot;
     state.latest = snapshot;
+    emit();
   };
   const observer = new MutationObserver(scan);
-  observer.observe(document.documentElement, { subtree: true, childList: true, attributes: true, attributeFilter: ['class', 'style', 'hidden', 'aria-hidden', 'aria-disabled'] });
+  const start = function () {
+    if (!document.documentElement) return;
+    observer.observe(document.documentElement, { subtree: true, childList: true, attributes: true, attributeFilter: ['class', 'style', 'hidden', 'aria-hidden', 'aria-disabled'] });
+    scan();
+  };
   document.addEventListener('mouseover', function (event) {
     const target = event.target;
-    if (target instanceof Element && target.closest(containerSelector)) state.hoverObserved = true;
+    if (target instanceof Element && target.closest(containerSelector)) { state.hoverObserved = true; emit(); }
   }, true);
   document.addEventListener('focusin', function (event) {
     const target = event.target;
-    if (target instanceof Element && target.closest(containerSelector)) state.focusObserved = true;
+    if (target instanceof Element && target.closest(containerSelector)) { state.focusObserved = true; emit(); }
   }, true);
   document.addEventListener('click', function (event) {
     const target = event.target;
     if (!(target instanceof Element)) return;
     if (target.closest(controlSelector)) state.downloadClicks += 1;
     else if (target.closest('button[aria-haspopup="menu"]')) state.expansionClicks += 1;
+    emit();
   }, true);
   window[key] = state;
-  scan();
+  if (document.documentElement) start();
+  else document.addEventListener('readystatechange', start, { once: true });
+  emit();
   return state;
 })()`;
 
@@ -165,6 +177,28 @@ export async function installSurfaceObserver(page: Page): Promise<SurfaceObserve
 
 export async function readSurfaceObserver(page: Page): Promise<SurfaceObserverDto> {
   return parseSurfaceObserverDto(await page.evaluate(SURFACE_OBSERVER_READ_SOURCE));
+}
+
+export class SurfaceObserverCollector {
+  private latest: SurfaceObserverDto | null = null;
+  private readonly history: SurfaceObserverDto[] = [];
+
+  accept(value: unknown): void {
+    const dto = parseSurfaceObserverDto(value);
+    this.latest = structuredClone(dto);
+    this.history.push(structuredClone(dto));
+  }
+
+  current(): SurfaceObserverDto | null { return this.latest ? structuredClone(this.latest) : null; }
+  events(): SurfaceObserverDto[] { return structuredClone(this.history); }
+}
+
+export async function installPersistentSurfaceObserver(page: Page): Promise<SurfaceObserverCollector> {
+  const collector = new SurfaceObserverCollector();
+  await page.exposeBinding("__gplusgSurfaceEvidenceSink", (_source, value: unknown) => collector.accept(value));
+  await page.addInitScript({ content: SURFACE_OBSERVER_SOURCE });
+  collector.accept(await page.evaluate(SURFACE_OBSERVER_SOURCE));
+  return collector;
 }
 
 export function assertBrowserObserverSourceSafe(source = SURFACE_OBSERVER_SOURCE): void {

@@ -5,7 +5,7 @@ import { writeDiagnostic } from "../src/observability/logger.js";
 import { configureDataRoot, dataPath } from "../src/paths.js";
 import { AppDatabase } from "../src/storage/database.js";
 import { ProjectRepository } from "../src/storage/repository.js";
-import { installSurfaceObserver, readSurfaceObserver, type SurfaceObserverDto } from "../src/uat/browser-surface-observer.js";
+import { installPersistentSurfaceObserver, type SurfaceObserverCollector, type SurfaceObserverDto } from "../src/uat/browser-surface-observer.js";
 import { runAfterObserverPreflight, runSurfaceObserverPreflight } from "../src/uat/observer-preflight.js";
 
 const provider = parseProvider(process.argv[2]);
@@ -31,12 +31,13 @@ const result = await runAfterObserverPreflight(runSurfaceObserverPreflight, asyn
   const captureChannels = new Set<string>();
   let surfaceEvidence: SurfaceObserverDto | null = null;
   let observedPage: any = null;
+  let surfaceCollector: SurfaceObserverCollector | null = null;
   const observers: Array<[string, (...args: any[]) => void]> = [];
   try {
     await adapter.launch();
     observedPage = (adapter as any).page;
     if (!observedPage) throw new Error("Gemini page unavailable after launch");
-    await installSurfaceObserver(observedPage);
+    surfaceCollector = await installPersistentSurfaceObserver(observedPage);
     const onDownload = () => captureChannels.add("download event");
     const onPopup = () => captureChannels.add("popup/navigation");
     const onFrame = (frame: any) => { if (frame === observedPage.mainFrame?.()) captureChannels.add("popup/navigation"); };
@@ -65,7 +66,7 @@ const result = await runAfterObserverPreflight(runSurfaceObserverPreflight, asyn
     const current = await adapter.getCurrentConversation().catch(() => null);
     if (current?.url) repository.updateConversationExternalRef(conversation.id, current.url);
     repository.appendConversationEntry({ id: assistantEntryId, projectId: project.id, role: "ASSISTANT", providerId: provider, round: 1, content: response.response });
-    surfaceEvidence = await readSurfaceObserver(observedPage);
+    surfaceEvidence = surfaceCollector.current();
     const rows = database.raw.prepare("SELECT id, file_name, mime_type, size_bytes, sha256, local_relative_path, status, failure_reason, failure_detail, physical_click_count FROM downloaded_artifacts WHERE project_id = ? AND provider_id = ? ORDER BY downloaded_at").all(project.id, provider) as Array<Record<string, unknown>>;
     const ready = rows.find((row) => row.status === "READY");
     let contentMatch = false;
@@ -96,7 +97,7 @@ const result = await runAfterObserverPreflight(runSurfaceObserverPreflight, asyn
       provider,
       projectId: project.id,
       providerDiagnostics: await adapter.collectDiagnostics().catch(() => ({})),
-      surfaceEvidence: await readSurfaceObserver(observedPage).catch(() => null),
+      surfaceEvidence: surfaceCollector?.current() ?? surfaceEvidence,
     });
     console.error(`Диагностика: ${diagnostic}`);
     throw error;
