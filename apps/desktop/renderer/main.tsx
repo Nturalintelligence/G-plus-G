@@ -119,7 +119,7 @@ function MessageAttachments({ files, onPreview }: { files: AttachmentRefView[]; 
       <div className="message-attachment-card" key={file.id}>
         {file.status === "FAILED" ? <div className="message-attachment-open" role="status">
           <AttachmentIcon />
-          <span><strong>{file.fileName || "Не удалось получить файл"}</strong><small>Провайдер показал файл, но G+G не смог безопасно его скачать</small></span>
+          <span><strong>{file.fileName || "Не удалось получить файл"}</strong><small>{file.error || "Провайдер показал файл, но G+G не смог безопасно его скачать"}</small></span>
         </div> : <button type="button" className="message-attachment-open" onClick={() => file.previewUrl ? onPreview(file.previewUrl) : void window.orchestrator.attachments.open(file.id)}>
           {file.previewUrl ? <img src={file.previewUrl} alt="" /> : <AttachmentIcon />}
           <span><strong>{file.fileName}</strong><small>{file.source !== "user" ? `Файл от ${file.source} · ` : ""}{file.mimeType} · {formatAttachmentSize(file.sizeBytes)} · {file.status}</small></span>

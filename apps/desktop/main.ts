@@ -192,10 +192,18 @@ function attachmentViewsForProject(projectId: string): {
     }
   }
   const downloadedRows = loadPersistedProviderArtifactRows(db().raw, projectId);
+  const failureMessage = (reason: string): string => ({
+    DOWNLOAD_CONTROL_HIDDEN: "Кнопка скачивания Gemini скрыта и не может быть безопасно нажата",
+    DOWNLOAD_CONTROL_ZERO_BOUNDS: "Кнопка скачивания Gemini не имеет кликабельного размера",
+    DOWNLOAD_EVIDENCE_NOT_ACTIONABLE: "Gemini показал признак файла, но не предоставил доступную кнопку скачивания",
+    ARTIFACT_RENDERED_AS_CODE_BLOCK: "Gemini показал содержимое как блок кода, а не как скачиваемый файл",
+    AMBIGUOUS_DOWNLOAD_CONTROLS: "Найдено несколько неоднозначных кнопок скачивания; нажатие не выполнялось",
+    NETWORK_EVIDENCE_NO_BYTES: "Обнаружен сетевой признак файла, но непустые файловые данные не получены",
+  } as Record<string, string>)[reason] ?? `Файл не получен: ${reason}`;
   for (const row of downloadedRows) {
     const ref = downloadedArtifactRefFromRow(row);
     const dto = toRendererAttachment(ref);
-    const failure = row.failure_reason ? `Файл не получен: ${String(row.failure_reason)}` : undefined;
+    const failure = row.failure_reason ? failureMessage(String(row.failure_reason)) : undefined;
     (transcriptAttachments[ref.messageId] ??= []).push(failure ? { ...dto, error: failure } : dto);
   }
   return {

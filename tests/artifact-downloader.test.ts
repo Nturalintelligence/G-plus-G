@@ -1,4 +1,5 @@
 import { Readable } from "node:stream";
+import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -405,14 +406,14 @@ describe("ResponseArtifactDownloader deterministic download pipeline", () => {
       projectId: "project-1", messageId: "message-preview", providerId: "gemini", expectArtifact: true,
     });
     expect(preview).toHaveLength(1);
-    expect(preview[0]).toMatchObject({ status: "FAILED", failureReason: "DOWNLOAD_CONTROL_MISSING", fileName: "" });
+    expect(preview[0]).toMatchObject({ status: "FAILED", failureReason: "DOWNLOAD_EVIDENCE_NOT_ACTIONABLE", fileName: "" });
 
     const noExpandTurn = { ...turn, locator: () => ({ count: async () => 0, first: () => ({ count: async () => 0 }) }) };
     const missingPage = { locator: () => ({ last: () => noExpandTurn }) } as unknown as Page;
     const missing = await downloader.downloadTurnArtifactsFromPage(missingPage, ".bound-assistant", {
       projectId: "project-1", messageId: "message-missing", providerId: "gemini", expectArtifact: true,
     });
-    expect(missing[0]?.failureReason).toBe("DOWNLOAD_CONTROL_MISSING");
+    expect(missing[0]?.failureReason).toBe("DOWNLOAD_EVIDENCE_NOT_ACTIONABLE");
   });
 
   it("accepts a bounded blob download stream and computes SHA-256", async () => {
@@ -505,5 +506,31 @@ describe("ResponseArtifactDownloader deterministic download pipeline", () => {
       projectId: "project-1", messageId: "message-chatgpt-md", providerId: "chatgpt",
     });
     expect(result).toMatchObject({ status: "READY", fileName: "result.md", mimeType: "text/markdown" });
+  });
+
+  it("captures one strict Gemini file response during generation without a UI click", async () => {
+    const page = new EventEmitter() as EventEmitter & { context: () => unknown };
+    const body = Buffer.from("G_PLUS_G_INBOUND_FINAL_2026");
+    const capture = downloader.armNetworkFirstCapture(page as unknown as Page, {
+      projectId: "project-1", messageId: "gemini-network-first", providerId: "gemini", expectArtifact: true,
+    });
+    page.emit("response", {
+      ok: () => true, url: () => "https://gemini.google.com/download/gplusg-inbound-final.txt",
+      headers: () => ({ "content-type": "text/plain", "content-disposition": 'attachment; filename="gplusg-inbound-final.txt"', "content-length": String(body.length) }),
+      body: async () => body,
+    });
+    const record = await capture.finish();
+    expect(record).toMatchObject({ status: "READY", sizeBytes: 27, mimeType: "text/plain" });
+    expect(capture.evidence.at(-1)).toMatchObject({ channel: "NETWORK_RESPONSE", phase: "GENERATION", correlatedToAcquisition: true, producedBytes: true });
+  });
+
+  it("keeps telemetry, JSON and uncorrelated generation responses as evidence only", async () => {
+    const page = new EventEmitter();
+    const capture = downloader.armNetworkFirstCapture(page as unknown as Page, {
+      projectId: "project-1", messageId: "gemini-passive", providerId: "gemini", expectArtifact: true,
+    });
+    page.emit("response", { ok: () => true, url: () => "https://gemini.google.com/telemetry", headers: () => ({ "content-type": "application/json" }), body: async () => Buffer.from("{}") });
+    expect(await capture.finish()).toBeNull();
+    expect(appDb.raw.prepare("SELECT COUNT(*) count FROM downloaded_artifacts WHERE message_id='gemini-passive'").get()).toMatchObject({ count: 0 });
   });
 });

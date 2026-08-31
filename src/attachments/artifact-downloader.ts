@@ -44,7 +44,28 @@ export type ArtifactFailureReason =
   | "BLOB_EXTRACTION_FAILED"
   | "ORIGINAL_ASSET_NOT_FOUND"
   | "DOWNLOAD_TRIGGER_NO_BYTES"
+  | "DOWNLOAD_EVIDENCE_NOT_ACTIONABLE"
+  | "DOWNLOAD_CONTROL_HIDDEN"
+  | "DOWNLOAD_CONTROL_ZERO_BOUNDS"
+  | "DOWNLOAD_CONTROL_IN_MENU"
+  | "NETWORK_EVIDENCE_NO_BYTES"
+  | "PASSIVE_EVENT_NOT_CORRELATED"
+  | "ARTIFACT_RENDERED_AS_CODE_BLOCK"
+  | "ARTIFACT_RESPONSE_NOT_FILE"
   | "AMBIGUOUS_DOWNLOAD_CONTROLS";
+
+export type DownloadAvailability =
+  | "DOWNLOAD_EVIDENCE_ONLY"
+  | "DOWNLOAD_CONTROL_ACTIONABLE"
+  | "DOWNLOAD_BYTES_OBSERVED";
+
+export interface ArtifactChannelEvidence {
+  channel: "DOWNLOAD" | "NETWORK_RESPONSE" | "POPUP" | "NAVIGATION" | "DYNAMIC_REFERENCE" | "BLOB";
+  phase: "GENERATION" | "DISCOVERY" | "AFTER_EXPANSION" | "AFTER_DOWNLOAD_CLICK";
+  correlatedToAssistantTurn: boolean;
+  correlatedToAcquisition: boolean;
+  producedBytes: boolean;
+}
 
 export interface ProviderArtifactAcquisition {
   acquisitionId: string;
@@ -53,7 +74,9 @@ export interface ProviderArtifactAcquisition {
   providerTurnId: string;
   controlFingerprint: string;
   physicalClickCount: 0 | 1;
-  state: "CONTROL_SELECTED" | "LISTENERS_ARMED" | "CLICK_COMMITTED" | "CAPTURE_WAITING" | "VALIDATING" | "READY" | "FAILED";
+  expansionCount?: 0 | 1;
+  channelEvidence?: ArtifactChannelEvidence[];
+  state: "TURN_BOUND" | "OPTIONAL_EXPANSION" | "CONTROL_ACTIONABLE" | "LISTENERS_ARMED" | "DOWNLOAD_CLICK_COMMITTED" | "CAPTURE_WAITING" | "VALIDATING" | "READY" | "FAILED";
 }
 
 export type ArtifactDownloadState =
@@ -107,6 +130,7 @@ export interface ArtifactDownloadOptions {
   downloadEventTimeoutMs?: number;
   expectArtifact?: boolean;
   onStateChange?: (state: ArtifactDownloadState) => void;
+  onChannelEvidence?: (evidence: ArtifactChannelEvidence) => void;
 }
 
 export type HostnameResolver = (hostname: string) => Promise<readonly string[]>;
@@ -407,6 +431,55 @@ export class ResponseArtifactDownloader {
     }));
   }
 
+  /** Arms a passive, turn-scoped strategy before generation starts. It never clicks UI. */
+  public armNetworkFirstCapture(
+    page: Page,
+    options: Omit<ArtifactDownloadOptions, "url" | "label">,
+  ): { finish: () => Promise<DownloadedArtifactRecord | null>; evidence: ArtifactChannelEvidence[] } {
+    const candidates: any[] = [];
+    const evidence: ArtifactChannelEvidence[] = [];
+    let stopped = false;
+    const onResponse = (response: any) => {
+      if (stopped || !response.ok?.()) return;
+      const headers = response.headers?.() || {};
+      const mime = contentTypeWithoutParameters(headers["content-type"]);
+      const disposition = String(headers["content-disposition"] || "");
+      let parsed: URL;
+      try { parsed = new URL(String(response.url?.() || "")); } catch { return; }
+      if (mime === "text/html" || mime.includes("json") || /telemetry|analytics|avatar|icon|preview|thumbnail/i.test(parsed.pathname)) return;
+      const strongDisposition = /attachment/i.test(disposition);
+      const strongPath = /download|file|artifact|usercontent|generated/i.test(`${parsed.hostname}${parsed.pathname}`);
+      const allowedMime = DEFAULT_ALLOWED_MIME_TYPES.has(mime) || mime === "application/octet-stream";
+      if (!allowedMime || (!strongDisposition && !strongPath)) {
+        evidence.push({ channel: "NETWORK_RESPONSE", phase: "GENERATION", correlatedToAssistantTurn: true, correlatedToAcquisition: false, producedBytes: false });
+        return;
+      }
+      candidates.push(response);
+    };
+    (page as any).on?.("response", onResponse);
+    return {
+      evidence,
+      finish: async () => {
+        if (stopped) return null;
+        stopped = true;
+        (page as any).off?.("response", onResponse);
+        const unique = [...new Map(candidates.map((candidate) => [String(candidate.url()), candidate])).values()];
+        if (unique.length !== 1) {
+          if (unique.length > 1) evidence.push({ channel: "NETWORK_RESPONSE", phase: "GENERATION", correlatedToAssistantTurn: true, correlatedToAcquisition: false, producedBytes: false });
+          return null;
+        }
+        try {
+          const record = await this.persistNetworkResponse(unique[0], options, this.allowedDomains(options.providerId, options.allowedDomainSuffixes));
+          evidence.push({ channel: "NETWORK_RESPONSE", phase: "GENERATION", correlatedToAssistantTurn: true, correlatedToAcquisition: true, producedBytes: record.status === "READY" && record.sizeBytes > 0 });
+          return record.status === "READY" ? record : null;
+        } catch {
+          evidence.push({ channel: "NETWORK_RESPONSE", phase: "GENERATION", correlatedToAssistantTurn: true, correlatedToAcquisition: false, producedBytes: false });
+          return null;
+        }
+      },
+    };
+  }
+
   /** Downloads only candidates found inside the response bound to this turn. */
   public async downloadTurnArtifactsFromPage(
     page: Page,
@@ -443,7 +516,7 @@ export class ResponseArtifactDownloader {
     const acquisition: ProviderArtifactAcquisition = {
       acquisitionId: `acq_${crypto.randomUUID()}`, providerId: options.providerId,
       projectId: options.projectId, providerTurnId: options.messageId,
-      controlFingerprint: "", physicalClickCount: 0, state: "CONTROL_SELECTED",
+      controlFingerprint: "", physicalClickCount: 0, expansionCount: 0, channelEvidence: [], state: "TURN_BOUND",
     };
     const pending = this.acquireTurnArtifactOnce(page, turnSelector, options, acquisition);
     ResponseArtifactDownloader.activeAcquisitions.set(key, pending);
@@ -472,21 +545,50 @@ export class ResponseArtifactDownloader {
       projectId: options.projectId,
       providerTurnId: options.messageId,
       controlFingerprint: "",
-      physicalClickCount: 0,
-      state: "CONTROL_SELECTED",
+      physicalClickCount: 0, expansionCount: 0, channelEvidence: [],
+      state: "TURN_BOUND",
     };
     const turn = page.locator(turnSelector).last();
-    const controls = turn.locator([
-      "a[download]", 'button[aria-label*="download" i]', 'button[aria-label*="скач"]',
-      'button[aria-label*="Скач"]', 'a[aria-label*="download" i]',
-      'a[aria-label*="скач"]', 'a[aria-label*="Скач"]',
-    ].join(", "));
+    const controlSelector = [
+      "a[download]", 'button[aria-label*="download" i]', 'button[aria-label*="скач" i]', 'button[aria-label*="Скач"]',
+      'a[aria-label*="download" i]', 'a[aria-label*="скач" i]',
+      'button[title*="download" i]', 'button[title*="скач" i]',
+      '[role="button"][data-tooltip*="download" i]', '[role="button"][data-tooltip*="скач" i]',
+      '[data-test-id*="download" i]', '[data-testid*="download" i]',
+    ].join(", ");
+    const artifactRegions = turn.locator('pre, .code-block, [data-test-id*="artifact" i], [data-testid*="artifact" i], [class*="artifact" i]') as any;
+    const artifactRegion = typeof artifactRegions.last === "function" ? artifactRegions.last() : artifactRegions;
+    if (typeof artifactRegion.hover === "function" && await artifactRegion.count().catch(() => 0)) await artifactRegion.hover().catch(() => undefined);
+    let controls = turn.locator(controlSelector);
+    if ((await controls.count().catch(() => 0)) === 0 && options.providerId === "gemini") {
+      const menuControls = turn.locator('button[aria-haspopup="menu"][aria-label*="file" i], button[aria-haspopup="menu"][aria-label*="artifact" i], button[aria-haspopup="menu"][aria-label*="скач" i], button[aria-haspopup="menu"][title*="download" i]');
+      const visibleMenus: Locator[] = [];
+      for (let index = 0; index < Math.min(await menuControls.count().catch(() => 0), 10); index += 1) {
+        const candidate = menuControls.nth(index);
+        if (await candidate.isVisible().catch(() => false) && await candidate.isEnabled().catch(() => false)) visibleMenus.push(candidate);
+      }
+      if (visibleMenus.length === 1) {
+        acquisition.state = "OPTIONAL_EXPANSION";
+        acquisition.expansionCount = 1;
+        await visibleMenus[0]!.click();
+        controls = turn.locator(controlSelector);
+      } else if (visibleMenus.length > 1) {
+        acquisition.state = "FAILED";
+        return [this.persistFailure({ ...options, url: "", label: "" }, "AMBIGUOUS_DOWNLOAD_CONTROLS", new Error("Multiple artifact menus inside bound assistant turn"))];
+      }
+    }
     const byFingerprint = new Map<string, Locator>();
     const count = Math.min(await controls.count().catch(() => 0), 20);
+    let hiddenCount = 0;
+    let zeroBoundsCount = 0;
     for (let index = 0; index < count; index += 1) {
       const control = controls.nth(index);
-      if (typeof (control as any).isVisible === "function" && !(await (control as any).isVisible().catch(() => false))) continue;
+      if (typeof (control as any).isVisible === "function" && !(await (control as any).isVisible().catch(() => false))) { hiddenCount += 1; continue; }
       if (typeof (control as any).isEnabled === "function" && !(await (control as any).isEnabled().catch(() => false))) continue;
+      if (typeof (control as any).boundingBox === "function") {
+        const bounds = await (control as any).boundingBox().catch(() => null);
+        if (!bounds || bounds.width <= 0 || bounds.height <= 0) { zeroBoundsCount += 1; continue; }
+      }
       const fingerprint = await this.controlFingerprint(control, index);
       if (!byFingerprint.has(fingerprint)) byFingerprint.set(fingerprint, control);
     }
@@ -500,6 +602,7 @@ export class ResponseArtifactDownloader {
     const selected = byFingerprint.values().next().value as Locator | undefined;
     if (selected) {
       acquisition.controlFingerprint = byFingerprint.keys().next().value || "";
+      acquisition.state = "CONTROL_ACTIONABLE";
       acquisition.state = "LISTENERS_ARMED";
       const guardedControl = new Proxy(selected as any, {
         get(target, property) {
@@ -508,7 +611,7 @@ export class ResponseArtifactDownloader {
               throw new Error("Artifact acquisition physical click already committed");
             }
             acquisition.physicalClickCount = 1;
-            acquisition.state = "CLICK_COMMITTED";
+            acquisition.state = "DOWNLOAD_CLICK_COMMITTED";
             return target.click();
           };
           const value = target[property];
@@ -523,6 +626,10 @@ export class ResponseArtifactDownloader {
           else if (state === "ARTIFACT_STORED") acquisition.state = "READY";
           else if (state === "DOWNLOAD_TRIGGER_NO_BYTES") acquisition.state = "FAILED";
           options.onStateChange?.(state);
+        },
+        onChannelEvidence: (evidence: ArtifactChannelEvidence) => {
+          acquisition.channelEvidence?.push(evidence);
+          options.onChannelEvidence?.(evidence);
         },
       };
       try { return [await this.captureDownloadFromLocator(page, guardedControl, captureOptions)]; }
@@ -559,9 +666,13 @@ export class ResponseArtifactDownloader {
       }
     }
     acquisition.state = "FAILED";
+    const codeBlock = await turn.locator("pre, code, .code-block").count().catch(() => 0);
+    const missingReason: ArtifactFailureReason = zeroBoundsCount > 0 ? "DOWNLOAD_CONTROL_ZERO_BOUNDS"
+      : hiddenCount > 0 ? "DOWNLOAD_CONTROL_HIDDEN"
+        : codeBlock > 0 ? "ARTIFACT_RENDERED_AS_CODE_BLOCK" : "DOWNLOAD_EVIDENCE_NOT_ACTIONABLE";
     return options.expectArtifact ? [this.persistFailure(
-      { ...options, url: "", label: "" }, "DOWNLOAD_CONTROL_MISSING",
-      new Error("Provider response did not expose one unambiguous download control"),
+      { ...options, url: "", label: "" }, missingReason,
+      new Error(`Provider response did not expose an actionable download control; candidates=${count}; hidden=${hiddenCount}; zeroBounds=${zeroBoundsCount}`),
     )] : [];
   }
 
@@ -640,6 +751,9 @@ export class ResponseArtifactDownloader {
     let stopped = false;
     const enqueue = (candidate: CaptureCandidate) => {
       if (!triggered || stopped) return;
+      const channel = candidate.kind === "download" ? "DOWNLOAD" : candidate.kind === "response" ? "NETWORK_RESPONSE"
+        : candidate.kind === "popup" ? "POPUP" : candidate.kind === "navigation" ? "NAVIGATION" : "DYNAMIC_REFERENCE";
+      options.onChannelEvidence?.({ channel, phase: "AFTER_DOWNLOAD_CLICK", correlatedToAssistantTurn: true, correlatedToAcquisition: true, producedBytes: false });
       queue.push(candidate);
       wake?.();
       wake = null;
@@ -740,6 +854,8 @@ export class ResponseArtifactDownloader {
             else record = await this.downloadArtifactSsrfSafe(page, { ...options, url: normalized.url });
           }
           if (record.status === "READY") {
+            const last = options.onChannelEvidence ? { channel: candidate.kind === "download" ? "DOWNLOAD" : candidate.kind === "response" ? "NETWORK_RESPONSE" : candidate.kind === "popup" ? "POPUP" : candidate.kind === "navigation" ? "NAVIGATION" : "DYNAMIC_REFERENCE", phase: "AFTER_DOWNLOAD_CLICK", correlatedToAssistantTurn: true, correlatedToAcquisition: true, producedBytes: true } as ArtifactChannelEvidence : null;
+            if (last) options.onChannelEvidence?.(last);
             emitState("ARTIFACT_STORED");
             return record;
           }

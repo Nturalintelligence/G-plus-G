@@ -3,6 +3,9 @@ export type ProviderResultState =
   | "GENERATING"
   | "AWAITING_USER_SELECTION"
   | "RESULT_RENDERED"
+  | "DOWNLOAD_EVIDENCE_ONLY"
+  | "DOWNLOAD_CONTROL_ACTIONABLE"
+  | "DOWNLOAD_BYTES_OBSERVED"
   | "DOWNLOAD_AVAILABLE"
   | "DOWNLOADING"
   | "STORED"
@@ -22,7 +25,7 @@ export function classifyProviderResult(signals: ProviderResultSignals): Provider
   if (signals.failureVisible) return "FAILED";
   if (signals.selectionCount > 1) return "AWAITING_USER_SELECTION";
   if (signals.generationActive) return "GENERATING";
-  if (signals.downloadControlCount > 0) return "DOWNLOAD_AVAILABLE";
+  if (signals.downloadControlCount > 0) return "DOWNLOAD_EVIDENCE_ONLY";
   if (signals.responsePresent) return "RESULT_RENDERED";
   return "SUBMITTED";
 }

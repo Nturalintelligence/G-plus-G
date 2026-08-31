@@ -314,6 +314,8 @@ export class GeminiAdapter implements ModelAdapter {
     const started = Date.now();
     const state = await this.waitUntilReady();
     const page = await this.ensurePage();
+    const downloader = this.artifactDatabase ? new ResponseArtifactDownloader(this.artifactDatabase) : null;
+    let networkFirst: ReturnType<ResponseArtifactDownloader["armNetworkFirstCapture"]> | null = null;
 
     if (attachments && attachments.length > 0) {
       const evidence = await uploadAttachmentsToComposer(page, attachments, this.getCapabilities(), GEMINI_UPLOAD_SELECTORS);
@@ -338,25 +340,30 @@ export class GeminiAdapter implements ModelAdapter {
       throw new AmbiguousElementError("Поле ввода Gemini не найдено или перекрыто; возможно, интерфейс провайдера изменился");
     }
     await fillComposerSafely(composers[selectedComposer]!, message);
-    await this.submitComposer(composers[selectedComposer]!, message);
+    networkFirst = downloader && responseTarget ? downloader.armNetworkFirstCapture(page, {
+      projectId: responseTarget.projectId, messageId: responseTarget.messageId, providerId: this.providerId, expectArtifact: true,
+    }) : null;
+    try { await this.submitComposer(composers[selectedComposer]!, message); }
+    catch (error) { await networkFirst?.finish(); throw error; }
     await this.waitUntilUserMessage(userMessagesBefore);
     channel?.publish({ type: "MESSAGE_SUBMITTED", at: new Date().toISOString() });
 
-    const response = await this.waitForResponse(before, channel);
+    let response;
+    try { response = await this.waitForResponse(before, channel); }
+    catch (error) { await networkFirst?.finish(); throw error; }
 
     const extractedArtifacts = [];
 
     try {
-      const downloader = this.artifactDatabase ? new ResponseArtifactDownloader(this.artifactDatabase) : null;
       if (downloader && responseTarget) {
-        extractedArtifacts.push(...await downloader.downloadTurnArtifactsFromPage(page, 'message-content, .model-response-text', {
-          projectId: responseTarget.projectId,
-          messageId: responseTarget.messageId,
-          providerId: this.providerId,
-          expectArtifact: true,
+        const passive = await networkFirst?.finish();
+        if (passive) extractedArtifacts.push(passive);
+        else extractedArtifacts.push(...await downloader.downloadTurnArtifactsFromPage(page, 'message-content, .model-response-text', {
+          projectId: responseTarget.projectId, messageId: responseTarget.messageId, providerId: this.providerId, expectArtifact: true,
         }));
       }
     } catch {
+      await networkFirst?.finish();
       // Best-effort artifact scan
     }
 
@@ -442,7 +449,7 @@ export class GeminiAdapter implements ModelAdapter {
         }
         const stop = page.getByRole("button", { name: /stop|останов/i });
         const composerReady = (await this.visibleComposers()).length >= 1;
-        const artifactReady = lifecycle.current() === "DOWNLOAD_AVAILABLE";
+        const artifactReady = lifecycle.current() === "DOWNLOAD_CONTROL_ACTIONABLE" || lifecycle.current() === "DOWNLOAD_BYTES_OBSERVED";
         if (
           !(await stop.isVisible().catch(() => false)) &&
           (composerReady || artifactReady) &&
