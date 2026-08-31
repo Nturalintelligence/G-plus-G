@@ -19,6 +19,8 @@ export interface RendererAttachmentDto {
   previewUrl?: string;
   quarantineReason?: QuarantineReason;
   error?: string;
+  provenance?: import("./derived-artifact.js").ArtifactProvenance;
+  derivedLabel?: string;
 }
 
 export interface StageOwner {

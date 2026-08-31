@@ -41,12 +41,18 @@ describe("SQLite project state", () => {
       { version: 12 },
       { version: 13 },
       { version: 14 },
+      { version: 15 },
     ]);
     const artifactColumns = database.raw.prepare("PRAGMA table_info(downloaded_artifacts)").all() as Array<{ name: string }>;
     expect(artifactColumns.map((column) => column.name)).toEqual(expect.arrayContaining([
       "acquisition_id", "retry_of_acquisition_id", "physical_click_count",
     ]));
     expect(artifactColumns.map((column) => column.name)).toEqual(expect.arrayContaining(["failure_reason", "failure_detail"]));
+    expect(artifactColumns.map((column) => column.name)).toEqual(expect.arrayContaining([
+      "provenance", "task_id", "assistant_turn_id", "source_message_id",
+    ]));
+    const projectColumns = database.raw.prepare("PRAGMA table_info(projects)").all() as Array<{ name: string }>;
+    expect(projectColumns.map((column) => column.name)).toContain("derived_artifact_policy");
   });
 
   it("persists the shared project transcript", () => {

@@ -108,6 +108,8 @@ const api = {
     open: (attachmentId) => ipcRenderer.invoke("attachments:open", attachmentId),
     saveAs: (attachmentId) => ipcRenderer.invoke("attachments:saveAs", attachmentId),
     retryArtifact: (attachmentId) => ipcRenderer.invoke("attachments:retryArtifact", attachmentId),
+    createDerivedArtifact: (attachmentId) => ipcRenderer.invoke("attachments:createDerivedArtifact", attachmentId),
+    openDiagnostics: () => ipcRenderer.invoke("attachments:openDiagnostics"),
   },
 };
 

@@ -105,6 +105,7 @@ function formatAttachmentSize(sizeBytes: number): string {
 
 function MessageAttachments({ files, onPreview }: { files: AttachmentRefView[]; onPreview: (url: string) => void }): React.JSX.Element {
   const [retrying, setRetrying] = useState<string | null>(null);
+  const [deriving, setDeriving] = useState<string | null>(null);
   const [retryStatus, setRetryStatus] = useState<Record<string, string>>({});
   const retry = async (id: string): Promise<void> => {
     if (retrying) return;
@@ -114,6 +115,14 @@ function MessageAttachments({ files, onPreview }: { files: AttachmentRefView[]; 
       setRetryStatus((current) => ({ ...current, [id]: result.success ? "Файл получен" : result.error || "Не удалось получить файл" }));
     } finally { setRetrying(null); }
   };
+  const derive = async (id: string): Promise<void> => {
+    if (deriving) return;
+    setDeriving(id);
+    try {
+      const result = await window.orchestrator.attachments.createDerivedArtifact(id);
+      setRetryStatus((current) => ({ ...current, [id]: result.success ? "Локальный файл создан. Переоткройте проект для обновления карточки." : result.error || "Нельзя создать файл из сохранённого ответа" }));
+    } finally { setDeriving(null); }
+  };
   return <div className="message-attachments">
     {files.map((file) => (
       <div className="message-attachment-card" key={file.id}>
@@ -122,12 +131,14 @@ function MessageAttachments({ files, onPreview }: { files: AttachmentRefView[]; 
           <span><strong>{file.fileName || "Не удалось получить файл"}</strong><small>{file.error || "Провайдер показал файл, но G+G не смог безопасно его скачать"}</small></span>
         </div> : <button type="button" className="message-attachment-open" onClick={() => file.previewUrl ? onPreview(file.previewUrl) : void window.orchestrator.attachments.open(file.id)}>
           {file.previewUrl ? <img src={file.previewUrl} alt="" /> : <AttachmentIcon />}
-          <span><strong>{file.fileName}</strong><small>{file.source !== "user" ? `Файл от ${file.source} · ` : ""}{file.mimeType} · {formatAttachmentSize(file.sizeBytes)} · {file.status}</small></span>
+          <span><strong>{file.fileName} {file.provenance === "GPLUSG_DERIVED_FROM_PROVIDER_RESPONSE" ? <em className="artifact-derived-badge">Derived</em> : null}</strong><small>{file.derivedLabel ?? (file.source !== "user" ? `Файл от ${file.source}` : "")}{file.source !== "user" || file.derivedLabel ? " · " : ""}{file.mimeType} · {formatAttachmentSize(file.sizeBytes)} · {file.status}</small></span>
         </button>}
         {file.source !== "user" && file.status === "READY" ? (
           <button type="button" className="message-attachment-save" onClick={() => void window.orchestrator.attachments.saveAs(file.id)}>Сохранить как…</button>
         ) : file.source !== "user" && file.status === "FAILED" ? (
-          <><button type="button" className="message-attachment-save" disabled={retrying === file.id} onClick={() => void retry(file.id)}>{retrying === file.id ? "Проверяем…" : "Повторно проверить файл"}</button>
+          <><button type="button" className="message-attachment-save" disabled={deriving === file.id} onClick={() => void derive(file.id)}>{deriving === file.id ? "Создаём…" : "Создать файл из ответа"}</button>
+          <button type="button" className="message-attachment-save" disabled={retrying === file.id} onClick={() => void retry(file.id)}>{retrying === file.id ? "Проверяем…" : "Повторно проверить provider"}</button>
+          <button type="button" className="message-attachment-save" onClick={() => void window.orchestrator.attachments.openDiagnostics()}>Открыть диагностику</button>
           {retryStatus[file.id] ? <small role="status">{retryStatus[file.id]}</small> : null}</>
         ) : null}
       </div>

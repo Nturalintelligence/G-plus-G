@@ -106,6 +106,8 @@ interface Window {
       open(attachmentId: string): Promise<{ success: boolean; error?: string }>;
       saveAs(attachmentId: string): Promise<{ success: boolean; fileName?: string }>;
       retryArtifact(attachmentId: string): Promise<{ success: boolean; artifactId?: string; error?: string }>;
+      createDerivedArtifact(attachmentId: string): Promise<{ success: boolean; artifactId?: string; provenance?: string; status?: string; error?: string }>;
+      openDiagnostics(): Promise<{ success: boolean; error?: string }>;
     };
   };
 }
@@ -122,6 +124,8 @@ interface AttachmentRefView {
   status: "STAGED" | "UPLOADING" | "READY" | "FAILED" | "QUARANTINED" | "UNSUPPORTED";
   previewUrl?: string;
   error?: string;
+  provenance?: "PROVIDER_NATIVE_FILE" | "PROVIDER_FILE_CARD_DOWNLOAD" | "PROVIDER_CODE_BLOCK_DOWNLOAD" | "PROVIDER_NETWORK_FILE_RESPONSE" | "GPLUSG_DERIVED_FROM_PROVIDER_RESPONSE";
+  derivedLabel?: string;
   quarantineReason?: "EXECUTABLE_BLOCKED" | "MIME_MISMATCH" | "SIZE_LIMIT" | "UNSAFE_FILENAME" | "MANUAL_REVIEW_REQUIRED";
 }
 

@@ -484,4 +484,18 @@ export const migrations: readonly Migration[] = [
         ON downloaded_artifacts(retry_of_acquisition_id);
     `,
   },
+  {
+    version: 15,
+    name: "derived_provider_artifacts",
+    sql: `
+      ALTER TABLE projects ADD COLUMN derived_artifact_policy TEXT NOT NULL DEFAULT 'ASK'
+        CHECK (derived_artifact_policy IN ('ASK', 'AUTO', 'DENY'));
+      ALTER TABLE downloaded_artifacts ADD COLUMN provenance TEXT NOT NULL DEFAULT 'PROVIDER_NATIVE_FILE';
+      ALTER TABLE downloaded_artifacts ADD COLUMN task_id TEXT;
+      ALTER TABLE downloaded_artifacts ADD COLUMN assistant_turn_id TEXT;
+      ALTER TABLE downloaded_artifacts ADD COLUMN source_message_id TEXT;
+      CREATE INDEX downloaded_artifacts_source_idx
+        ON downloaded_artifacts(project_id, provider_id, source_message_id, provenance);
+    `,
+  },
 ];

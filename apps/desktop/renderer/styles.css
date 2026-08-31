@@ -3018,6 +3018,20 @@ fieldset label textarea {
   white-space: nowrap;
 }
 
+.artifact-derived-badge {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent);
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 700;
+  vertical-align: middle;
+}
+
 .attached-file-name {
   max-width: 260px;
   overflow: hidden;

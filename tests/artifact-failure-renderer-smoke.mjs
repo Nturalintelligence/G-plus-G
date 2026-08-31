@@ -28,7 +28,8 @@ try {
   await card.waitFor();
   assert(await card.getByRole("status").count() === 1, "failed artifact is not rendered as a status");
   assert(await card.locator(".message-attachment-open button, button:has-text('Сохранить как')").count() === 0, "failed artifact still exposes an open/save action");
-  assert(await card.getByRole("button", { name: "Повторно проверить файл" }).count() === 1, "safe local recheck action is missing");
+  assert(await card.getByRole("button", { name: "Повторно проверить provider" }).count() === 1, "safe local recheck action is missing");
+  assert(await card.getByRole("button", { name: "Создать файл из ответа" }).count() === 1, "derived artifact action is missing");
   assert(await card.getByText(/не смог безопасно его скачать/).count() === 1, "safe failure explanation is not visible");
   console.log(JSON.stringify({ ok: true, providerTraffic: 0, failureReason: "EMPTY_RESPONSE_BODY", openActions: 0, recheckActions: 1 }));
 } finally { await app?.close().catch(() => undefined); await rm(dataRoot, { recursive: true, force: true }).catch(() => undefined); }

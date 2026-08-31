@@ -60,6 +60,7 @@ import { ComposerDraftRepository, type ComposerDraftInput } from "../../src/comp
 import { ProjectTrashService } from "../../src/project-trash.js";
 import { loadPersistedProviderArtifactRows } from "../../src/attachments/persisted-artifact-hydration.js";
 import { ReacquisitionAuthorization, validateReacquisitionTarget } from "../../src/attachments/reacquisition-authorization.js";
+import { DerivedArtifactAuthorization, DerivedArtifactService, type ArtifactProvenance, type DerivedArtifactPolicy } from "../../src/attachments/derived-artifact.js";
 
 let mainWindow: BrowserWindow | null = null;
 let database: AppDatabase | null = null;
@@ -70,6 +71,7 @@ let activeInteractiveLogin: { provider: string; promise: Promise<any> } | null =
 let providerOperationActive = false;
 let activeProjectId: string | null = null;
 const reacquisitionAuthorization = new ReacquisitionAuthorization();
+const derivedArtifactAuthorization = new DerivedArtifactAuthorization();
 let quitAfterCleanup = false;
 
 protocol.registerSchemesAsPrivileged([
@@ -202,7 +204,15 @@ function attachmentViewsForProject(projectId: string): {
   } as Record<string, string>)[reason] ?? `Файл не получен: ${reason}`;
   for (const row of downloadedRows) {
     const ref = downloadedArtifactRefFromRow(row);
-    const dto = toRendererAttachment(ref);
+    const baseDto = toRendererAttachment(ref);
+    const provenance = String(row.provenance || "PROVIDER_NATIVE_FILE") as ArtifactProvenance;
+    const dto: RendererAttachmentDto = {
+      ...baseDto,
+      provenance,
+      ...(provenance === "GPLUSG_DERIVED_FROM_PROVIDER_RESPONSE"
+        ? { derivedLabel: `Создано G+G из ответа ${ref.source === "gemini" ? "Gemini" : ref.source}` }
+        : {}),
+    };
     const failure = row.failure_reason ? failureMessage(String(row.failure_reason)) : undefined;
     (transcriptAttachments[ref.messageId] ??= []).push(failure ? { ...dto, error: failure } : dto);
   }
@@ -1242,6 +1252,49 @@ function registerIpc(): void {
     } catch (error) {
       return { success: false, error: error instanceof Error && /already active/.test(error.message) ? "Повторная проверка этого файла уже выполняется" : "Не удалось запустить повторную проверку" };
     }
+  });
+  handle("attachments:createDerivedArtifact", async (_event, attachmentId: unknown) => {
+    const id = requireString(attachmentId, "attachmentId", 200);
+    const service = new DerivedArtifactService(db().raw);
+    const prepared = service.prepare(id);
+    if (prepared.status !== "READY") return { success: false, status: prepared.status, error: prepared.reason };
+    if (prepared.proposal.projectId !== activeProjectId) return { success: false, error: "Artifact does not belong to the active project" };
+    const project = db().raw.prepare("SELECT derived_artifact_policy FROM projects WHERE id=?").get(prepared.proposal.projectId) as { derived_artifact_policy: DerivedArtifactPolicy } | undefined;
+    const policy = project?.derived_artifact_policy ?? "ASK";
+    if (policy === "DENY") return { success: false, error: "Создание файлов из ответов отключено для этого проекта" };
+    const create = async () => service.create(prepared.proposal, policy, true);
+    try {
+      if (policy === "AUTO") {
+        const row = await create();
+        return { success: true, artifactId: String(row.id), provenance: prepared.proposal.provenance };
+      }
+      const authorized = await derivedArtifactAuthorization.runConfirmed(prepared.proposal, async () => {
+        const confirmation = await dialog.showMessageBox(mainWindow!, {
+          type: "warning",
+          title: "Создать локальный файл из ответа",
+          message: "Gemini не передал готовый файл. G+G создаст локальный файл из текста ответа.",
+          detail: [
+            `Провайдер: ${prepared.proposal.providerId}`,
+            `Исходный turn: ${prepared.proposal.assistantTurnId}`,
+            `Имя: ${prepared.proposal.fileName}`,
+            `MIME: ${prepared.proposal.mimeType}`,
+            `Размер: ${prepared.proposal.sizeBytes} байт`,
+            `Provenance: ${prepared.proposal.provenance}`,
+          ].join("\n"),
+          buttons: ["Создать файл", "Отмена"], defaultId: 1, cancelId: 1, noLink: true,
+        });
+        return confirmation.response === 0;
+      }, create);
+      if (!authorized.confirmed || !authorized.result) return { success: false, error: "Создание файла отменено" };
+      return { success: true, artifactId: String(authorized.result.id), provenance: prepared.proposal.provenance };
+    } catch (error) {
+      logEvent("ERROR", "derived_artifact.creation_failed", { providerId: prepared.proposal.providerId, projectId: prepared.proposal.projectId, errorName: error instanceof Error ? error.name : "UnknownError" });
+      return { success: false, error: error instanceof Error ? error.message : "Не удалось создать локальный файл" };
+    }
+  });
+  handle("attachments:openDiagnostics", async () => {
+    const error = await shell.openPath(dataPath("logs"));
+    return { success: !error, error: error || undefined };
   });
   handle("window:setTheme", (_event, theme: unknown) => {
     if (theme !== "dark" && theme !== "light") throw new Error("Unsupported title bar theme");
