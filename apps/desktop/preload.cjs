@@ -69,7 +69,15 @@ const api = {
     saveAutomation: (projectId, policy) => ipcRenderer.invoke("agentWorkspace:saveAutomation", { projectId, policy }),
     setEffort: (projectId, agentId, effort) => ipcRenderer.invoke("agentWorkspace:setEffort", { projectId, agentId, effort }),
   },
-  tools: { overview: (projectId) => ipcRenderer.invoke("tools:overview", projectId) },
+  tools: {
+    overview: (projectId) => ipcRenderer.invoke("tools:overview", projectId),
+    proposeCommand: (value) => ipcRenderer.invoke("tools:proposeCommand", value),
+    approve: (projectId, actionId) => ipcRenderer.invoke("tools:approve", { projectId, actionId }),
+    cancel: (projectId, actionId) => ipcRenderer.invoke("tools:cancel", { projectId, actionId }),
+    getAction: (projectId, actionId) => ipcRenderer.invoke("tools:getAction", { projectId, actionId }),
+    history: (projectId) => ipcRenderer.invoke("tools:history", projectId),
+    onEvent: (callback) => { const listener = (_event, value) => callback(value); ipcRenderer.on("tools:event", listener); return () => ipcRenderer.removeListener("tools:event", listener); },
+  },
   window: {
     setTheme: (theme) => ipcRenderer.invoke("window:setTheme", theme),
     toggleMaximize: () => ipcRenderer.invoke("window:toggleMaximize"),

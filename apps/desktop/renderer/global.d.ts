@@ -78,7 +78,15 @@ interface Window {
       saveAutomation(projectId: string, policy: AgentWorkspaceView["automationPolicy"]): Promise<AgentWorkspaceView["automationPolicy"]>;
       setEffort(projectId: string, agentId: string, effort: AgentEffort): Promise<{ status: "UPDATED" | "RESOLVED" | "USER_DECISION_REQUIRED"; effectiveEffort?: AgentEffort; requestedEffort?: AgentEffort; supportedEfforts?: AgentEffort[] }>;
     };
-    tools: { overview: (projectId: string) => Promise<ToolOverviewView> };
+    tools: {
+      overview: (projectId: string) => Promise<ToolOverviewView>;
+      proposeCommand: (value: {projectId:string;agentInstanceId:string;workspaceId:string;preset:CommandPreset;idempotencyKey:string}) => Promise<{action:ToolActionView;duplicate:boolean}>;
+      approve: (projectId:string, actionId:string) => Promise<ToolActionView>;
+      cancel: (projectId:string, actionId:string) => Promise<{stopped:boolean}>;
+      getAction: (projectId:string, actionId:string) => Promise<ToolActionView | null>;
+      history: (projectId:string) => Promise<ToolActionView[]>;
+      onEvent: (callback:(event:ToolActionEventView)=>void) => () => void;
+    };
     composerDraft: {
       get(projectId: string): Promise<ComposerDraftView | null>;
       save(value: Omit<ComposerDraftView, "updatedAt">): Promise<ComposerDraftView>;
@@ -247,7 +255,10 @@ interface AgentWorkspaceView {
   automationPolicy: { codeChanges: "MANUAL" | "SEMI_AUTO" | "AUTO"; debugging: "MANUAL" | "SEMI_AUTO" | "AUTO"; commit: "MANUAL" | "SEMI_AUTO" | "AUTO"; push: "MANUAL" | "SEMI_AUTO" | "AUTO"; derivedArtifacts: "MANUAL" | "SEMI_AUTO" | "AUTO" };
   plugins: Array<{ id: string; version: string }>;
 }
-interface ToolOverviewView { workspaceId:string; plugins: Array<{id:string;health:"DECLARED"|"READY"|"DEGRADED"|"UNAVAILABLE"|"DISABLED";reason?:string;actions:string[]}>; git: {workspace?:string;branch?:string;head?:string;status?:string;remotes?:string;unavailable?:boolean;reason?:string}; history:Array<{id:string;task_id:string;agent_instance_id:string;plugin_id:string;action_id:string;risk:string;state:string;requested_at:string;failure_code?:string;output_summary?:string}> }
+type CommandPreset = "STREAM_SUCCESS"|"FAIL"|"LONG"|"TIMEOUT";
+interface ToolActionView { id:string;project_id:string;task_id:string;agent_instance_id:string;provider_id:string;plugin_id:string;action_id:string;workspace_id:string;risk:string;state:string;idempotency_key:string;requested_at:string;started_at?:string;finished_at?:string;failure_code?:string;output_summary?:string;exit_code?:number;duration_ms?:number;evidence_id?:string }
+interface ToolActionEventView { actionId:string;projectId:string;taskId:string;agentInstanceId:string;workspaceId:string;type:string;payload:Record<string,unknown>;at:string }
+interface ToolOverviewView { workspaceId:string;commandAgent:{id:string;taskId:string;providerId:string;role:string};plugins:Array<{id:string;health:"DECLARED"|"READY"|"DEGRADED"|"UNAVAILABLE"|"DISABLED";reason?:string;actions:Array<{id:string;status:"DECLARED"|"READY"|"UNAVAILABLE"|"DISABLED";reason?:string}>}>;git:{workspace?:string;branch?:string;head?:string;status?:string;remotes?:string;unavailable?:boolean;reason?:string};history:ToolActionView[] }
 
 interface ComposerDraftView {
   projectId: string;

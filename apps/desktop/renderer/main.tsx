@@ -185,7 +185,17 @@ function AgentWorkspacePanel({ view, status, onClose, onEffort, onAutomation }: 
   </div>;
 }
 
-function ToolsPanel({view,onClose}:{view:ToolOverviewView;onClose:()=>void}):React.JSX.Element{return <div className="modal-backdrop tools-backdrop" onMouseDown={onClose}><section className="tools-modal" role="dialog" aria-modal="true" aria-label="Инструменты" onMouseDown={e=>e.stopPropagation()}><header><div><h2>Инструменты</h2><p>Структурированные действия выполняются только через Tool Broker.</p></div><button aria-label="Закрыть инструменты" onClick={onClose}>×</button></header><div className="tools-body"><section><h3>Git status</h3><small>Workspace: {view.git.workspace??"не выбран"}</small>{view.git.unavailable?<p>{view.git.reason}</p>:<><strong>{view.git.branch}</strong><code>{view.git.head}</code><pre>{view.git.status||"Рабочее дерево чистое"}</pre></>}</section><section><h3>Доступные plugins</h3>{view.plugins.map(p=><article className="tool-card" key={p.id}><div><strong>{p.id}</strong><span>{p.health}</span></div><small>{p.actions.join(" · ")}</small>{p.reason?<p>{p.reason}</p>:null}</article>)}</section><section><h3>История действий</h3>{view.history.length?view.history.map(a=><article className="tool-card" key={a.id}><div><strong>{a.plugin_id} · {a.action_id}</strong><span>{a.risk} · {a.state}</span></div><small>Agent {a.agent_instance_id} · task {a.task_id}</small></article>):<p>Действий пока нет.</p>}</section><p className="automation-warning">Свободный shell input отключён. Approval создаётся только main process.</p></div></section></div>}
+function ToolsPanel({view,events,onClose,onRun,onApprove,onStop}:{view:ToolOverviewView;events:ToolActionEventView[];onClose:()=>void;onRun:(preset:CommandPreset)=>void;onApprove:(id:string)=>void;onStop:(id:string)=>void}):React.JSX.Element {
+  return <div className="modal-backdrop tools-backdrop" onMouseDown={onClose}><section className="tools-modal" role="dialog" aria-modal="true" aria-label="Инструменты" onMouseDown={e=>e.stopPropagation()}>
+    <header><div><h2>Инструменты</h2><p>Структурированные действия выполняются только через Tool Broker.</p></div><button aria-label="Закрыть инструменты" onClick={onClose}>×</button></header>
+    <div className="tools-body"><section><h3>Git status</h3><small>Workspace: {view.git.workspace??"не выбран"}</small>{view.git.unavailable?<p>{view.git.reason}</p>:<><strong>{view.git.branch}</strong><code data-testid="tools-git-head">{view.git.head}</code><pre>{view.git.status||"Рабочее дерево чистое"}</pre></>}</section>
+      <section><h3>Доступные plugins</h3>{view.plugins.map(plugin=><article className="tool-card" key={plugin.id}><div><strong>{plugin.id}</strong><span>{plugin.health}</span></div>{plugin.actions.map(action=><div className="tool-capability" key={action.id}><code>{action.id}</code><span>{action.status}</span>{action.reason?<small>{action.reason}</small>:null}</div>)}{plugin.reason?<p>{plugin.reason}</p>:null}</article>)}</section>
+      <section><h3>Безопасные локальные команды</h3><p className="automation-warning">Это ограниченный host process, а не sandbox. Команда имеет права приложения.</p><div className="tool-command-buttons"><button onClick={()=>onRun("STREAM_SUCCESS")}>Потоковый тест</button><button onClick={()=>onRun("FAIL")}>Ошибка exit code</button><button onClick={()=>onRun("LONG")}>Длительная команда</button><button onClick={()=>onRun("TIMEOUT")}>Проверить timeout</button></div></section>
+      <section><h3>История действий</h3>{view.history.length?view.history.map(action=><article className="tool-card tool-action-card" data-action-id={action.id} key={action.id}><div><strong>{action.plugin_id} · {action.action_id}</strong><span>{action.risk} · <b>{action.state}</b></span></div><small>Agent {action.agent_instance_id} · task {action.task_id}</small>{action.state==="AWAITING_APPROVAL"?<button onClick={()=>onApprove(action.id)}>Подтвердить</button>:null}{["RUNNING","QUEUED"].includes(action.state)?<button onClick={()=>onStop(action.id)}>Stop</button>:null}{action.output_summary?<pre>{action.output_summary}</pre>:null}{action.failure_code?<p>{action.failure_code}</p>:null}</article>):<p>Действий пока нет.</p>}</section>
+      <section><h3>Live output</h3><pre className="tool-live-output">{events.map(event=>event.type==="STDOUT"||event.type==="STDERR"?`[${event.type}] ${String(event.payload.text??"")}`:`[${event.type}]\n`).join("")||"Событий пока нет."}</pre></section>
+      <p className="automation-warning">Свободный shell input отключён. Approval создаётся только main process.</p>
+    </div></section></div>;
+}
 
 const fallbackSettings: AppSettingsView = {
   schemaVersion: 1,
@@ -265,6 +275,7 @@ function App(): React.JSX.Element {
   const [agentWorkspace, setAgentWorkspace] = useState<AgentWorkspaceView | null>(null);
   const [agentWorkspaceStatus, setAgentWorkspaceStatus] = useState<string | null>(null);
   const [toolsOpen,setToolsOpen]=useState(false); const [toolsView,setToolsView]=useState<ToolOverviewView|null>(null);
+  const [toolEvents,setToolEvents]=useState<ToolActionEventView[]>([]);
   const [settingsTab, setSettingsTab] = useState<"profile" | "models" | "behavior" | "appearance" | "quality" | "diagnostics">("profile");
   const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
   const [releaseInfo, setReleaseInfo] = useState<ReleaseInfoView | null>(null);
@@ -319,13 +330,22 @@ function App(): React.JSX.Element {
     ? (window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark")
     : settings.appearance.theme;
 
+  useEffect(() => window.orchestrator.tools.onEvent((event) => {
+    if (!current || !toolsView || event.projectId !== current.project.id || event.workspaceId !== toolsView.workspaceId || event.agentInstanceId !== toolsView.commandAgent.id || event.taskId !== toolsView.commandAgent.taskId) return;
+    setToolEvents((value) => [...value.slice(-199), event]);
+    if (["AWAITING_APPROVAL","RUNNING","VERIFYING","COMPLETED","FAILED","CANCELLED","INTERRUPTED"].includes(event.type)) void window.orchestrator.tools.history(current.project.id).then((history) => setToolsView((view) => view && view.workspaceId === event.workspaceId ? { ...view, history } : view));
+  }), [current?.project.id, toolsView?.workspaceId, toolsView?.commandAgent.id, toolsView?.commandAgent.taskId]);
+
   async function openAgentWorkspace(): Promise<void> {
     if (!current) { setShowNoProjectToast(true); return; }
     setAgentWorkspaceStatus(null);
     try { setAgentWorkspace(await window.orchestrator.agentWorkspace.get(current.project.id)); setAgentWorkspaceOpen(true); }
     catch (error) { setActiveUserError(toUserFacingError(error, "Команда агентов")); }
   }
-  async function openTools():Promise<void>{if(!current){setShowNoProjectToast(true);return}try{setToolsView(await window.orchestrator.tools.overview(current.project.id));setToolsOpen(true)}catch(error){setActiveUserError(toUserFacingError(error,"Инструменты"))}}
+  async function openTools():Promise<void>{if(!current){setShowNoProjectToast(true);return}try{setToolEvents([]);setToolsView(await window.orchestrator.tools.overview(current.project.id));setToolsOpen(true)}catch(error){setActiveUserError(toUserFacingError(error,"Инструменты"))}}
+  async function runToolCommand(preset:CommandPreset):Promise<void>{if(!current||!toolsView)return;try{const result=await window.orchestrator.tools.proposeCommand({projectId:current.project.id,agentInstanceId:toolsView.commandAgent.id,workspaceId:toolsView.workspaceId,preset,idempotencyKey:`ui:${current.project.id}:${preset}:${crypto.randomUUID()}`});setToolsView({...toolsView,history:[result.action,...toolsView.history.filter(item=>item.id!==result.action.id)]})}catch(error){setActiveUserError(toUserFacingError(error,"Команда"))}}
+  async function approveToolAction(actionId:string):Promise<void>{if(!current)return;try{const action=await window.orchestrator.tools.approve(current.project.id,actionId);setToolsView((view)=>view?{...view,history:view.history.map(item=>item.id===actionId?action:item)}:view)}catch(error){setActiveUserError(toUserFacingError(error,"Подтверждение"))}}
+  async function stopToolAction(actionId:string):Promise<void>{if(!current)return;try{await window.orchestrator.tools.cancel(current.project.id,actionId)}catch(error){setActiveUserError(toUserFacingError(error,"Остановка команды"))}}
 
   async function updateAgentEffort(agentId: string, effort: AgentEffort): Promise<void> {
     if (!current) return;
@@ -1706,7 +1726,7 @@ function App(): React.JSX.Element {
         rebindConversation={rebindProviderConversation}
       />, document.getElementById("application-viewport") ?? document.body) : null}
       {agentWorkspaceOpen && agentWorkspace ? createPortal(<AgentWorkspacePanel view={agentWorkspace} status={agentWorkspaceStatus} onClose={() => setAgentWorkspaceOpen(false)} onEffort={(agentId, effort) => void updateAgentEffort(agentId, effort)} onAutomation={(area, mode) => void updateAutomation(area, mode)} />, document.getElementById("application-viewport") ?? document.body) : null}
-      {toolsOpen&&toolsView?createPortal(<ToolsPanel view={toolsView} onClose={()=>setToolsOpen(false)}/>,document.getElementById("application-viewport")??document.body):null}
+      {toolsOpen&&toolsView?createPortal(<ToolsPanel view={toolsView} events={toolEvents} onClose={()=>setToolsOpen(false)} onRun={(preset)=>void runToolCommand(preset)} onApprove={(id)=>void approveToolAction(id)} onStop={(id)=>void stopToolAction(id)}/>,document.getElementById("application-viewport")??document.body):null}
 
       <DeleteProjectDialog
         isOpen={!!deleteTarget}

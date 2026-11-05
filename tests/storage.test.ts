@@ -44,6 +44,8 @@ describe("SQLite project state", () => {
       { version: 15 },
       { version: 16 },
       { version: 17 },
+      { version: 18 },
+      { version: 19 },
     ]);
     const artifactColumns = database.raw.prepare("PRAGMA table_info(downloaded_artifacts)").all() as Array<{ name: string }>;
     expect(artifactColumns.map((column) => column.name)).toEqual(expect.arrayContaining([

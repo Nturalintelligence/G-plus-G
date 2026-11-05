@@ -64,6 +64,7 @@ import { ReacquisitionAuthorization, validateReacquisitionTarget } from "../../s
 import { DerivedArtifactAuthorization, DerivedArtifactService, type ArtifactProvenance, type DerivedArtifactPolicy } from "../../src/attachments/derived-artifact.js";
 import { AgentWorkspaceService } from "../../src/agent-workspace/service.js";
 import type { EffortLevel } from "../../src/agent-workspace/models.js";
+import { CommandToolRuntime, type CommandPreset } from "../../src/tool-broker/command-runtime.js";
 
 let mainWindow: BrowserWindow | null = null;
 let database: AppDatabase | null = null;
@@ -94,6 +95,17 @@ protocol.registerSchemesAsPrivileged([
 ]);
 
 let cliService: CliExecutionService | null = null;
+let commandToolRuntime: CommandToolRuntime | null = null;
+
+function getCommandToolRuntime(): CommandToolRuntime {
+  if (!commandToolRuntime) {
+    commandToolRuntime = new CommandToolRuntime(db().raw);
+    commandToolRuntime.onEvent((event) => {
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("tools:event", event);
+    });
+  }
+  return commandToolRuntime;
+}
 
 function getCliService(): CliExecutionService {
   if (!cliService) {
@@ -528,13 +540,47 @@ function registerIpc(): void {
     if (!db().raw.prepare("SELECT id FROM projects WHERE id=?").get(projectId)) throw new Error("Project not found");
     const workspaceRoot = await fs.promises.realpath(process.cwd());
     const workspaceId = `workspace:${projectId}`;
-    db().raw.prepare("INSERT INTO tool_workspaces(id,project_id,root_path,created_at) VALUES (?,?,?,?) ON CONFLICT(id) DO UPDATE SET root_path=excluded.root_path").run(workspaceId, projectId, workspaceRoot, new Date().toISOString());
+    getCommandToolRuntime().registerWorkspace(projectId, workspaceRoot);
     let git: any; let gitHealth: "READY"|"DEGRADED" = "READY";
     try { const value = await new BuiltinGitPlugin().inspect(workspaceRoot); git = { workspace: path.basename(workspaceRoot), branch: value.branch, head: value.head, status: value.status, remotes: value.remotes }; }
     catch (error) { gitHealth = "DEGRADED"; git = { workspace: path.basename(workspaceRoot), unavailable: true, reason: error instanceof Error ? error.message : "Git unavailable" }; }
-    const history = db().raw.prepare("SELECT id,task_id,agent_instance_id,plugin_id,action_id,risk,state,requested_at,started_at,finished_at,failure_code,output_summary FROM tool_actions WHERE project_id=? ORDER BY requested_at DESC LIMIT 50").all(projectId);
-    return { workspaceId, plugins: [{ id: "builtin.git", health: gitHealth, reason: gitHealth === "READY" ? undefined : git.reason, actions: ["detect","status","diff","log","branch.read","branch.create","stage","commit","fetch","push"] }, { id: "builtin.command", health: "DECLARED", reason: "Production execution handler is not connected yet", actions: ["run","stop"] }], git, history };
+    const workspace = new AgentWorkspaceService(db().raw).getOrCreate(projectId);
+    const commandAgent = workspace.agents.find((item) => item.role === "LEAD") ?? workspace.agents[0];
+    if (!commandAgent) throw new Error("No AgentInstance is available for command actions");
+    getCommandToolRuntime().ensureCapability(projectId, commandAgent.id, workspaceId);
+    const history = getCommandToolRuntime().history(projectId);
+    const gitActions = [
+      { id: "detect", status: gitHealth === "READY" ? "READY" : "UNAVAILABLE" }, { id: "status", status: gitHealth === "READY" ? "READY" : "UNAVAILABLE" },
+      { id: "diff", status: "DECLARED", reason: "Production handler is not connected" }, { id: "log", status: "DECLARED", reason: "Production handler is not connected" },
+      { id: "branch.read", status: gitHealth === "READY" ? "READY" : "UNAVAILABLE" }, { id: "branch.create", status: "DECLARED", reason: "Production handler is not connected" },
+      { id: "stage", status: "DECLARED", reason: "Production Tool Broker handler is not connected" }, { id: "commit", status: "DECLARED", reason: "Production handler is not connected" },
+      { id: "fetch", status: "DECLARED", reason: "Production handler is not connected" }, { id: "push", status: "DECLARED", reason: "Production handler is not connected" },
+    ];
+    return { workspaceId, commandAgent, plugins: [{ id: "builtin.git", health: gitHealth === "READY" ? "DEGRADED" : "UNAVAILABLE", reason: gitHealth === "READY" ? "Only read-only inspect is connected; structured Git actions remain declared" : git.reason, actions: gitActions }, { id: "builtin.command", health: "READY", actions: [{ id: "run", status: "READY" }, { id: "stop", status: "READY" }] }], git, history };
   });
+  handle("tools:proposeCommand", async (_event, inputValue: unknown) => {
+    const input = inputValue && typeof inputValue === "object" ? inputValue as Record<string, unknown> : {};
+    return getCommandToolRuntime().propose({ projectId: requireString(input.projectId, "projectId", 200), agentInstanceId: requireString(input.agentInstanceId, "agentInstanceId", 200), workspaceId: requireString(input.workspaceId, "workspaceId", 250), preset: requireString(input.preset, "preset", 30) as CommandPreset, idempotencyKey: requireString(input.idempotencyKey, "idempotencyKey", 200) });
+  });
+  handle("tools:approve", async (_event, inputValue: unknown) => {
+    const input = inputValue && typeof inputValue === "object" ? inputValue as Record<string, unknown> : {};
+    const actionId = requireString(input.actionId, "actionId", 200), projectId = requireString(input.projectId, "projectId", 200);
+    const row = db().raw.prepare("SELECT a.*,i.role FROM tool_actions a JOIN aw_agent_instances i ON i.id=a.agent_instance_id WHERE a.id=? AND a.project_id=?").get(actionId, projectId) as Record<string, unknown> | undefined;
+    if (!row || row.state !== "AWAITING_APPROVAL") throw new Error("Action is not awaiting approval");
+    const details = JSON.parse(String(row.arguments_json)) as { preset?: string };
+    const testDecision = process.env.G_PLUS_G_ALLOW_TEST_APPROVAL === "1" ? process.env.G_PLUS_G_TEST_APPROVAL : undefined;
+    const approved = testDecision === "approve" ? true : testDecision === "deny" ? false : (await dialog.showMessageBox(mainWindow!, { type: "warning", buttons: ["Разрешить один раз", "Отмена"], defaultId: 1, cancelId: 1, title: "Подтверждение инструмента", message: `${row.plugin_id} · ${row.action_id}`, detail: `Agent: ${row.agent_instance_id} (${row.role})\nProject/task: ${row.project_id} / ${row.task_id}\nWorkspace: ${row.workspace_id}\nCommand preset: ${details.preset ?? "unknown"}\nРиск: ${row.risk}\nПодтверждение одноразовое и погашается до запуска.` })).response === 0;
+    return approved ? getCommandToolRuntime().approve(actionId) : getCommandToolRuntime().deny(actionId);
+  });
+  handle("tools:cancel", (_event, inputValue: unknown) => { const input = inputValue && typeof inputValue === "object" ? inputValue as Record<string, unknown> : {}; const actionId=requireString(input.actionId,"actionId",200),projectId=requireString(input.projectId,"projectId",200); if(!db().raw.prepare("SELECT 1 FROM tool_actions WHERE id=? AND project_id=?").get(actionId,projectId))throw new Error("Action does not belong to project"); return { stopped:getCommandToolRuntime().stop(actionId) }; });
+  handle("tools:getAction", (_event, inputValue: unknown) => {
+    const input = inputValue && typeof inputValue === "object" ? inputValue as Record<string, unknown> : {};
+    return db().raw.prepare("SELECT * FROM tool_actions WHERE id=? AND project_id=?").get(
+      requireString(input.actionId, "actionId", 200),
+      requireString(input.projectId, "projectId", 200),
+    );
+  });
+  handle("tools:history", (_event, projectIdValue: unknown) => getCommandToolRuntime().history(requireString(projectIdValue, "projectId", 200)));
   handle("system:copyText", (_event, textValue: unknown) => {
     if (typeof textValue !== "string") throw new Error("clipboard text must be a string");
     if (textValue.length > 2_000_000) throw new Error("clipboard text exceeds 2000000 characters");
@@ -1354,6 +1400,7 @@ app.whenReady().then(() => {
   registerRendererProtocol();
   database = new AppDatabase(dataPath("orchestrator.sqlite"));
   database.migrate();
+  getCommandToolRuntime();
   logEvent("INFO", "application.ready", {
     version: app.getVersion(),
     dataRoot: dataPath(),
@@ -1372,6 +1419,7 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", (event) => {
+  commandToolRuntime?.stopAll();
   if ((!activeOrchestrator && !activeOrchestrationAdapters && activeLoginAdapters.size === 0) || quitAfterCleanup) return;
   event.preventDefault();
   void (async () => {
@@ -1383,6 +1431,8 @@ app.on("before-quit", (event) => {
 });
 
 app.on("will-quit", () => {
+  commandToolRuntime?.stopAll();
+  commandToolRuntime = null;
   database?.close();
   database = null;
 });
