@@ -1,5 +1,9 @@
 # Test evidence
 
+## AW-2 production command runtime — 2026-11-05
+
+See [`AW2_COMMAND_RUNTIME.md`](AW2_COMMAND_RUNTIME.md). The bounded command flow passed production Electron smoke and the full 382-test gate. Git remains truthfully `DEGRADED`; full Git execution is not claimed.
+
 Environment: Windows, Node 22.20.0, npm 11.16.0, lockfile v3.
 Cleanup SHA: `849f177`. Integration merge SHA: `e4723bf`.
 
