@@ -526,9 +526,14 @@ function registerIpc(): void {
   handle("tools:overview", async (_event, projectIdValue: unknown) => {
     const projectId = requireString(projectIdValue, "projectId", 200);
     if (!db().raw.prepare("SELECT id FROM projects WHERE id=?").get(projectId)) throw new Error("Project not found");
-    let git: unknown; try { const value = await new BuiltinGitPlugin().inspect(process.cwd()); git = { branch: value.branch, head: value.head, status: value.status, remotes: value.remotes }; } catch (error) { git = { unavailable: true, reason: error instanceof Error ? error.message : "Git unavailable" }; }
+    const workspaceRoot = await fs.promises.realpath(process.cwd());
+    const workspaceId = `workspace:${projectId}`;
+    db().raw.prepare("INSERT INTO tool_workspaces(id,project_id,root_path,created_at) VALUES (?,?,?,?) ON CONFLICT(id) DO UPDATE SET root_path=excluded.root_path").run(workspaceId, projectId, workspaceRoot, new Date().toISOString());
+    let git: any; let gitHealth: "READY"|"DEGRADED" = "READY";
+    try { const value = await new BuiltinGitPlugin().inspect(workspaceRoot); git = { workspace: path.basename(workspaceRoot), branch: value.branch, head: value.head, status: value.status, remotes: value.remotes }; }
+    catch (error) { gitHealth = "DEGRADED"; git = { workspace: path.basename(workspaceRoot), unavailable: true, reason: error instanceof Error ? error.message : "Git unavailable" }; }
     const history = db().raw.prepare("SELECT id,task_id,agent_instance_id,plugin_id,action_id,risk,state,requested_at,started_at,finished_at,failure_code,output_summary FROM tool_actions WHERE project_id=? ORDER BY requested_at DESC LIMIT 50").all(projectId);
-    return { plugins: [{ id: "builtin.git", health: "AVAILABLE", actions: ["detect","status","diff","log","branch.read","branch.create","stage","commit","fetch","push"] }, { id: "builtin.command", health: "AVAILABLE", actions: ["run","stop"] }], git, history };
+    return { workspaceId, plugins: [{ id: "builtin.git", health: gitHealth, reason: gitHealth === "READY" ? undefined : git.reason, actions: ["detect","status","diff","log","branch.read","branch.create","stage","commit","fetch","push"] }, { id: "builtin.command", health: "DECLARED", reason: "Production execution handler is not connected yet", actions: ["run","stop"] }], git, history };
   });
   handle("system:copyText", (_event, textValue: unknown) => {
     if (typeof textValue !== "string") throw new Error("clipboard text must be a string");

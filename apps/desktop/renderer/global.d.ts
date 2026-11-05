@@ -247,7 +247,7 @@ interface AgentWorkspaceView {
   automationPolicy: { codeChanges: "MANUAL" | "SEMI_AUTO" | "AUTO"; debugging: "MANUAL" | "SEMI_AUTO" | "AUTO"; commit: "MANUAL" | "SEMI_AUTO" | "AUTO"; push: "MANUAL" | "SEMI_AUTO" | "AUTO"; derivedArtifacts: "MANUAL" | "SEMI_AUTO" | "AUTO" };
   plugins: Array<{ id: string; version: string }>;
 }
-interface ToolOverviewView { plugins: Array<{id:string;health:string;actions:string[]}>; git: {branch?:string;head?:string;status?:string;remotes?:string;unavailable?:boolean;reason?:string}; history:Array<{id:string;task_id:string;agent_instance_id:string;plugin_id:string;action_id:string;risk:string;state:string;requested_at:string;failure_code?:string;output_summary?:string}> }
+interface ToolOverviewView { workspaceId:string; plugins: Array<{id:string;health:"DECLARED"|"READY"|"DEGRADED"|"UNAVAILABLE"|"DISABLED";reason?:string;actions:string[]}>; git: {workspace?:string;branch?:string;head?:string;status?:string;remotes?:string;unavailable?:boolean;reason?:string}; history:Array<{id:string;task_id:string;agent_instance_id:string;plugin_id:string;action_id:string;risk:string;state:string;requested_at:string;failure_code?:string;output_summary?:string}> }
 
 interface ComposerDraftView {
   projectId: string;
